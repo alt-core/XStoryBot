@@ -1,0 +1,4 @@
+bottle==0.12.10
+line_bot_sdk==1.0.2
+google_api_python_client==1.5.5
+

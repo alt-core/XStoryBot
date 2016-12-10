@@ -1,0 +1,13 @@
+runtime: python27
+api_version: 1
+threadsafe: true
+
+instance_class: F2
+
+handlers:
+- url: /callback
+  script: linecallback.app
+
+libraries:
+- name: ssl
+  version: latest
