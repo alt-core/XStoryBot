@@ -4,7 +4,7 @@ import json
 from google.appengine.ext import ndb
 
 
-class GlobalVariables(ndb.Model):
+class GlobalBotVariables(ndb.Model):
     scenario_counter = ndb.IntegerProperty()
 
 

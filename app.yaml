@@ -5,7 +5,7 @@ threadsafe: true
 instance_class: F2
 
 handlers:
-- url: /callback
+- url: /line/callback/.*
   script: linecallback.app
 
 libraries:

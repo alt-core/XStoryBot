@@ -397,6 +397,8 @@ class Scenario(object):
                     if self.first_top_block is None:
                         # 最初に設定した top_block が first_top_block
                         self.first_top_block = top_block
+                        # ついでに first_top_block のみのシーンをデフォルトシーンに設定
+                        self.scenes[u'*default'] = scene
                 else:
                     scene.blocks.append(top_block)
                 if self.first_top_block != top_block:
@@ -634,6 +636,12 @@ class Scenario(object):
 
                     msg_list.append((u'L{}'.format(first_line_no), msgs, args))
 
+    def get_scene_or_default(self, scene_title):
+        if scene_title in self.scenes:
+            return self.scenes[scene_title]
+        else:
+            # 設定されていないシーンの場合はデフォルトシーンが用いられる
+            return self.scenes[u'*default']
 
     @staticmethod
     def get_indent_level(row):
@@ -785,14 +793,12 @@ class Director(object):
                 scene_fullpath = self.jump_back_scene()
                 if scene_fullpath is None:
                     raise ValueError(u'cannot jump back')
-                self.base_scene = self.scenario.scenes[scene_fullpath]
+                self.base_scene = self.scenario.get_scene_or_default(scene_fullpath)
             else:
                 if u'/' not in scene_fullpath:
                     # フルパスにするために現在のシーンの tab_name を補完する
                     scene_fullpath = self.base_scene.tab_name + u'/' + scene_fullpath
-                if scene_fullpath not in self.scenario.scenes:
-                    raise ValueError(u'invalid scene name: ' + scene_fullpath)
-                self.base_scene = self.scenario.scenes[scene_fullpath]
+                self.base_scene = self.scenario.get_scene_or_default(scene_fullpath)
                 self.enter_new_scene(scene_fullpath)
 
             # このまま scene と action を読み替えて検索開始
@@ -858,8 +864,7 @@ class Director(object):
 
     def enter_new_scene(self, scene_title):
         if scene_title not in self.scenario.scenes:
-            logging.error(u'指定されたシーン名が存在していません:' + scene_title)
-            return None
+            logging.info(u'指定されたシーン名が存在していません:' + scene_title)
 
         if self.status.scene is not None:
             scene_history = self.status.scene_history
@@ -940,11 +945,8 @@ class Director(object):
             # 初回アクセス
             scene_title = self.scenario.startup_scene_title
             self.enter_new_scene(scene_title)
-        if scene_title not in self.scenario.scenes:
-            logging.error(u'指定されたシーン名が存在していません:' + scene_title)
-            return None
 
-        self.base_scene = self.scenario.scenes[scene_title]
+        self.base_scene = self.scenario.get_scene_or_default(scene_title)
 
         # 実行行の取得
         scene, block, n_lines, match = self.search_index(self.base_scene, action)

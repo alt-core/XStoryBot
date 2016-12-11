@@ -41,7 +41,7 @@ def get_table_from_google_sheets(spreadsheet_id):
     return sheets
 
 if __name__ == "__main__":
-    sheet_id = settings.SHEETS['sheet_id']
+    sheet_id = settings.BOTS.values()[0]['sheet_id']
     sheets = get_table_from_google_sheets(sheet_id)
     for title, table in sheets:
         print title
