@@ -4,6 +4,11 @@ import os
 import logging
 import re
 from unicodedata import normalize
+import urllib
+import hmac
+import hashlib
+import base64
+import time
 
 from bottle import request, Bottle, abort
 from linebot import LineBotApi, WebhookParser
@@ -62,6 +67,37 @@ class LineBot(object):
                 # 現在どこでも使っていない
                 self.error_log = err
 
+    def reply_message(self, recv_event, message):
+        if recv_event.reply_token != "0" * 32:
+            self.line_bot_api.reply_message(recv_event.reply_token, message)
+        else:
+            self.line_bot_api.push_message(recv_event.source.sender_id, message)
+
+    def gen_signature(self, line_channel_secret, body):
+        return base64.b64encode(hmac.new(
+            line_channel_secret,
+            body.encode('utf-8'),
+            hashlib.sha256
+        ).digest())
+
+    def forward_action(self, source, bot_name, action):
+        if source.type == 'user':
+            source_json = u'{"userId":"' + source.sender_id + u'","type":"user"}'
+        elif source.type == 'group':
+            source_json = u'{"groupId":"' + source.sender_id + u'","type":"group"}'
+        elif source.type == 'room':
+            source_json = u'{"roomId":"' + source.sender_id + u'","type":"room"}'
+        else:
+            logging.error(u'unknown source type:' + source.type)
+            source_json = None
+        data = u'{"events":[{"type":"postback","replyToken":"00000000000000000000000000000000","source":'+source_json+u',"timestamp":'+unicode(int(time.time()))+u',"postback":{"data":"' + action + u'@@FORWARD"}}]}'
+        global bot_dict
+        bot = bot_dict[bot_name]
+        sign = self.gen_signature(bot.line_channel_secret, data)
+        events = bot.parser.parse(data, sign)
+        for event in events:
+            bot.handle_event(event)
+
     def handle_event(self, event):
         if isinstance(event, MessageEvent):
             if isinstance(event.message, TextMessage):
@@ -85,37 +121,38 @@ class LineBot(object):
                 player_state = PlayerStateDB(event.source.sender_id)
                 player_state.reset()
                 player_state.save()
-                self.line_bot_api.reply_message(event.reply_token, TextSendMessage(text=u"リロードしました。"))
+                self.reply_message(event, TextSendMessage(text=u"リロードしました。"))
             else:
-                self.line_bot_api.reply_message(event.reply_token, TextSendMessage(text=u"リロードに失敗しました。\n\n" + err))
+                logging.error(u"リロードに失敗しました。\n" + unicode(err))
+                self.reply_message(event, TextSendMessage(text=u"リロードに失敗しました。\n\n" + err))
             return
 
         if event.message.text == u"リセット":
             player_state = PlayerStateDB(event.source.sender_id)
             player_state.reset()
             player_state.save()
-            self.line_bot_api.reply_message(event.reply_token, TextSendMessage(text=u"リセットしました。"))
+            self.reply_message(event, TextSendMessage(text=u"リセットしました。"))
             return
 
         player_state = PlayerStateDB(event.source.sender_id)
-        msgs = self.respond_message(event.message.text, player_state)
+        msgs = self.respond_message(event.message.text, player_state, event.source)
         player_state.save()
 
         if msgs:
-            self.line_bot_api.reply_message(event.reply_token, msgs)
+            self.reply_message(event, msgs)
 
     def handle_postback(self, event):
         player_state = PlayerStateDB(event.source.sender_id)
         data, visit_id = event.postback.data.split(u'@@')
-        if player_state.visit_id != visit_id:
+        if player_state.visit_id != visit_id and visit_id != u'FORWARD':
             # 古いシーンの選択肢が送られてきた
             logging.info(u'received postback with invalid visit_id')
             return
-        msgs = self.respond_message(data, player_state)
+        msgs = self.respond_message(data, player_state, event.source)
         player_state.save()
 
         if msgs:
-            self.line_bot_api.reply_message(event.reply_token, msgs)
+            self.reply_message(event, msgs)
 
     def handle_other_events(self, event):
         player_state = PlayerStateDB(event.source.sender_id)
@@ -124,11 +161,11 @@ class LineBot(object):
             # follow と join の際にはセーブデータを初期化する
             player_state.reset()
 
-        msgs = self.respond_message(u'##' + event.type, player_state)
+        msgs = self.respond_message(u'##' + event.type, player_state, event.source)
         player_state.save()
 
         if msgs:
-            self.line_bot_api.reply_message(event.reply_token, msgs)
+            self.reply_message(event, msgs)
 
     @staticmethod
     def append_visit_id(data, visit_id):
@@ -168,10 +205,19 @@ class LineBot(object):
         else:
             return None
 
+    @staticmethod
+    def get_image_url(url, option = None):
+        if url is None:
+            return None
+        image_url = 'https://' + os.getenv('SERVER_NAME', 'localhost:8080') + '/line/image/' + urllib.quote_plus(url)
+        if option:
+            image_url += ('/' + option)
+        return image_url
+
     def template_message(self, template):
         return TemplateSendMessage(ALT_TEXT, template)
 
-    def respond_message(self, action, player_state):
+    def respond_message(self, action, player_state, source):
         director = Director(self.scenario, player_state)
         reactions = director.get_reaction(action)
         if reactions is None:
@@ -190,7 +236,7 @@ class LineBot(object):
                 if len(options) > 0:
                     title = self.safe_list_get(options, 1, None)
                     image_url = self.parse_image_url(options[2]) if len(options) > 2 else None
-                    results.append(self.template_message(ButtonsTemplate(text=options[0], title=title, thumbnail_image_url=image_url, actions=self.build_template_actions(args, player_state.visit_id))))
+                    results.append(self.template_message(ButtonsTemplate(text=options[0], title=title, thumbnail_image_url=self.get_image_url(image_url), actions=self.build_template_actions(args, player_state.visit_id))))
                 else:
                     logging.error("invalid format: @button")
                     results.append(TextSendMessage(text=u"<<@buttonを解釈できませんでした>>"))
@@ -200,7 +246,7 @@ class LineBot(object):
                     title = self.safe_list_get(panel, 1, None)
                     image_url = self.parse_image_url(panel[2]) if len(panel) > 2 else None
                     panel_templates.append(
-                        CarouselColumn(text=panel[0], title=title, thumbnail_image_url=image_url, actions=self.build_template_actions(choices, player_state.visit_id))
+                        CarouselColumn(text=panel[0], title=title, thumbnail_image_url=self.get_image_url(image_url), actions=self.build_template_actions(choices, player_state.visit_id))
                     )
                 results.append(self.template_message(CarouselTemplate(panel_templates)))
             elif msg == u'@imagemap' or msg == u'@イメージマップ':
@@ -208,10 +254,10 @@ class LineBot(object):
                     url = self.parse_image_url(options[0])
                     if url is None:
                         raise ValueError
-                    m = re.match(r'^(.*)\.(png|jpg|jpeg|gif)$', url, re.IGNORECASE)
-                    if not m:
-                        raise ValueError
-                    base_url = m.group(1)
+#                    m = re.match(r'^(.*)\.(png|jpg|jpeg|gif)$', url, re.IGNORECASE)
+#                    if not m:
+#                        raise ValueError
+#                    base_url = m.group(1)
 
                     if len(options) > 1:
                         height = int(1040 * float(options[1]))
@@ -228,20 +274,31 @@ class LineBot(object):
                         else:
                             imagemap_action = MessageImagemapAction(arg[1], area)
                         imagemap_actions.append(imagemap_action)
-                    results.append(ImagemapSendMessage(base_url, ALT_TEXT, BaseSize(1040, height), imagemap_actions))
+#                    results.append(ImagemapSendMessage(base_url, ALT_TEXT, BaseSize(1040, height), imagemap_actions))
+                    results.append(ImagemapSendMessage(self.get_image_url(url), ALT_TEXT, BaseSize(1040, height), imagemap_actions))
                 except (ValueError, IndexError):
                     logging.error("invalid format: @imagemap")
                     results.append(TextSendMessage(text=u"<<@imagemapを解釈できませんでした>>"))
+            elif msg == u'@forward' or msg == u'@転送':
+                bot_name = options[0]
+                action = options[1]
+                global bot_dict
+                if bot_name not in bot_dict:
+                    logging.error("invalid bot name: @forward:"+ bot_name)
+                    results.append(TextSendMessage(text=u"<<@forwardを解釈できませんでした>>"))
+                self.forward_action(source, bot_name, action)
+
             else:
                 url = self.parse_image_url(msg)
                 if url is not None:
-                    m = re.match(r'^(https://.*/)([^/]*)', url)
-                    if m:
-                        preview_url = m.group(1) + 'resize/' + m.group(2)
-                        results.append(ImageSendMessage(url, preview_url))
-                    else:
-                        logging.error("cannot parse image url: " + url)
-                        results.append(TextSendMessage(text=u"<<ImageUrlを解釈できませんでした>>"))
+                    results.append(ImageSendMessage(self.get_image_url(url), self.get_image_url(url, 'preview')))
+#                    m = re.match(r'^(https://.*/)([^/]*)', url)
+#                    if m:
+#                        preview_url = m.group(1) + 'resize/' + m.group(2)
+#                        results.append(ImageSendMessage(url, preview_url))
+#                    else:
+#                        logging.error("cannot parse image url: " + url)
+#                        results.append(TextSendMessage(text=u"<<ImageUrlを解釈できませんでした>>"))
                 else:
                     results.append(TextSendMessage(text=msg))
         return results
@@ -267,6 +324,8 @@ for name, bot in bot_dict.items():
 
 @app.post('/line/callback/<bot_name>')
 def callback(bot_name):
+    if bot_name == 'testbot2':
+        print "HERE!!"
     bot = bot_dict.get(bot_name, None)
     if not bot:
         abort(404)

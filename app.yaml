@@ -7,7 +7,12 @@ instance_class: F2
 handlers:
 - url: /line/callback/.*
   script: linecallback.app
+- url: /line/image/.*
+  script: image.app
 
 libraries:
 - name: ssl
   version: latest
+- name: PIL
+  version: "1.1.7"
+

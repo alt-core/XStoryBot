@@ -18,6 +18,7 @@ RESET_CMDS = (u'@reset', u'@リセット')
 SET_CMDS = (u'@set', u'@セット')
 AI_CMDS = (u'@ai', u'@AI')
 AI_RESET_CMDS = (u'@aireset', u'@AIリセット')
+FORWARD_CMDS = (u'@forward', u'@転送')
 
 INCLUDE_COND_CMDS = (u'@include', u'@読込')
 
@@ -109,6 +110,9 @@ class Condition(object):
         if self.kind == CONDITION_KIND_STRING:
             return (action,) if self.value == action else None
         elif self.kind == CONDITION_KIND_REGEXP:
+            if re.match(ur'^[*＊#＃]', action):
+                # postback は REGEXP にマッチさせない
+                return None
             m = self.value.match(action)
             return (m.group(0),) + m.groups() if m else None
         else:
@@ -480,6 +484,39 @@ class Scenario(object):
                     lines.append((node.term, panels))
                     msg_count += 1
 
+                elif msg in MORE_CMDS:
+                    if len(options) > 0:
+                        if not re.match(u'^[#＃*＊]', options[0]):
+                            self.raise_error(u'@続きを読む の引数はジャンプ先指定である必要があります。', node)
+                    for i, child in enumerate(node.children):
+                        if i != 0:
+                            cond = Condition(CONDITION_KIND_STRING, u'##MORE__{}'.format(child.line_no))
+                            lines = []
+                            block.indices.append((cond, lines))
+                            msg_count = 0
+
+                        for j, msg in enumerate(child.term):
+                            msg_count += 1
+                            if msg_count > 5:
+                                self.raise_error(u'6つ以上のメッセージを同時に送ろうとしました', node)
+                            next_label = None
+                            if j == len(child.term)-1:
+                                # 各行の最後のメッセージは「続きを読む」のボタン
+                                if i == len(node.children)-1:
+                                    if len(options) > 0:
+                                        next_label = options[0]
+                                    else:
+                                        # 最後に飛ぶ先の引数指定がない場合は、最終行は通常メッセージとして表示される
+                                        pass
+                                else:
+                                    next_label = u'##MORE__{}'.format(node.children[i+1].line_no)
+                            if not next_label:
+                                self.assert_strlen(msg, 300)
+                                lines.append(((msg,), None))
+                            else:
+                                self.assert_strlen(msg, 160)
+                                lines.append(((BUTTON_CMDS[0], msg), [(u'続きを読む', next_label)]))
+
                 elif msg.startswith('@'):
                     if msg in OR_CMDS:
                         pass
@@ -510,6 +547,12 @@ class Scenario(object):
                             self.raise_error(u'コマンドの引数が足りません', node)
                         # 引数を正規化
                         node.normalize(1)
+                    elif msg in FORWARD_CMDS:
+                        if len(options) < 2:
+                            self.raise_error(u'コマンドの引数が足りません', node)
+                        # 引数を正規化
+                        node.normalize(1)
+                        node.normalize(2)
                     else:
                         self.raise_error(u'間違ったコマンドです', node)
                     lines.append((node.term, None))
@@ -640,8 +683,12 @@ class Scenario(object):
         if scene_title in self.scenes:
             return self.scenes[scene_title]
         else:
-            # 設定されていないシーンの場合はデフォルトシーンが用いられる
-            return self.scenes[u'*default']
+            # 指定されたシーンが無かった場合、同じタブのデフォルトシーンがあれば採用する
+            scene = self.scenes.get(scene_title.split(u'/')[0] + u'/', None)
+            if not scene:
+                # タブ名すら見つからない場合はデフォルトシーンが用いられる
+                scene = self.scenes[u'*default']
+            return scene
 
     @staticmethod
     def get_indent_level(row):
@@ -925,6 +972,8 @@ class Director(object):
                             return reaction, self.search_index(self.base_scene, res_msg)
                         else:
                             reaction.append((self.format_cells([res_msg], match), args))
+                elif msg in FORWARD_CMDS:
+                    reaction.append((self.format_cells(row, match), args))
                 elif msg in AI_RESET_CMDS:
                     self.status[u'ai.read.' + options[0]] = {}
                     self.status[u'ai.seq.' + options[0]] = {}
