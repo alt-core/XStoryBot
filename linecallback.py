@@ -23,7 +23,7 @@ except ImportError:
     pass
 
 import settings
-from models import PlayerStateDB, GlobalBotVariables
+from models import PlayerStateDB, GlobalBotVariables, GroupMembers
 from scenario import Scenario, Director, ScenarioSyntaxError
 
 
@@ -42,7 +42,7 @@ class LineBot(object):
         self.scenario = None
         self.scenario_counter = 0
         self.error_log = u''
-        self.line_bot_api = LineBotApi(line_access_token)
+        self.line_bot_api = LineBotApi(line_access_token, timeout=30)
         self.parser = WebhookParser(line_channel_secret)
 
     def load_scenario(self):
@@ -53,11 +53,11 @@ class LineBot(object):
         except (ValueError, ScenarioSyntaxError) as e:
             return False, unicode(e)
 
-    def check_reload(self):
+    def check_reload(self, force=False):
         global_bot_variables = GlobalBotVariables.get_by_id(id=self.name)
         if global_bot_variables is None:
             global_bot_variables = GlobalBotVariables(id=self.name, scenario_counter=0)
-        if self.scenario_counter != global_bot_variables.scenario_counter:
+        if self.scenario_counter != global_bot_variables.scenario_counter or force:
             # 他のインスタンスがリロードを実行した
             ok, err = self.load_scenario()
             if ok:
@@ -80,15 +80,15 @@ class LineBot(object):
             hashlib.sha256
         ).digest())
 
-    def forward_action(self, source, bot_name, action):
-        if source.type == 'user':
-            source_json = u'{"userId":"' + source.sender_id + u'","type":"user"}'
-        elif source.type == 'group':
-            source_json = u'{"groupId":"' + source.sender_id + u'","type":"group"}'
-        elif source.type == 'room':
-            source_json = u'{"roomId":"' + source.sender_id + u'","type":"room"}'
+    def send_action(self, source_type, source_id, bot_name, action):
+        if source_type == 'user':
+            source_json = u'{"userId":"' + source_id + u'","type":"user"}'
+        elif source_type == 'group':
+            source_json = u'{"groupId":"' + source_id + u'","type":"group"}'
+        elif source_type == 'room':
+            source_json = u'{"roomId":"' + source_id + u'","type":"room"}'
         else:
-            logging.error(u'unknown source type:' + source.type)
+            logging.error(u'unknown source type:' + source_type)
             source_json = None
         data = u'{"events":[{"type":"postback","replyToken":"00000000000000000000000000000000","source":'+source_json+u',"timestamp":'+unicode(int(time.time()))+u',"postback":{"data":"' + action + u'@@FORWARD"}}]}'
         global bot_dict
@@ -97,6 +97,17 @@ class LineBot(object):
         events = bot.parser.parse(data, sign)
         for event in events:
             bot.handle_event(event)
+
+    def handle_api_send(self, group, action):
+        group_members = GroupMembers.get_by_id(id=group)
+        if group_members:
+            members = group_members.members
+        else:
+            members = []
+        for member in members:
+            source_type, source_id = member.split(':')
+            self.send_action(source_type, source_id, self.name, action)
+            # TODO: LINE 側に rate limit ない？
 
     def handle_event(self, event):
         if isinstance(event, MessageEvent):
@@ -118,9 +129,11 @@ class LineBot(object):
                 global_bot_variables.scenario_counter += 1
                 global_bot_variables.put()
                 self.scenario_counter = global_bot_variables.scenario_counter
-                player_state = PlayerStateDB(event.source.sender_id)
-                player_state.reset()
-                player_state.save()
+                # リロード時にプレイヤー状態をリセットしていたが、
+                # 複雑なシナリオのデバッグ時に不都合なのでコメントアウト
+                #player_state = PlayerStateDB(event.source.sender_id)
+                #player_state.reset()
+                #player_state.save()
                 self.reply_message(event, TextSendMessage(text=u"リロードしました。"))
             else:
                 logging.error(u"リロードに失敗しました。\n" + unicode(err))
@@ -144,10 +157,11 @@ class LineBot(object):
     def handle_postback(self, event):
         player_state = PlayerStateDB(event.source.sender_id)
         data, visit_id = event.postback.data.split(u'@@')
-        if player_state.visit_id != visit_id and visit_id != u'FORWARD':
-            # 古いシーンの選択肢が送られてきた
-            logging.info(u'received postback with invalid visit_id')
-            return
+# TODO: ちゃんと visit_id が送れないケースがあるのでコメントアウト
+#        if player_state.visit_id != visit_id and visit_id != u'FORWARD':
+#            # 古いシーンの選択肢が送られてきた
+#            logging.info(u'received postback with invalid visit_id')
+#            return
         msgs = self.respond_message(data, player_state, event.source)
         player_state.save()
 
@@ -157,9 +171,11 @@ class LineBot(object):
     def handle_other_events(self, event):
         player_state = PlayerStateDB(event.source.sender_id)
 
-        if event.type == u"follow" or event.type == u"join":
-            # follow と join の際にはセーブデータを初期化する
-            player_state.reset()
+# 新規フォロー時にプレイヤー状態をリセットしていたが、
+# 複数のアカウントを連携させる場合、2番目のフォローで初期化されると困るのでコメントアウト
+#        if event.type == u"follow" or event.type == u"join":
+#            # follow と join の際にはセーブデータを初期化する
+#            player_state.reset()
 
         msgs = self.respond_message(u'##' + event.type, player_state, event.source)
         player_state.save()
@@ -286,7 +302,24 @@ class LineBot(object):
                 if bot_name not in bot_dict:
                     logging.error("invalid bot name: @forward:"+ bot_name)
                     results.append(TextSendMessage(text=u"<<@forwardを解釈できませんでした>>"))
-                self.forward_action(source, bot_name, action)
+                self.send_action(source.type, source.sender_id, bot_name, action)
+            elif msg == u'@group_add' or msg == u'@グループ追加':
+                group_name = options[0]
+                group_members = GroupMembers.get_by_id(id=group_name)
+                if group_members is None:
+                    group_members = GroupMembers(id=group_name, members=[])
+                member = source.type + ':' + source.sender_id
+                if member not in group_members.members:
+                    group_members.members.append(member)
+                    group_members.put()
+            elif msg == u'@group_del' or msg == u'@グループ削除':
+                group_name = options[0]
+                group_members = GroupMembers.get_by_id(id=group_name)
+                if group_members:
+                    member = source.type + ':' + source.sender_id
+                    if member in group_members.members:
+                        group_members.members.remove(member)
+                        group_members.put()
 
             else:
                 url = self.parse_image_url(msg)
@@ -314,7 +347,7 @@ for name, bot_settings in settings.BOTS.items():
 
 for name, bot in bot_dict.items():
     if settings.STARTUP_LOAD_SHEET:
-        bot.check_reload()
+        bot.check_reload(force=True)
 
     if bot.scenario is None:
         bot.scenario = Scenario.from_table([
@@ -324,8 +357,6 @@ for name, bot in bot_dict.items():
 
 @app.post('/line/callback/<bot_name>')
 def callback(bot_name):
-    if bot_name == 'testbot2':
-        print "HERE!!"
     bot = bot_dict.get(bot_name, None)
     if not bot:
         abort(404)
@@ -341,6 +372,23 @@ def callback(bot_name):
             bot.handle_event(event)
     except InvalidSignatureError:
         abort(400)
+
+    return 'OK'
+
+
+@app.get('/line/api/send/<bot_name>')
+def send(bot_name):
+    bot = bot_dict.get(bot_name, None)
+    if not bot:
+        abort(404)
+    bot.check_reload()
+
+    body = request.body.read().decode('utf-8')
+    logging.info("API call: " + body)
+
+    group = request.query.getunicode('group')
+    action = request.query.getunicode('action')
+    bot.handle_api_send(group, action)
 
     return 'OK'
 

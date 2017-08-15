@@ -19,6 +19,8 @@ SET_CMDS = (u'@set', u'@セット')
 AI_CMDS = (u'@ai', u'@AI')
 AI_RESET_CMDS = (u'@aireset', u'@AIリセット')
 FORWARD_CMDS = (u'@forward', u'@転送')
+GROUP_ADD_CMDS = (u'@group_add', u'@グループ追加')
+GROUP_DEL_CMDS = (u'@group_del', u'@グループ削除')
 
 INCLUDE_COND_CMDS = (u'@include', u'@読込')
 
@@ -32,7 +34,7 @@ DEFINE_AI_CMDS = (u'@define', u'@定義')
 
 SEQUENCE_AI_CMDS = (u'@seq', u'@順々')
 
-MAX_HISTORY = 16
+MAX_HISTORY = 5
 MAX_MEMORY = 5
 
 class ScenarioSyntaxError(Exception):
@@ -488,34 +490,97 @@ class Scenario(object):
                     if len(options) > 0:
                         if not re.match(u'^[#＃*＊]', options[0]):
                             self.raise_error(u'@続きを読む の引数はジャンプ先指定である必要があります。', node)
-                    for i, child in enumerate(node.children):
-                        if i != 0:
-                            cond = Condition(CONDITION_KIND_STRING, u'##MORE__{}'.format(child.line_no))
+                    flag_first = True
+                    i = 0
+                    while i < len(node.children):
+                        child = node.children[i]
+                        i += 1
+                        button_title = None
+                        flag_dialog_mode = False
+                        if len(child.term) == 1 and re.search(u'[:：]$', child.term[0]) and i < len(node.children):
+                            # タイトル設定
+                            button_title = child.term[0][0:-1]
+                            child = node.children[i]
+                            i += 1
+                            flag_dialog_mode = True
+
+                        if flag_first:
+                            flag_first = False
+                        else:
+                            line_label = u'##MORE__{}'.format(child.line_no)
+                            if lines[-1][1][0] is None:
+                                lines[-1][1][0] = (u'▽', line_label)
+                            else:
+                                button_label, self_msg, _ = lines[-1][1][0]
+                                lines[-1][1][0] = (button_label, self_msg, line_label)
+
+                            cond = Condition(CONDITION_KIND_STRING, line_label)
                             lines = []
                             block.indices.append((cond, lines))
                             msg_count = 0
 
-                        for j, msg in enumerate(child.term):
-                            msg_count += 1
-                            if msg_count > 5:
-                                self.raise_error(u'6つ以上のメッセージを同時に送ろうとしました', node)
-                            next_label = None
-                            if j == len(child.term)-1:
-                                # 各行の最後のメッセージは「続きを読む」のボタン
-                                if i == len(node.children)-1:
-                                    if len(options) > 0:
-                                        next_label = options[0]
-                                    else:
-                                        # 最後に飛ぶ先の引数指定がない場合は、最終行は通常メッセージとして表示される
-                                        pass
+                        if flag_dialog_mode:
+                            # 台詞モードでは次の話者指定までメッセージを連結する
+                            msg = child.term[0]
+                            while i < len(node.children):
+                                child = node.children[i]
+                                if len(child.term) == 1 and re.search(u'[:：]$', child.term[0]):
+                                    break
+                                msg += "\n" + child.term[0]
+                                i += 1
+
+                            next_label = False
+                            if i < len(node.children):
+                                next_label = True
+                            else:
+                                if len(options) > 0:
+                                    next_label = True
                                 else:
-                                    next_label = u'##MORE__{}'.format(node.children[i+1].line_no)
+                                    # 最後に飛ぶ先の引数指定がない場合は、最終行は通常メッセージとして表示される
+                                    pass
                             if not next_label:
                                 self.assert_strlen(msg, 300)
                                 lines.append(((msg,), None))
                             else:
-                                self.assert_strlen(msg, 160)
-                                lines.append(((BUTTON_CMDS[0], msg), [(u'続きを読む', next_label)]))
+                                if button_title is not None:
+                                    self.assert_strlen(msg, 60)
+                                    lines.append(((BUTTON_CMDS[0], msg, button_title), [None]))
+                                else:
+                                    self.assert_strlen(msg, 160)
+                                    lines.append(((BUTTON_CMDS[0], msg), [None]))
+                        else:
+                            for j, msg in enumerate(child.term):
+                                msg_count += 1
+                                if msg_count > 5:
+                                    self.raise_error(u'6つ以上のメッセージを同時に送ろうとしました', node)
+                                next_label = False
+                                if j == len(child.term)-1:
+                                    # 各行の最後のメッセージは「続きを読む」のボタン
+                                    if i < len(node.children):
+                                        next_label = True
+                                    else:
+                                        if len(options) > 0:
+                                            next_label = True
+                                        else:
+                                            # 最後に飛ぶ先の引数指定がない場合は、最終行は通常メッセージとして表示される
+                                            pass
+                                if not next_label:
+                                    self.assert_strlen(msg, 300)
+                                    lines.append(((msg,), None))
+                                else:
+                                    self.assert_strlen(msg, 160)
+                                    lines.append(((BUTTON_CMDS[0], msg), [None]))
+                    if len(options) > 0:
+                        line_label = options[0]
+                        if flag_first:
+                            self.raise_error(u'ラベルが指定されていますが、有効なメッセージがありません', node)
+                        else:
+                            if lines[-1][1][0] is None:
+                                lines[-1][1][0] = (u'▽', line_label)
+                            else:
+                                button_label, self_msg, _ = lines[-1][1][0]
+                                lines[-1][1][0] = (button_label, self_msg, line_label)
+
 
                 elif msg.startswith('@'):
                     if msg in OR_CMDS:
@@ -553,6 +618,16 @@ class Scenario(object):
                         # 引数を正規化
                         node.normalize(1)
                         node.normalize(2)
+                    elif msg in GROUP_ADD_CMDS:
+                        if len(options) < 1:
+                            self.raise_error(u'コマンドの引数が足りません', node)
+                        # 引数を正規化
+                        node.normalize(1)
+                    elif msg in GROUP_DEL_CMDS:
+                        if len(options) < 1:
+                            self.raise_error(u'コマンドの引数が足りません', node)
+                        # 引数を正規化
+                        node.normalize(1)
                     else:
                         self.raise_error(u'間違ったコマンドです', node)
                     lines.append((node.term, None))
@@ -903,7 +978,7 @@ class Director(object):
 
     def format_cells(self, arr, match):
         try:
-            result = [cell.format(*match) for cell in arr]
+            result = [cell.format(*match, **self.status) for cell in arr]
         except KeyError, e:
             logging.error('KeyError: ' + e.message)
             result = arr
@@ -963,7 +1038,8 @@ class Director(object):
                 elif msg in RESET_CMDS:
                     self.status.reset()
                 elif msg in SET_CMDS:
-                    self.status[options[0]] = options[1]
+                    options = self.format_cells(options, match)
+                    self.status[normalize('NFKC', options[0])] = normalize('NFKC', options[1]) # format_cells で代入されたものを半角化する必要がある
                 elif msg in AI_CMDS:
                     res = self.respond_with_ai(options, action, match)
                     for res_msg in res:
@@ -973,6 +1049,10 @@ class Director(object):
                         else:
                             reaction.append((self.format_cells([res_msg], match), args))
                 elif msg in FORWARD_CMDS:
+                    reaction.append((self.format_cells(row, match), args))
+                elif msg in GROUP_ADD_CMDS:
+                    reaction.append((self.format_cells(row, match), args))
+                elif msg in GROUP_DEL_CMDS:
                     reaction.append((self.format_cells(row, match), args))
                 elif msg in AI_RESET_CMDS:
                     self.status[u'ai.read.' + options[0]] = {}

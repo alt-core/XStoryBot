@@ -8,6 +8,10 @@ class GlobalBotVariables(ndb.Model):
     scenario_counter = ndb.IntegerProperty()
 
 
+class GroupMembers(ndb.Model):
+    members = ndb.StringProperty(repeated=True)
+
+
 class PlayerState(ndb.Model):
     scene = ndb.StringProperty()
     scene_history = ndb.StringProperty(repeated=True)

@@ -94,7 +94,8 @@ def image(request_path):
         else:
             resize_x = resize_x * resize_to / resize_y
             resize_y = resize_to
-        image = image.resize((resize_x, resize_y))
+        #image = image.resize((resize_x, resize_y))
+        image.thumbnail((resize_x, resize_y), Image.ANTIALIAS)
 
         output = StringIO()
         image.save(output, formats[content_type])
