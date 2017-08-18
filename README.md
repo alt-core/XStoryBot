@@ -6,13 +6,13 @@ GAE 専用です。
 
 * インストール
 
-> git clone ...
-> pip install -r packages.txt -t lib
+    > git clone ...
+    > pip install -r packages.txt -t lib
 
 GAEに存在していないモジュールはローカルから提供しなければならないため。
 
-> gcloud auth ...
-> gcloud app --project="<<your-project-name>>" create
+    > gcloud auth ...
+    > gcloud app --project="<<your-project-name>>" create
 
 通常の GAE のセットアップ手順を参照。
 
@@ -31,12 +31,12 @@ GAEに存在していないモジュールはローカルから提供しなけ�
   - Twilio の電話番号を取得し、必要な情報をメモ
   - Twilio の webhook に 〜/twilio/callback/<<botname>> を設定
 
-> vim settings.py
+    > vim settings.py
 
 前準備で準備した情報を記入。
 sheet_id は Google Sheets の編集時に URL に含まれるランダム英数字。
 
-> gcloud app deploy
+    > gcloud app deploy
 
 通常の GAE のデプロイ手順を参照。
 
