@@ -22,6 +22,10 @@ FORWARD_CMDS = (u'@forward', u'@転送')
 GROUP_ADD_CMDS = (u'@group_add', u'@グループ追加')
 GROUP_DEL_CMDS = (u'@group_del', u'@グループ削除')
 
+SMS_CMDS = (u'@sms', u'@SMS')
+DIAL_CMDS = (u'@dial', u'@電話')
+DELAY_CMDS = (u'@delay', u'@遅延')
+
 INCLUDE_COND_CMDS = (u'@include', u'@読込')
 
 BACK_JUMPS = (u'back', u'戻る')
@@ -300,8 +304,12 @@ class Scenario(object):
         while line_no < len(table):
             row = table[line_no]
 
+            # None を空白に置換（None が渡ってくることがあるかは不明）
+            row = [cell if cell is not None else u'' for cell in row]
+            # unicode 以外の物を unicode に変換（数値が直接渡ってくる場合がある）
+            row = [cell if isinstance(cell, unicode) else unicode(cell) for cell in row]
             # 各セル内の空白文字を除去
-            row = [cell.strip() if isinstance(cell, unicode) else cell for cell in row]
+            row = [cell.strip() for cell in row]
 
             # 空行・コメント行はスキップ
             if not row or row[0] == u'#' or row[0] == u'＃':
@@ -334,7 +342,8 @@ class Scenario(object):
 
             # 空のセルは右端から順に消す
             while row:
-                if row[-1]: break
+                if row[-1] is not None and row[-1] != u'':
+                    break
                 row.pop()
 
             # #@[*%で始まっていたら半角化（正規化）する
@@ -628,6 +637,20 @@ class Scenario(object):
                             self.raise_error(u'コマンドの引数が足りません', node)
                         # 引数を正規化
                         node.normalize(1)
+                    elif msg in SMS_CMDS:
+                        if len(options) < 1:
+                            self.raise_error(u'コマンドの引数が足りません', node)
+                    elif msg in DIAL_CMDS:
+                        if len(options) < 1:
+                            self.raise_error(u'コマンドの引数が足りません', node)
+                        node.normalize(1)
+                    elif msg in DELAY_CMDS:
+                        if len(options) < 2:
+                            self.raise_error(u'コマンドの引数が足りません', node)
+                        if not options[0].isdigit():
+                            self.raise_error(u'＠遅延の第一引数は数字である必要があります', node)
+                        node.normalize(1)
+                        node.normalize(2)
                     else:
                         self.raise_error(u'間違ったコマンドです', node)
                     lines.append((node.term, None))
@@ -1053,6 +1076,12 @@ class Director(object):
                 elif msg in GROUP_ADD_CMDS:
                     reaction.append((self.format_cells(row, match), args))
                 elif msg in GROUP_DEL_CMDS:
+                    reaction.append((self.format_cells(row, match), args))
+                elif msg in SMS_CMDS:
+                    reaction.append((self.format_cells(row, match), args))
+                elif msg in DIAL_CMDS:
+                    reaction.append((self.format_cells(row, match), args))
+                elif msg in DELAY_CMDS:
                     reaction.append((self.format_cells(row, match), args))
                 elif msg in AI_RESET_CMDS:
                     self.status[u'ai.read.' + options[0]] = {}

@@ -2,8 +2,8 @@
 
 import os
 
-server_name = os.getenv('SERVER_NAME', '')
-if server_name == '<<project-name-prod>>.appspot.com':
+SERVER_NAME = os.getenv('SERVER_NAME', '')
+if SERVER_NAME == '<<project-name-prod>>.appspot.com':
     # リリース環境のサーバ設定
     BOTS = {
         'bot': {
@@ -17,7 +17,14 @@ if server_name == '<<project-name-prod>>.appspot.com':
         # Google Sheets API を呼び出すサービスアカウントのクレデンシャルファイル（JSON形式）
         'key_file_json': 'path_to_keyfile_sheets_prod.json',
     }
-elif server_name == '<<project-name-dev>>.appspot.com':
+    # Twilio の各種設定
+    PHONE = {
+        'twilio_sid': '<<TWILIO_SID>>',
+        'twilio_auth_token': '<<TWILIO_AUTH_TOKEN>>',
+        'dial_from': '<<TEL_FOR_DIAL>>',
+        'sms_from': '<<TEL_FOR_SMS_SEND>>',
+    }
+elif SERVER_NAME == '<<project-name-dev>>.appspot.com':
     # 開発環境のサーバ設定
     BOTS = {
         'bot': {
@@ -30,6 +37,13 @@ elif server_name == '<<project-name-dev>>.appspot.com':
     SHEETS = {
         # Google Sheets API を呼び出すサービスアカウントのクレデンシャルファイル（JSON形式）
         'key_file_json': 'path_to_keyfile_sheets_dev.json',
+    }
+    # Twilio の各種設定
+    PHONE = {
+        'twilio_sid': '<<TWILIO_SID>>',
+        'twilio_auth_token': '<<TWILIO_AUTH_TOKEN>>',
+        'dial_from': '<<TEL_FOR_DIAL>>',
+        'sms_from': '<<TEL_FOR_SMS_SEND>>',
     }
 else:
     # ローカルテストはこの設定を使う
@@ -44,6 +58,13 @@ else:
     SHEETS = {
         # Google Sheets API を呼び出すサービスアカウントのクレデンシャルファイル（JSON形式）
         'key_file_json': 'path_to_keyfile_sheets_test.json',
+    }
+    # Twilio の各種設定
+    PHONE = {
+        'twilio_sid': '<<TWILIO_SID>>',
+        'twilio_auth_token': '<<TWILIO_AUTH_TOKEN>>',
+        'dial_from': '<<TEL_FOR_DIAL>>',
+        'sms_from': '<<TEL_FOR_SMS_SEND>>',
     }
 
 # 変更しないでください。

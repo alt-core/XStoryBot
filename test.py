@@ -123,6 +123,16 @@ class LinebotTestCase(unittest.TestCase):
         self.assertEqual(str(res), "Response: 200 OK\nContent-Type: text/html; charset=UTF-8\nOK")
         return res
 
+    def send_twilio_call(self, from_tel, to_tel):
+        self.bot.messages = []
+        res = self.app.post('/twilio/callback/testbot', {'From': from_tel, 'To': to_tel, 'CallSid': 'CAffffffffffffffffffffffffffffffff'})
+        return res
+
+    def send_twilio_message(self, from_tel, to_tel, message):
+        self.bot.messages = []
+        res = self.app.post('/twilio/callback/testbot', {'From': from_tel, 'To': to_tel, 'Body': message.encode('utf-8'), 'MessageSid': 'MEffffffffffffffffffffffffffffffff'})
+        return res
+
     def reset_bot2(self):
         self.bot2.messages = []
 
@@ -1158,6 +1168,22 @@ class LinebotTestCase(unittest.TestCase):
         self.assertIsNotNone(self.try_lint([
             [u'test', u'＠イメージマップ', u'=IMAGE("https://example.com/image.png")', u'abc'],
         ]))
+
+    def test_twilio(self):
+        self.test_bot.scenario = Scenario.from_tables([
+            (u'default', [
+                [u'#tel:+815011111111', u'電話されました'],
+                [u'#tel:+815022222222', u'<Reject reason="rejected"></Reject>'],
+                [u'テキストメッセージ', u'SMSを受信しました'],
+            ]),
+        ])
+        self.send_reset()
+        res = self.send_twilio_call(u'+819012345678', u'+815011111111')
+        self.assertEqual(str(res).decode('utf-8'), u'Response: 200 OK\nContent-Type: text/xml; charset=UTF-8\n<?xml version="1.0" encoding="UTF-8"?><Response><Say language="ja-jp" voice="woman">電話されました</Say></Response>')
+        res = self.send_twilio_call(u'+819012345678', u'+815022222222')
+        self.assertEqual(str(res).decode('utf-8'), u'Response: 200 OK\nContent-Type: text/xml; charset=UTF-8\n<?xml version="1.0" encoding="UTF-8"?><Response><Reject reason="rejected"></Reject></Response>')
+        res = self.send_twilio_message(u'+819012345678', u'+815011111111', u'テキストメッセージ')
+        self.assertEqual(str(res).decode('utf-8'), u'Response: 200 OK\nContent-Type: text/xml; charset=UTF-8\n<?xml version="1.0" encoding="UTF-8"?><Response><Message>SMSを受信しました</Message></Response>')
 
 
 if __name__ == '__main__':

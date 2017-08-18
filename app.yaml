@@ -11,6 +11,14 @@ handlers:
   script: linecallback.app
 - url: /line/image/.*
   script: image.app
+- url: /twilio/callback/.*
+  script: linecallback.app
+- url: /twilio/dial_content/.*
+  script: linecallback.app
+- url: /twilio/dial_completed_callback/.*
+  script: linecallback.app
+- url: /twilio/internal_callback/.*
+  script: linecallback.app
 
 libraries:
 - name: ssl

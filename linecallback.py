@@ -10,7 +10,9 @@ import hashlib
 import base64
 import time
 
-from bottle import request, Bottle, abort
+from google.appengine.api import taskqueue
+
+from bottle import request, response, Bottle, abort
 from linebot import LineBotApi, WebhookParser
 from linebot.exceptions import InvalidSignatureError
 from linebot.models import MessageEvent, PostbackEvent, FollowEvent, UnfollowEvent, JoinEvent, LeaveEvent, TextMessage, TextSendMessage, ImageSendMessage, TemplateSendMessage, ButtonsTemplate, ConfirmTemplate, CarouselTemplate, CarouselColumn, MessageTemplateAction, PostbackTemplateAction, URITemplateAction, ImagemapSendMessage, ImagemapArea, MessageImagemapAction, URIImagemapAction, BaseSize
@@ -31,6 +33,9 @@ ALT_TEXT = u'LINEアプリで確認してください。'
 
 
 app = Bottle()
+
+import twilio.rest
+twilio_client = twilio.rest.Client(settings.PHONE['twilio_sid'], settings.PHONE['twilio_auth_token'])
 
 
 class LineBot(object):
@@ -118,25 +123,32 @@ class LineBot(object):
         elif isinstance(event, (FollowEvent, UnfollowEvent, JoinEvent, LeaveEvent)):
             self.handle_other_events(event)
 
+    def reload_scenario_and_notify_to_other_instances(self):
+        ok, err = self.load_scenario()
+        if ok:
+            # リロードに成功した
+            global_bot_variables = GlobalBotVariables.get_by_id(id=self.name)
+            if global_bot_variables is None:
+                global_bot_variables = GlobalBotVariables(id=self.name, scenario_counter=0)
+            global_bot_variables.scenario_counter += 1
+            global_bot_variables.put()
+            self.scenario_counter = global_bot_variables.scenario_counter
+            # リロード時にプレイヤー状態をリセットしていたが、
+            # 複雑なシナリオのデバッグ時に不都合なのでコメントアウト
+            #player_state = PlayerStateDB(event.source.sender_id)
+            #player_state.reset()
+            #player_state.save()
+            return True
+        else:
+            logging.error(u"リロードに失敗しました。\n" + unicode(err))
+            return False
+
     def handle_text_message(self, event):
         if event.message.text == u"リロード":
-            ok, err = self.load_scenario()
-            if ok:
+            if self.reload_scenario_and_notify_to_other_instances():
                 # リロードに成功した
-                global_bot_variables = GlobalBotVariables.get_by_id(id=self.name)
-                if global_bot_variables is None:
-                    global_bot_variables = GlobalBotVariables(id=self.name, scenario_counter=0)
-                global_bot_variables.scenario_counter += 1
-                global_bot_variables.put()
-                self.scenario_counter = global_bot_variables.scenario_counter
-                # リロード時にプレイヤー状態をリセットしていたが、
-                # 複雑なシナリオのデバッグ時に不都合なのでコメントアウト
-                #player_state = PlayerStateDB(event.source.sender_id)
-                #player_state.reset()
-                #player_state.save()
                 self.reply_message(event, TextSendMessage(text=u"リロードしました。"))
             else:
-                logging.error(u"リロードに失敗しました。\n" + unicode(err))
                 self.reply_message(event, TextSendMessage(text=u"リロードに失敗しました。\n\n" + err))
             return
 
@@ -233,6 +245,9 @@ class LineBot(object):
     def template_message(self, template):
         return TemplateSendMessage(ALT_TEXT, template)
 
+    def process_common_reaction(self, msg, options, player_state):
+        return False
+
     def respond_message(self, action, player_state, source):
         director = Director(self.scenario, player_state)
         reactions = director.get_reaction(action)
@@ -242,7 +257,9 @@ class LineBot(object):
         for reaction, args in reactions:
             msg = reaction[0]
             options = reaction[1:] if len(reaction) > 1 else []
-            if msg == u'@confirm' or msg == u'@確認':
+            if self.process_common_reaction(msg, options, player_state):
+                pass
+            elif msg == u'@confirm' or msg == u'@確認':
                 if len(options) > 0:
                     results.append(self.template_message(ConfirmTemplate(text=options[0], actions=self.build_template_actions(args, player_state.visit_id))))
                 else:
@@ -336,6 +353,97 @@ class LineBot(object):
                     results.append(TextSendMessage(text=msg))
         return results
 
+    def handle_twilio(self, from_tel, to_tel, is_voicecall, message):
+        if message == u"リロード":
+            self.reload_scenario_and_notify_to_other_instances()
+            return
+
+        if is_voicecall:
+            # 音声着信の場合、action は #tel:電話番号 とする
+            action = u'#tel:'+to_tel
+            if message is not None:
+                # message がある場合（音声認識した、または @dial の内容取得時）は
+                # message で上書き
+                action = message
+        else:
+            # テキストメッセージの場合、action は 本文 とする
+            action = message
+            # action = u'#sms:'+to_tel
+
+        # ユーザID は 'tel:' + to_tel
+        # TODO: to_tel をそのまま user_id として使わない
+        player_state = PlayerStateDB(u'tel:'+from_tel)
+
+        director = Director(self.scenario, player_state)
+        reactions = director.get_reaction(action)
+
+        twiml = u'<?xml version="1.0" encoding="UTF-8"?>' \
+                u'<Response>'
+
+        if reactions is None:
+            reactions = []
+        for reaction, args in reactions:
+            msg = reaction[0]
+            options = reaction[1:] if len(reaction) > 1 else []
+
+            if self.process_common_reaction(msg, options, player_state):
+                pass
+            elif msg == u'@sms' or msg == u'@SMS':
+                message = options[0]
+                twilio_client.messages.create(
+                    to=from_tel,
+                    from_=settings.PHONE['sms_from'],
+                    body=message
+                )
+            elif msg == u'@dial' or msg == u'@電話':
+                action_dial_content = options[0]
+                url_dial_content = 'https://' + settings.SERVER_NAME + '/twilio/dial_content/' + self.name + \
+                                   '/' + urllib.quote(action_dial_content.encode('utf-8'), '')
+                logging.info('TwiML url: ' + url_dial_content)
+                if len(options) == 1:
+                    twilio_client.calls.create(
+                        to=from_tel,
+                        from_=settings.PHONE['dial_from'],
+                        url=url_dial_content,
+                        timeout=5
+                    )
+                else:
+                    # 通話の完了通知が必要
+                    action_completed = options[1]
+                    url_completed = 'https://' + settings.SERVER_NAME + '/twilio/dial_completed_callback/' + self.name + \
+                                    '/' + urllib.quote(action_completed.encode('utf-8'), '')
+                    twilio_client.calls.create(
+                        to=from_tel,
+                        from_=settings.PHONE['dial_from'],
+                        url=url_dial_content,
+                        timeout=5,
+                        status_callback=url_completed,
+                        status_callback_event=['completed']
+                    )
+
+            elif msg == u'@delay' or msg == u'@遅延':
+                delay_secs = int(options[0])
+                action = options[1]
+                global bot_dict
+                param_sid = 'CallSid' if is_voicecall else 'MessageSid'
+                task = taskqueue.add(url='/twilio/internal_callback/' + self.name,
+                                     params={'From': from_tel, 'To': to_tel, param_sid: 'DELAY', 'Message': action},
+                                     countdown=delay_secs)
+                logging.info("enqueue a task: {}, ETA {}".format(task.name, task.eta))
+            elif msg.startswith(u'<'):
+                twiml += msg
+            else:
+                if is_voicecall:
+                    twiml += u'<Say language="ja-jp" voice="woman">' + msg + u'</Say>'
+                else:
+                    twiml += u'<Message>' + msg + u'</Message>'
+
+        twiml += u'</Response>'
+
+        player_state.save()
+
+        return twiml
+
 
 bot_dict = {}
 for name, bot_settings in settings.BOTS.items():
@@ -391,6 +499,98 @@ def send(bot_name):
     bot.handle_api_send(group, action)
 
     return 'OK'
+
+
+def twilio_callback_sub(bot_name, from_tel, to_tel, is_voicecall, message):
+
+    body = request.body.read().decode('utf-8')
+    logging.info("Twilio callback: " + body)
+
+    bot = bot_dict.get(bot_name, None)
+    if not bot:
+        abort(404)
+    bot.check_reload()
+
+    response.content_type = 'text/xml; charset=UTF-8'
+
+    if not from_tel.startswith(u'+81'):
+        return u'<?xml version="1.0" encoding="UTF-8"?>' \
+               u'<Response>' \
+               u'<Say language="ja-jp" voice="woman">' \
+               u'番号非通知の通話は、お受けできません。おてすうですが、電話番号を通知して、おかけ直しください' \
+               u'</Say>' \
+               u'<Reject reason="rejected"></Reject>' \
+               u'</Response>'
+
+    return bot.handle_twilio(from_tel, to_tel, is_voicecall, message)
+
+@app.post('/twilio/callback/<bot_name>')
+def twilio_callback(bot_name):
+    if request.forms.getunicode('Message'):
+        return 'OK'
+    from_tel = request.forms.getunicode('From')
+    to_tel = request.forms.getunicode('To')
+    is_voicecall = request.forms.getunicode('CallSid') is not None
+    if is_voicecall:
+        # Gather で音声認識した場合のみ
+        message = request.forms.getunicode('SpeechResult')
+    else:
+        # SMS の本文
+        message = request.forms.getunicode('Body')
+
+    # TODO: 不正なアクセスを防ぐために secret_key が本来は必要
+
+    return twilio_callback_sub(bot_name, from_tel, to_tel, is_voicecall, message)
+
+# @dial コマンド利用時のみの特殊なコールバック呼び出し
+# この endpoint を Twilio 側に設定する必要は無い
+@app.post('/twilio/dial_content/<bot_name>/<message>')
+def twilio_dial_content(bot_name, message):
+    # Outbound のダイアル時なので、From と To が逆になる
+    from_tel = request.forms.getunicode('To')
+    to_tel = request.forms.getunicode('From')
+    is_voicecall = True
+
+    # TODO: 不正なアクセスを防ぐために secret_key が本来は必要
+
+    return twilio_callback_sub(bot_name, from_tel, to_tel, is_voicecall, message)
+
+# @dial コマンドの完了通知のみの特殊なコールバック呼び出し
+# この endpoint を Twilio 側に設定する必要は無い
+@app.post('/twilio/dial_completed_callback/<bot_name>/<message>')
+def twilio_dial_content(bot_name, message):
+    # Outbound のダイアル時なので、From と To が逆になる
+    from_tel = request.forms.getunicode('To')
+    to_tel = request.forms.getunicode('From')
+    is_voicecall = True
+
+    call_status = request.forms.getunicode('CallStatus')
+    if call_status == u'completed':
+        duration = request.forms.getunicode('CallDuration')
+        if duration is not None and int(duration) > 1:
+            action = message + u':OK'
+        else:
+            # 会話時間が1秒以下の場合は NG 扱い
+            action = message + u':NG'
+    else:
+        # 話し中・失敗・電話に出ないなど
+        action = message + u':NG'
+
+    # TODO: 不正なアクセスを防ぐために secret_key が本来は必要
+
+    return twilio_callback_sub(bot_name, from_tel, to_tel, is_voicecall, action)
+
+# @delay コマンド利用時のみの task queue からのコールバック
+@app.post('/twilio/internal_callback/<bot_name>')
+def twilio_internal_callback(bot_name):
+    from_tel = request.forms.getunicode('From')
+    to_tel = request.forms.getunicode('To')
+    is_voicecall = request.forms.getunicode('CallSid') is not None
+    message = request.forms.getunicode('Message')
+
+    # TODO: 不正なアクセスを防ぐために secret_key が本来は必要
+
+    return twilio_callback_sub(bot_name, from_tel, to_tel, is_voicecall, message)
 
 
 #@app.error(500)
