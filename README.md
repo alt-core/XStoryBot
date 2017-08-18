@@ -1,10 +1,10 @@
 # sheetbot
-* 概要
+## 概要
 
 チャットボットのリアクションを Google Sheets で記述できるようにする試みです。
 GAE 専用です。
 
-* インストール
+## インストール
 
     > git clone ...
     > pip install -r packages.txt -t lib
@@ -40,7 +40,7 @@ sheet_id は Google Sheets の編集時に URL に含まれるランダム英数
 
 通常の GAE のデプロイ手順を参照。
 
-* 注意事項
+## 注意事項
 
 - LINE@ はユーザIDで、Twilio は電話番号でユーザ管理しているため
   両者を跨いだ連携はきません。
