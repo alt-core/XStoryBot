@@ -1,0 +1,3 @@
+handlers:
+- url: /line/callback/.*
+  script: plugin.line.webapi.app

@@ -2,23 +2,27 @@ runtime: python27
 api_version: 1
 threadsafe: true
 
-instance_class: F2
+instance_class: F1
 
 handlers:
-- url: /line/callback/.*
-  script: linecallback.app
-- url: /line/api/.*
-  script: linecallback.app
-- url: /line/image/.*
-  script: image.app
-- url: /twilio/callback/.*
-  script: linecallback.app
-- url: /twilio/dial_content/.*
-  script: linecallback.app
-- url: /twilio/dial_completed_callback/.*
-  script: linecallback.app
-- url: /twilio/internal_callback/.*
-  script: linecallback.app
+- url: /api/last_build_result/.*
+  script: webapi.app
+
+- url: /dashboard/
+  login: required
+  script: dashboard.app
+- url: /dashboard/(.*)
+  login: required
+  script: dashboard.app
+
+- url: /static/(.*)
+  static_files: static/\1
+  upload: static/.*
+
+includes:
+- plugin/line/app.yaml
+- plugin/twilio/app.yaml
+- plugin/render_text/app.yaml
 
 libraries:
 - name: ssl

@@ -1,0 +1,9 @@
+handlers:
+- url: /twilio/callback/.*
+  script: plugin.twilio.webapi.app
+- url: /twilio/dial_content/.*
+  script: plugin.twilio.webapi.app
+- url: /twilio/dial_completed_callback/.*
+  script: plugin.twilio.webapi.app
+- url: /twilio/internal_callback/.*
+  script: plugin.twilio.webapi.app

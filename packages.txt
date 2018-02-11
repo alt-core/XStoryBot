@@ -2,4 +2,5 @@ bottle==0.12.10
 line_bot_sdk==1.0.2
 google_api_python_client==1.5.5
 twilio==6.5.1
-
+pusher==1.7.2
+GoogleAppEngineCloudStorageClient==1.9.22.1

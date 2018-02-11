@@ -1,51 +1,32 @@
 # coding: utf-8
 import re
 import logging
-import random
-import string
 from unicodedata import normalize
+import hashlib
+import pickle
+import httplib2
 
-BUTTON_CMDS = (u'@button', u'@ボタン')
-CONFIRM_CMDS = (u'@confirm', u'@確認')
-PANEL_CMDS = (u'@carousel', u'@カルーセル', u'@panel', u'@パネル')
-IMAGEMAP_CMDS = (u'@imagemap', u'@イメージマップ')
-ALL_TEMPLATE_CMDS = BUTTON_CMDS + CONFIRM_CMDS + PANEL_CMDS + IMAGEMAP_CMDS
+from google.appengine.api import app_identity
+from google.appengine.api import memcache
+import cloudstorage
 
-MORE_CMDS = (u'@more', u'@続きを読む')
+import utility
+import convert_image
+from models import ImageFileStatDB
+import hub
+import commands
+
+
+IMAGE_CMDS = (u'@image', u'@画像')
+
 OR_CMDS = (u'@or', u'@または')
-SCENE_CMDS = (u'@scene', u'@シーン')
-RESET_CMDS = (u'@reset', u'@リセット')
-SET_CMDS = (u'@set', u'@セット')
-AI_CMDS = (u'@ai', u'@AI')
-AI_RESET_CMDS = (u'@aireset', u'@AIリセット')
-FORWARD_CMDS = (u'@forward', u'@転送')
-GROUP_ADD_CMDS = (u'@group_add', u'@グループ追加')
-GROUP_DEL_CMDS = (u'@group_del', u'@グループ削除')
-
-SMS_CMDS = (u'@sms', u'@SMS')
-DIAL_CMDS = (u'@dial', u'@電話')
-DELAY_CMDS = (u'@delay', u'@遅延')
+IF_CMDS = (u'@if', u'@条件')
+SEQ_CMDS = (u'@seq', u'@順々')
 
 INCLUDE_COND_CMDS = (u'@include', u'@読込')
 
 BACK_JUMPS = (u'back', u'戻る')
 
-PRIORITY_AI_CMDS = (u'@priority', u'@優先度')
-PERCENT_AI_CMDS = (u'@percent', u'@確率')
-ALWAYS_AI_CMDS = (u'@always', u'@常時')
-MEMORY_AI_CMDS = (u'@memory', u'@記憶')
-DEFINE_AI_CMDS = (u'@define', u'@定義')
-
-SEQUENCE_AI_CMDS = (u'@seq', u'@順々')
-
-MAX_HISTORY = 5
-MAX_MEMORY = 5
-
-class ScenarioSyntaxError(Exception):
-    def __str__(self):
-        return (u','.join(self.args)).encode('utf-8')
-    def __unicode__(self):
-        return u','.join(self.args)
 
 BEFORE_LINE_0 = -1
 
@@ -53,15 +34,18 @@ CONDITION_KIND_STRING = 1
 CONDITION_KIND_REGEXP = 2
 CONDITION_KIND_COMMAND = 100
 
-PRIORITY_MAP = {
-    u'超': 100,
-    u'高': 80,
-    u'中': 50,
-    u'低': 20,
-    u'稀': 1,
-}
-DEFAULT_PRIORITY = (u'高', u'低')
-DUPLICATE_PRIORITY = u'稀'
+CONDITION_OPTION_REGEXP_NORMALIZE = 1
+CONDITION_OPTION_REGEXP_LOWER_CASE = 2
+
+http = httplib2.Http(cache=memcache)
+
+
+class ScenarioSyntaxError(Exception):
+    def __str__(self):
+        return (u','.join(self.args)).encode('utf-8')
+
+    def __unicode__(self):
+        return u','.join(self.args)
 
 
 class Guard(object):
@@ -119,7 +103,12 @@ class Condition(object):
             if re.match(ur'^[*＊#＃]', action):
                 # postback は REGEXP にマッチさせない
                 return None
-            m = self.value.match(action)
+            target_string = action
+            if self.options and CONDITION_OPTION_REGEXP_NORMALIZE in self.options:
+                target_string = normalize('NFKC', target_string)
+            if self.options and CONDITION_OPTION_REGEXP_LOWER_CASE in self.options:
+                target_string = target_string.lower()
+            m = self.value.search(target_string)
             return (m.group(0),) + m.groups() if m else None
         else:
             raise ValueError("invalid Condition: " + self.value)
@@ -129,6 +118,9 @@ class Condition(object):
 
     def is_condition(self):
         return self.kind == CONDITION_KIND_STRING or self.kind == CONDITION_KIND_REGEXP
+
+    def is_label(self):
+        return self.kind == CONDITION_KIND_STRING and self.value.startswith(u'#') and self.guard is None
 
 
 class Block(object):
@@ -146,82 +138,6 @@ class Scene(object):
 
     def get_fullpath(self):
         return self.tab_name + u'/' + self.sub_name
-
-
-class AICondition(object):
-    def __init__(self):
-        pass
-
-
-class AIClauseCondition(AICondition):
-    def __init__(self, clause):
-        super(AIClauseCondition, self).__init__()
-        self.clause = clause
-
-    def check(self, action, named_entities, context, _):
-        matched_word = None
-        for word in self.clause:
-            if word.startswith(u'%'):
-                # グループ定義
-                for entity_word in named_entities[word]:
-                    if entity_word in action:
-                        matched_word = entity_word
-                        break
-                if matched_word: break
-            elif word in action:
-                matched_word = word
-                break
-
-        if not matched_word:
-            # 発言内に必要な単語が無かったので、文脈から探す
-            memory = context.get(u'memory', [])
-            for word in self.clause:
-                if word.startswith(u'%'):
-                    # グループ定義
-                    for entity_word in named_entities[word]:
-                        if entity_word in memory:
-                            matched_word = entity_word
-                            break
-                    if matched_word: break
-                elif word in memory:
-                    matched_word = word
-                    break
-
-        return matched_word is not None, matched_word
-
-
-class AIAlwaysCondition(AICondition):
-    def check(self, _1, _2, _3, _4):
-        return True, None
-
-
-class AIMemoryCondition(AICondition):
-    def check(self, _1, _2, _3, status):
-        memory = status.get("memory", None)
-        if memory:
-            return True, random.choice(memory)
-        else:
-            return False, None
-
-
-class AIPercentCondition(AICondition):
-    def __init__(self, percent):
-        super(AIPercentCondition, self).__init__()
-        self.percent = percent
-
-    def check(self, _1, _2, _3, _4):
-        r = random.randint(0, 99)
-        if r < self.percent:
-            return True, None
-        else:
-            return False, None
-
-
-class AIDic(object):
-    def __init__(self, tab_name):
-        self.tab_name = tab_name
-        self.named_entities = {}
-        self.conditions = []
 
 
 class SyntaxTree(object):
@@ -242,7 +158,7 @@ class SyntaxTree(object):
 
     def compaction(self):
         new_term = [factor for factor in self.term if factor]
-        self.term = tuple(new_term)
+        self.term = list(new_term)
 
     def normalize(self, *args):
         new_term = []
@@ -251,10 +167,10 @@ class SyntaxTree(object):
                 new_term.append(normalize('NFKC', v))
             else:
                 new_term.append(v)
-        self.term = tuple(new_term)
+        self.term = list(new_term)
 
     def normalize_all(self):
-        self.term = tuple([normalize('NFKC', v) for v in self.term])
+        self.term = list([normalize('NFKC', v) for v in self.term])
 
     def dump(self, level=0):
         str = u'  '*level + unicode(self) + u"\n"
@@ -269,35 +185,115 @@ class SyntaxTree(object):
         return msg
 
 
+class Command(object):
+    base_name = None
+    counter = {}
+
+    @classmethod
+    def generate_command_id(cls):
+        # シナリオが変更されてもできるだけIDを維持できるように
+        # ベースネームからの差分で管理している
+        ret = u'{}__{}'.format(cls.base_name, cls.counter[cls.base_name])
+        cls.counter[cls.base_name] += 1
+        return ret
+
+    @classmethod
+    def set_base_name(cls, base_name):
+        cls.base_name = base_name
+        if base_name not in cls.counter:
+            cls.counter[base_name] = 0
+
+    def __init__(self, msg, options, children, command_id = None):
+        self.msg = msg
+        self.options = options
+        self.children = children
+        if command_id is None:
+            command_id = Command.generate_command_id()
+        self.command_id = command_id
+
+    def is_normal_message(self):
+        if re.match(r'^[@＠*＊#＃]', self.msg):
+            return False
+        return True
+
+
 class Scenario(object):
     def __init__(self):
         self.scenes = {}
-        self.ai_dic = {}
-        self.first_top_block = None
         self.startup_scene_title = None
-        self.tab_name = None
 
     @classmethod
-    def from_table(cls, table):
-        self = cls()
-        self._read_table(u'default', table)
-        if not self.scenes:
+    def load_from_uri(cls, uri):
+        m = re.match(r'^https://storage.googleapis.com(/.+)$', uri)
+        if m:
+            filepath = m.group(1)
+            try:
+                logging.info(u'load scenario file: {}'.format(filepath))
+                pickled_file = cloudstorage.open(filepath, 'r')
+                self = pickle.load(pickled_file)
+                pickled_file.close()
+                return self
+            except (cloudstorage.Error, pickle.PickleError) as e:
+                raise ScenarioSyntaxError(u'シナリオのロードに失敗しました: {}, {}'.format(uri, unicode(e)))
+        else:
+            raise ScenarioSyntaxError(u'CloudStorage のファイルではありません')
+
+    def save_to_storage(self):
+        try:
+            scenario_data = pickle.dumps(self)
+            bucket_name = app_identity.get_default_gcs_bucket_name()
+            file_digest = hashlib.md5(scenario_data).hexdigest()
+            filepath = '/{}/scenario/{}'.format(bucket_name, file_digest)
+            logging.info(u'save scenario file: {}'.format(filepath))
+            scenario_file = cloudstorage.open(filepath, 'w', content_type='application/octet-stream', options={'x-goog-acl': 'public-read'})
+            scenario_file.write(scenario_data)
+            scenario_file.close()
+            uri = u'https://storage.googleapis.com{}'.format(filepath)
+            return uri
+        except (cloudstorage.Error, pickle.PickleError):
+            return None
+
+
+class ScenarioBuilder(object):
+    def __init__(self, options):
+        self.scenario = Scenario()
+        self.first_top_block = None
+        self.image_file_read_cache = {}
+        self.image_file_write_cache = {}
+        self.bucket_name = app_identity.get_default_gcs_bucket_name()
+
+        self.options = options or {}
+        if self.options.get('force') == True:
+            self.option_force = True
+            self.option_skip_image = False
+        else:
+            self.option_force = False
+            self.option_skip_image = (self.options.get('skip_image') == True)
+
+        self.node = None
+        self.i_node = 0
+        self.parent_node = None
+        self.scene = None
+        self.lines = None
+
+    @classmethod
+    def build_from_table(cls, table, options=None):
+        self = cls(options)
+        self._build_from_table(u'default', table)
+        if not self.scenario.scenes:
             self.raise_error(u'シナリオには1つ以上のシーンを含んでいる必要があります')
-        return self
+        return self.scenario
 
     @classmethod
-    def from_tables(cls, tables):
-        self = cls()
+    def build_from_tables(cls, tables, options=None):
+        self = cls(options)
         for tab_name, table in tables:
             # シート名は正規化する
             tab_name = normalize('NFKC', tab_name)
-            if tab_name.startswith(u'AI'):
-                self._read_ai_table(tab_name, table)
-            else:
-                self._read_table(tab_name, table)
-        if not self.scenes:
+            self._build_from_table(tab_name, table)
+        if not self.scenario.scenes:
             self.raise_error(u'シナリオには1つ以上のシーンを含んでいる必要があります')
-        return self
+        return self.scenario
 
     def _parse_sub_tree(self, node, table, tab_name, line_no, level, column_as_node_rule=False):
         first_line_no = line_no
@@ -308,11 +304,13 @@ class Scenario(object):
             row = [cell if cell is not None else u'' for cell in row]
             # unicode 以外の物を unicode に変換（数値が直接渡ってくる場合がある）
             row = [cell if isinstance(cell, unicode) else unicode(cell) for cell in row]
-            # 各セル内の空白文字を除去
-            row = [cell.strip() for cell in row]
+            # 各セル内の末尾の空白文字を除去
+            row = [cell.rstrip() for cell in row]
+            # #@[*%で始まっていたら先頭の空白も取り除いた上で半角化（正規化）する
+            row = [normalize('NFKC', cell.strip()) if re.match(u'^\s*[#＃@＠\[［*＊%％]', cell) else cell for cell in row]
 
             # 空行・コメント行はスキップ
-            if not row or row[0] == u'#' or row[0] == u'＃':
+            if not row or row[0] == u'#':
                 line_no += 1
                 continue
 
@@ -341,15 +339,9 @@ class Scenario(object):
             # 通常の子要素
 
             # 空のセルは右端から順に消す
-            while row:
-                if row[-1] is not None and row[-1] != u'':
-                    break
-                row.pop()
+            utility.remove_tail_empty_cells(row)
 
-            # #@[*%で始まっていたら半角化（正規化）する
-            row = [normalize('NFKC', cell) if re.match(u'^[#＃@＠\[［*＊%％]', cell) else cell for cell in row]
-
-            child_node = SyntaxTree(tab_name, line_no, tuple(row[level:]))
+            child_node = SyntaxTree(tab_name, line_no, list(row[level:]))
             node.children.append(child_node)
             if column_as_node_rule:
                 # 1列が1ノードレベルという扱い
@@ -364,9 +356,64 @@ class Scenario(object):
         # テーブルの最後まで読み込んだ
         return line_no
 
-    def _read_table(self, tab_name, table):
-        self.tab_name = tab_name
 
+    def _get_relative_label(self, block, i_label, num):
+        # ##__ で始まる num 個先のラベルを返す
+        # num が 0 の場合はすぐ次の物を返す
+        try:
+            index = i_label + 1
+            while True:
+                cond, _ = block.indices[index]
+                if cond.is_label() and cond.value.startswith(u'##__'):
+                    num -= 1
+                if num <= 0:
+                    if not cond.is_label():
+                        self.raise_error(u'相対指定された先がラベルではありません')
+                        return None
+                    return cond.value
+                index += 1
+        except IndexError:
+            self.raise_error(u'相対指定された先が存在していません')
+            return None
+
+    def _fix_relative_label_iter(self, cur_list, block, i_label):
+        for index in range(len(cur_list)):
+            if isinstance(cur_list[index], unicode):
+                match = re.match(r'^##(\d+)?$', cur_list[index])
+                if match:
+                    num = int(match.group(1) or 1)
+                    label = self._get_relative_label(block, i_label, num)
+                    if label is not None:
+                        #print 'overwrite options: ' + cur_list[index] + ' -> ' + label
+                        cur_list[index] = label
+            elif isinstance(cur_list[index], list):
+                self._fix_relative_label_iter(cur_list[index], block, i_label)
+            else:
+                self.raise_error(u'内部エラーが発生しました' + unicode(cur_list[index]))
+
+    def _fix_relative_label(self):
+        # 相対表記のラベルを正しい物に置き直す
+        # TODO: 現在は全ての項目で ##n を探しているので、きちんと構文を解釈するようにする
+        for scene in self.scenario.scenes.values():
+            for block in scene.blocks:
+                for i_label in range(len(block.indices)):
+                    cond, lines = block.indices[i_label]
+                    for command in lines:
+                        if command.options:
+                            self._fix_relative_label_iter(command.options, block, i_label)
+                        if command.children:
+                            self._fix_relative_label_iter(command.children, block, i_label)
+
+    def add_command(self, msg, options, children):
+        self.lines.append(Command(msg, options, children))
+
+    def add_new_string_index(self, label):
+        cond = Condition(CONDITION_KIND_STRING, label)
+        self.lines = []
+        self.block.indices.append((cond, self.lines))
+        self.msg_count = 0
+
+    def _build_from_table(self, tab_name, table):
         root = SyntaxTree(tab_name, 0, (u'**'+tab_name,))
         # ファイルの先頭に特殊な親ノードを貼る
         root.children.append(SyntaxTree(tab_name, 0, (u'*',)))
@@ -374,8 +421,8 @@ class Scenario(object):
 
         top_block = None
         scene_count = 0
-        for node in root.children:
-            cond_str = node.get_factor(0)
+        for self.node in root.children:
+            cond_str = self.node.get_factor(0)
 
             if not cond_str:
                 self.raise_error(u'internal parser error')
@@ -383,43 +430,47 @@ class Scenario(object):
             if cond_str.startswith(u'@'):
                 # コマンド＠条件セル
                 if cond_str in INCLUDE_COND_CMDS:
-                    msg = node.get_factor(1)
+                    msg = self.node.get_factor(1)
                     if not msg or not msg.startswith(u'*'):
                         # TODO: 正しいシーン名か validation する
-                        self.raise_error(u'@include のあとにはシーンラベルを指定してください', node)
+                        self.raise_error(u'@include のあとにはシーンラベルを指定してください')
                 else:
-                    self.raise_error(u'不正なコマンドです', node)
-                cond = Condition(CONDITION_KIND_COMMAND, cond_str, options=node.get_factors(1))
+                    self.raise_error(u'不正なコマンドです')
+                cond = Condition(CONDITION_KIND_COMMAND, cond_str, options=self.node.get_factors(1))
             elif cond_str.startswith(u'*'):
                 # 新しいシーンを開始する
                 sub_name = cond_str[1:]
                 if u'/' in sub_name:
-                    self.raise_error(u'シーン名に/を含むことはできません', node)
-                scene = Scene(tab_name, sub_name)
-                self.scenes[scene.get_fullpath()] = scene
+                    self.raise_error(u'シーン名に/を含むことはできません')
+                self.scene = Scene(tab_name, sub_name)
+                self.scenario.scenes[self.scene.get_fullpath()] = self.scene
                 # 最初に定義されたシーンがスタートアップシーンとなる
-                if not self.startup_scene_title:
-                    self.startup_scene_title = scene.get_fullpath()
+                if not self.scenario.startup_scene_title:
+                    self.scenario.startup_scene_title = self.scene.get_fullpath()
 
-                block = Block(tab_name, sub_name)
+                self.block = Block(tab_name, sub_name)
                 # トップブロックと最初のタブのトップブロックが常に include される
-                scene.blocks.append(block)
+                self.scene.blocks.append(self.block)
                 if top_block is None:
                     # table で先頭のブロック
                     if sub_name != u'':
-                        self.raise_error(u'inernal parse error', node)
-                    top_block = block
+                        self.raise_error(u'inernal parse error')
+                    top_block = self.block
                     if self.first_top_block is None:
                         # 最初に設定した top_block が first_top_block
                         self.first_top_block = top_block
                         # ついでに first_top_block のみのシーンをデフォルトシーンに設定
-                        self.scenes[u'*default'] = scene
+                        self.scenario.scenes[u'*default'] = self.scene
                 else:
-                    scene.blocks.append(top_block)
+                    self.scene.blocks.append(top_block)
                 if self.first_top_block != top_block:
-                    scene.blocks.append(self.first_top_block)
+                    self.scene.blocks.append(self.first_top_block)
                 scene_count += 1
+                Command.set_base_name(self.scene.get_fullpath())
                 cond = Condition(CONDITION_KIND_STRING, u'#')
+            elif cond_str == u'##':
+                # 無名インデックス
+                cond = Condition(CONDITION_KIND_STRING, u'##__{}__{}'.format(self.scene.get_fullpath(), self.node.line_no))
             else:
                 # 通常の条件セル
                 guard = None
@@ -428,365 +479,187 @@ class Scenario(object):
                     if m:
                         guard = Guard.from_str(m.group(1))
                         if guard is None:
-                            self.raise_error(u'条件指定が正しくありません', node)
+                            self.raise_error(u'条件指定が正しくありません')
                         cond_str = m.group(2)
                     else:
-                        self.raise_error(u'条件指定が正しくありません', node)
-                if cond_str[0] == u'/' and cond_str[-1] == u'/':
-                    cond = Condition(CONDITION_KIND_REGEXP, re.compile(cond_str[1:-1]), guard=guard)
+                        self.raise_error(u'条件指定が正しくありません')
+                m = re.match(r'^/(.*)/([iLN]*)?', cond_str)
+                if m:
+                    option_str = m.group(2)
+                    regex_string = m.group(1)
+                    regex_option = 0
+                    condition_option = []
+                    if option_str and u'i' in option_str:
+                        regex_option = re.IGNORECASE
+                    if option_str and u'L' in option_str:
+                        condition_option.append(CONDITION_OPTION_REGEXP_LOWER_CASE)
+                    if option_str and u'N' in option_str:
+                        condition_option.append(CONDITION_OPTION_REGEXP_NORMALIZE)
+                    regex = re.compile(regex_string, regex_option)
+                    cond = Condition(CONDITION_KIND_REGEXP, regex, guard=guard, options=condition_option)
                 else:
                     cond = Condition(CONDITION_KIND_STRING, cond_str, guard=guard)
-            lines = []
-            block.indices.append((cond, lines))
+            self.lines = []
+            self.block.indices.append((cond, self.lines))
             # 新しい条件に来たので、メッセージ数カウンタを初期化する
-            msg_count = 0
+            self.msg_count = 0
 
-            for node in node.children:
-                msg = node.get_factor(0)
-                options = node.get_factors(1)
-
-                if msg in CONFIRM_CMDS or msg in BUTTON_CMDS or msg in IMAGEMAP_CMDS:
-                    self.lint_command(msg, options)
-                    choices = []
-                    for choice in node.children:
-                        self.lint_choice(msg, choice.term)
-                        choices.append(choice.term)
-                    if (msg in CONFIRM_CMDS or msg in BUTTON_CMDS) and len(choices) == 0:
-                        self.raise_error(u'選択肢が0個です', node)
-                    if msg in CONFIRM_CMDS and len(choices) > 2:
-                        self.raise_error(u'「＠確認」の選択肢は最大で2個です', node)
-                    if msg in BUTTON_CMDS and len(choices) > 4:
-                        self.raise_error(u'「＠ボタン」の選択肢は最大で4個です', node)
-                    if msg in IMAGEMAP_CMDS and len(choices) > 49:
-                        self.raise_error(u'「＠イメージマップ」の選択肢は最大で49個です', node)
-                    lines.append((node.term, choices))
-                    msg_count += 1
-
-                elif msg in PANEL_CMDS:
-                    self.lint_command(msg, options)
-                    panels = []
-                    num_choices = -1
-                    flag_title = None
-                    flag_image = None
-                    for panel in node.children:
-                        self.lint_panel(panel.term)
-                        choices = []
-                        for choice in panel.children:
-                            self.lint_choice(msg, choice.term)
-                            choices.append(choice.term)
-                        if len(choices) == 0:
-                            self.raise_error(u'選択肢が0個です', panel)
-                        if len(choices) > 3:
-                            self.raise_error(u'パネルの選択肢は最大3個です', panel)
-                        if num_choices != -1 and num_choices != len(choices):
-                            self.raise_error(u'各パネルの選択肢数がばらばらです', node)
-                        num_choices = len(choices)
-                        if (flag_title is not None) and ((panel.get_factor(1) != u'') != flag_title):
-                            self.raise_error(u'各パネルのタイトルの有無がばらばらです', node)
-                        flag_title = (panel.get_factor(1) != u'')
-                        if (flag_image is not None) and ((panel.get_factor(2) != u'') != flag_image):
-                            self.raise_error(u'各パネルの画像の有無がばらばらです', node)
-                        flag_image = (panel.get_factor(2) != u'')
-                        panels.append((panel.term, choices))
-                    if len(panels) == 0:
-                        self.raise_error(u'パネルが0個です', node)
-                    if len(panels) > 5:
-                        self.raise_error(u'パネルは最大で5個です', node)
-                    lines.append((node.term, panels))
-                    msg_count += 1
-
-                elif msg in MORE_CMDS:
-                    if len(options) > 0:
-                        if not re.match(u'^[#＃*＊]', options[0]):
-                            self.raise_error(u'@続きを読む の引数はジャンプ先指定である必要があります。', node)
-                    flag_first = True
-                    i = 0
-                    while i < len(node.children):
-                        child = node.children[i]
-                        i += 1
-                        button_title = None
-                        flag_dialog_mode = False
-                        if len(child.term) == 1 and re.search(u'[:：]$', child.term[0]) and i < len(node.children):
-                            # タイトル設定
-                            button_title = child.term[0][0:-1]
-                            child = node.children[i]
-                            i += 1
-                            flag_dialog_mode = True
-
-                        if flag_first:
-                            flag_first = False
-                        else:
-                            line_label = u'##MORE__{}'.format(child.line_no)
-                            if lines[-1][1][0] is None:
-                                lines[-1][1][0] = (u'▽', line_label)
-                            else:
-                                button_label, self_msg, _ = lines[-1][1][0]
-                                lines[-1][1][0] = (button_label, self_msg, line_label)
-
-                            cond = Condition(CONDITION_KIND_STRING, line_label)
-                            lines = []
-                            block.indices.append((cond, lines))
-                            msg_count = 0
-
-                        if flag_dialog_mode:
-                            # 台詞モードでは次の話者指定までメッセージを連結する
-                            msg = child.term[0]
-                            while i < len(node.children):
-                                child = node.children[i]
-                                if len(child.term) == 1 and re.search(u'[:：]$', child.term[0]):
-                                    break
-                                msg += "\n" + child.term[0]
-                                i += 1
-
-                            next_label = False
-                            if i < len(node.children):
-                                next_label = True
-                            else:
-                                if len(options) > 0:
-                                    next_label = True
-                                else:
-                                    # 最後に飛ぶ先の引数指定がない場合は、最終行は通常メッセージとして表示される
-                                    pass
-                            if not next_label:
-                                self.assert_strlen(msg, 300)
-                                lines.append(((msg,), None))
-                            else:
-                                if button_title is not None:
-                                    self.assert_strlen(msg, 60)
-                                    lines.append(((BUTTON_CMDS[0], msg, button_title), [None]))
-                                else:
-                                    self.assert_strlen(msg, 160)
-                                    lines.append(((BUTTON_CMDS[0], msg), [None]))
-                        else:
-                            for j, msg in enumerate(child.term):
-                                msg_count += 1
-                                if msg_count > 5:
-                                    self.raise_error(u'6つ以上のメッセージを同時に送ろうとしました', node)
-                                next_label = False
-                                if j == len(child.term)-1:
-                                    # 各行の最後のメッセージは「続きを読む」のボタン
-                                    if i < len(node.children):
-                                        next_label = True
-                                    else:
-                                        if len(options) > 0:
-                                            next_label = True
-                                        else:
-                                            # 最後に飛ぶ先の引数指定がない場合は、最終行は通常メッセージとして表示される
-                                            pass
-                                if not next_label:
-                                    self.assert_strlen(msg, 300)
-                                    lines.append(((msg,), None))
-                                else:
-                                    self.assert_strlen(msg, 160)
-                                    lines.append(((BUTTON_CMDS[0], msg), [None]))
-                    if len(options) > 0:
-                        line_label = options[0]
-                        if flag_first:
-                            self.raise_error(u'ラベルが指定されていますが、有効なメッセージがありません', node)
-                        else:
-                            if lines[-1][1][0] is None:
-                                lines[-1][1][0] = (u'▽', line_label)
-                            else:
-                                button_label, self_msg, _ = lines[-1][1][0]
-                                lines[-1][1][0] = (button_label, self_msg, line_label)
-
-
-                elif msg.startswith('@'):
-                    if msg in OR_CMDS:
-                        pass
-                    elif msg in RESET_CMDS:
-                        pass
-                    elif msg in SCENE_CMDS:
-                        if len(options) < 1:
-                            self.raise_error(u'コマンドの引数が足りません', node)
-                        # 引数を正規化
-                        node.normalize(1)
-                        #if row[2] not in self.scenes:
-                        #    self.raise_error(u'コマンドで指定したシーンが存在しません', *row)
-                    elif msg in SET_CMDS:
-                        if len(options) < 2:
-                            self.raise_error(u'コマンドの引数が足りません', node)
-                        # 引数を正規化
-                        node.normalize(1)
-                        node.normalize(2)
-                        if not node.get_factor(1).startswith(u'$'):
-                            self.raise_error(u'＠セットの第一引数は $*** である必要があります', node)
-                    elif msg in AI_CMDS:
-                        if len(options) < 1:
-                            self.raise_error(u'コマンドの引数が足りません', node)
-                        # 引数を正規化
-                        node.normalize(1)
-                    elif msg in AI_RESET_CMDS:
-                        if len(options) < 1:
-                            self.raise_error(u'コマンドの引数が足りません', node)
-                        # 引数を正規化
-                        node.normalize(1)
-                    elif msg in FORWARD_CMDS:
-                        if len(options) < 2:
-                            self.raise_error(u'コマンドの引数が足りません', node)
-                        # 引数を正規化
-                        node.normalize(1)
-                        node.normalize(2)
-                    elif msg in GROUP_ADD_CMDS:
-                        if len(options) < 1:
-                            self.raise_error(u'コマンドの引数が足りません', node)
-                        # 引数を正規化
-                        node.normalize(1)
-                    elif msg in GROUP_DEL_CMDS:
-                        if len(options) < 1:
-                            self.raise_error(u'コマンドの引数が足りません', node)
-                        # 引数を正規化
-                        node.normalize(1)
-                    elif msg in SMS_CMDS:
-                        if len(options) < 1:
-                            self.raise_error(u'コマンドの引数が足りません', node)
-                    elif msg in DIAL_CMDS:
-                        if len(options) < 1:
-                            self.raise_error(u'コマンドの引数が足りません', node)
-                        node.normalize(1)
-                    elif msg in DELAY_CMDS:
-                        if len(options) < 2:
-                            self.raise_error(u'コマンドの引数が足りません', node)
-                        if not options[0].isdigit():
-                            self.raise_error(u'＠遅延の第一引数は数字である必要があります', node)
-                        node.normalize(1)
-                        node.normalize(2)
-                    else:
-                        self.raise_error(u'間違ったコマンドです', node)
-                    lines.append((node.term, None))
-
+            self.parent_node = self.node
+            for self.i_node in range(len(self.parent_node.children)):
+                self.node = self.parent_node.children[self.i_node]
+                if commands.invoke_builder(self, self.node):
+                    pass
                 else:
-                    # 仕様書に記述がないが、おそらく300文字が上限
-                    self.assert_strlen(msg, 300)
-                    lines.append((node.term, None))
-                    msg_count += 1
+                    msg = self.node.get_factor(0)
+                    options = self.node.get_factors(1)
 
-                if msg_count > 5:
-                    self.raise_error(u'6つ以上のメッセージを同時に送ろうとしました', node)
+                    if msg in IMAGE_CMDS or self.parse_imageurl(msg):
+                        # 画像
+                        if msg in IMAGE_CMDS:
+                            s = options[1]
+                        else:
+                            s = msg
+                        orig_url = self.parse_imageurl(s)
+                        if orig_url is None:
+                            self.raise_error(u'@imageの第一引数は画像のURLである必要があります')
+                        image_url, _ = self.build_image_for_image_command(orig_url)
+                        self.add_command(IMAGE_CMDS[0], [image_url,], None)
+
+                    elif msg.startswith('@'):
+                        self.raise_error(u'間違ったコマンドです')
+
+                    else:
+                        # 何の装飾もないテキスト
+                        # プラグインでまず処理を試みる
+                        msg = hub.filter_all_builder_methods('filter_plain_text', self, msg)
+                        if msg:
+                            hub.invoke_all_builder_methods('build_plain_text', self, msg)
+                            # 通常のテキストメッセージ表示
+                            # 仕様書に記述がないが、おそらく300文字が上限
+                            self.assert_strlen(msg, 300)
+                            self.add_command(msg, options, None)
+                            self.msg_count += 1
+
+                hub.invoke_all_builder_methods('callback_after_each_line', self)
+
+        self.node = None # raise_error で古い node が表示されないようにする
+        self._fix_relative_label()
         #print root.dump().encode('utf-8')
 
-    def _read_ai_table(self, tab_name, table):
-        self.tab_name = tab_name
 
-        root = SyntaxTree(tab_name, 0, (u'**'+tab_name,))
-        self._parse_sub_tree(root, table, tab_name, 0, 0)
+    def _make_imagemap_filepath(self, file_digest):
+        filepath = '/{}/imagemap/{}'.format(self.bucket_name, file_digest)
+        return filepath
 
-        ai_dic = AIDic(tab_name)
-        self.ai_dic[tab_name] = ai_dic
+    def _make_image_filepath(self, file_digest, resize_to):
+        filepath = '/{}/image/{}_{}'.format(self.bucket_name, file_digest, str(resize_to))
+        return filepath
 
-        msg_list = None
-        conj_cond = None
-        priority = None
+    def _make_url_from_filepath(self, filepath):
+        return u'https://storage.googleapis.com{}'.format(filepath)
 
-        for node in root.children:
-            # 条件行 or 優先度指定
-            if conj_cond is None:
-                conj_cond = []
-                priority = DEFAULT_PRIORITY
+    def build_image_for_imagemap_command(self, image_url):
+        return self.build_image(image_url, 'imagemap')
 
-            node.compaction()
-            node.normalize_all()
-            words = node.term
+    def build_image_for_image_command(self, image_url):
+        return self.build_image(image_url, 'image')
 
-            cond = None
-            first = words[0]
-            if first.startswith(u'@'):
-                options = words[1:]
-                if first in DEFINE_AI_CMDS:
-                    if len(options) < 1:
-                        self.raise_error(u'引数が必要です。', node)
-                    name = options[0]
-                    if not name.startswith(u'%'):
-                        self.raise_error(u'グループ名は % で始める必要があります。', node)
-                    word_list = []
-                    for word in options[1:]:
-                        if word.startswith(u'%'):
-                            if word not in ai_dic.named_entities:
-                                self.raise_error(u'未定義のグループ名です。', word, node)
-                            word_list.extend(ai_dic.named_entities[word])
-                        else:
-                            word_list.append(word)
-                    if name in ai_dic.named_entities:
-                        # 既に定義されていたら追加する
-                        ai_dic.named_entities[name].extend(word_list)
-                    else:
-                        ai_dic.named_entities[name] = word_list
-                elif first in PRIORITY_AI_CMDS:
-                    if len(options) < 2:
-                        self.raise_error(u'未読優先度と既読優先度の2つの指定が必要です。', node)
-                    if options[0].isdigit() or options[0] in PRIORITY_MAP:
-                        priority1 = options[0]
-                    else:
-                        self.raise_error(u'優先度指定が間違っています。', node)
-                    if options[1].isdigit() or options[1] in PRIORITY_MAP:
-                        priority2 = options[1]
-                    else:
-                        self.raise_error(u'優先度指定が間違っています。', node)
-                    priority = (priority1, priority2)
-                elif first in ALWAYS_AI_CMDS:
-                    cond = AIAlwaysCondition()
-                elif first in PERCENT_AI_CMDS:
-                    if len(options) < 1 or not options[0].isdigit():
-                        self.raise_error(u'引数が必要です。', node)
-                    cond = AIPercentCondition(int(options[0]))
-                elif first in MEMORY_AI_CMDS:
-                    cond = AIMemoryCondition()
+    def build_image(self, image_url, kind):
+        key = u'{}|{}'.format(kind, image_url)
+        if key in self.image_file_read_cache:
+            #logging.debug(u'skip load image (read cache): {}, {}'.format(image_url, kind))
+            return self.image_file_read_cache[key]
+
+        stat = ImageFileStatDB.get_cached_image_file_stat(kind, image_url)
+        if self.option_skip_image:
+            # skip image オプションが有効の場合、過去に変換したことのある URL は
+            # 更新確認をせずにスキップする
+            if stat:
+                file_digest, size = stat
+                if kind == 'imagemap':
+                    #logging.debug(u'ImageFileStatDB has {}, so skip imagemap conversion: {}, {}'.format(image_url, file_digest, size))
+                    result = self._make_url_from_filepath(self._make_imagemap_filepath(file_digest)), size
                 else:
-                    self.raise_error(u'不正なコマンドです。', node)
+                    #logging.debug(u'ImageFileStatDB has {}, so skip image conversion: {}, {}'.format(image_url, file_digest, size))
+                    result = self._make_url_from_filepath(self._make_image_filepath(file_digest, 1024)), size
+                self.image_file_read_cache[key] = result
+                return result
+            #else:
+            #    logging.debug(u'ImageFileStatDB does not have {}: {}'.format(image_url, stat))
+
+        resp, content = None, None
+        try:
+            resp, content = http.request(image_url)
+        except ValueError as e:
+            self.raise_error(u'画像ファイルの読み込みに失敗しました。ファイルサイズなどをご確認ください。: {} {}'.format(image_url, str(e)))
+        if resp.status != 200:
+            self.raise_error(u'画像ファイルが読み込めません: {}'.format(image_url))
+        file_digest = hashlib.md5(content).hexdigest()
+
+        if not self.option_force and stat is not None and file_digest == stat[0]:
+            # ダイジェストが一致しているので保存を省略する
+            size = stat[1]
+            if kind == 'imagemap':
+                #logging.debug(u'ImageFileStatDB has {}, and file_digest are same. so skip imagemap conversion: {}, {}'.format(image_url, file_digest, size))
+                result = self._make_url_from_filepath(self._make_imagemap_filepath(file_digest)), size
             else:
-                clause = []
-                for word in words:
-                    if word.startswith(u'%'):
-                        if word not in ai_dic.named_entities:
-                            self.raise_error(u'未定義のグループ名です。', word, node)
-                    clause.append(word)
-                cond = AIClauseCondition(clause)
-            if cond:
-                conj_cond.append(cond)
+                #logging.debug(u'ImageFileStatDB has {}, and file_digest are same. so skip image conversion: {}, {}'.format(image_url, file_digest, size))
+                result = self._make_url_from_filepath(self._make_image_filepath(file_digest, 1024)), size
+            self.image_file_read_cache[key] = result
+            return result
 
-            # リアクション行を持っていたら処理する
-            if node.children:
-                msg_list = []
-                ai_dic.conditions.append((conj_cond, priority, msg_list))
-                conj_cond = None
-                priority = None
-
-                for node in node.children:
-                    if msg_list is None:
-                        # 単語指定がなく、いきなりメッセージが書かれていた
-                        self.raise_error(u'AI辞書が正しい書式ではありません。', node)
-
-                    first_line_no = node.line_no
-                    msgs = []
-                    args = None
-
-                    for msg in node.term:
-                        # 仕様書に記述がないが、おそらく300文字が上限
-                        self.assert_strlen(msg, 300)
-                        msgs.append(msg)
-
-                    if len(msgs) > 5:
-                        self.raise_error(u'6つ以上のメッセージを同時に送ろうとしました', node)
-
-                    if msgs[0] in SEQUENCE_AI_CMDS:
-                        args = []
-                        for sub_node in node.children:
-                            args.append(sub_node.term)
-                        if not args:
-                            self.raise_error(u'@seq は1つ以上のメッセージを内包している必要があります。', node)
-
-                    msg_list.append((u'L{}'.format(first_line_no), msgs, args))
-
-    def get_scene_or_default(self, scene_title):
-        if scene_title in self.scenes:
-            return self.scenes[scene_title]
+        if kind == 'imagemap':
+            url, size = self.build_image_for_imagemap_command_with_rawdata(content, file_digest=file_digest, logging_context=unicode(image_url))
         else:
-            # 指定されたシーンが無かった場合、同じタブのデフォルトシーンがあれば採用する
-            scene = self.scenes.get(scene_title.split(u'/')[0] + u'/', None)
-            if not scene:
-                # タブ名すら見つからない場合はデフォルトシーンが用いられる
-                scene = self.scenes[u'*default']
-            return scene
+            url, size = self.build_image_for_image_command_with_rawdata(content, file_digest=file_digest, logging_context=unicode(image_url))
+
+        ImageFileStatDB.put_cached_image_file_stat(kind, image_url, file_digest, size)
+        result = url, size
+        self.image_file_read_cache[key] = result
+        return result
+
+    def build_image_for_imagemap_command_with_rawdata(self, orig_data, file_digest, logging_context=u''):
+        filepath = self._make_imagemap_filepath(file_digest)
+        size = None
+        for resize_to in [240, 300, 460, 700, 1040]:
+            result, size = self._resize_and_save_image_data(orig_data, resize_to, '{}/{}'.format(filepath, str(resize_to)), force_fit_width=True)
+            if result is None:
+                self.raise_error(u'画像ファイルが変換できませんでした: {}'.format(logging_context))
+        # size は最後に変換した 1040 のものを返す
+        url = self._make_url_from_filepath(filepath)
+        return url, size
+
+    def build_image_for_image_command_with_rawdata(self, orig_data, file_digest, logging_context=u''):
+        result = None
+        size = None
+        for resize_to in [240, 1024]:
+            filepath = self._make_image_filepath(file_digest, resize_to)
+            result, size = self._resize_and_save_image_data(orig_data, resize_to, filepath, never_stretch=True)
+            if result is None:
+                self.raise_error(u'画像ファイルが変換できませんでした: {}'.format(logging_context))
+        # result, size は最後に変換した 1024 のものを返す
+        return result, size
+
+    def _resize_and_save_image_data(self, orig_data, resize_to, filepath, force_fit_width=False, never_stretch=False):
+        if filepath in self.image_file_write_cache:
+            logging.debug(u'skip save image (write cache): {}, {}'.format(filepath, resize_to))
+            return self.image_file_write_cache[filepath]
+
+        image_data, image_format, size = convert_image.resize_image(orig_data, resize_to, force_fit_width=force_fit_width, never_stretch=never_stretch)
+        if image_data is None:
+            return None, None
+
+        try:
+            logging.info(u'save image file: {}'.format(filepath))
+            image_file = cloudstorage.open(filepath, 'w', content_type=image_format, options={'x-goog-acl': 'public-read'})
+            image_file.write(image_data)
+            image_file.close()
+        except (IOError, cloudstorage.Error) as e:
+            logging.error(u'ファイルの書き込みに失敗しました: {}'.format(unicode(e)))
+            return None, None
+        result = (self._make_url_from_filepath(filepath), size)
+        self.image_file_write_cache[filepath] = result
+        return result
 
     @staticmethod
     def get_indent_level(row):
@@ -800,6 +673,8 @@ class Scenario(object):
         error_msg = msg
         for arg in args:
             error_msg += u'\n' + unicode(arg)
+        if self.node:
+            error_msg += u'\n' + unicode(self.node)
         raise ScenarioSyntaxError(error_msg)
 
     def assert_strlen(self, msg, maxlen, error_msg = None):
@@ -826,12 +701,14 @@ class Scenario(object):
             return True
         return False
 
-    def parse_url(self, cell):
-        m = re.match(r'^(https?://|tel:)', cell)
-        if m:
-            return m.group(0)
-        else:
-            return None
+    def _build_and_replace_imageurl(self, options, index):
+        if len(options) > index and options[index] != u'':
+            orig_url = self.parse_imageurl(options[index])
+            if orig_url is not None:
+                image_url, _ = self.build_image_for_image_command(orig_url)
+                options[index] = image_url
+            return True
+        return False
 
     def parse_imageurl(self, cell):
         m = re.match(r'^=IMAGE\("([^"]+)"\)', cell)
@@ -840,91 +717,24 @@ class Scenario(object):
         else:
             return None
 
-    def lint_command(self, msg, options):
-        if msg in CONFIRM_CMDS:
-            self.assert_strlen_from_array(options, 0, 240)
-        elif msg in BUTTON_CMDS:
-            self.assert_strlen_from_array(options, 1, 40)
-            self.assert_imageurl_from_array(options, 2)
-            if (len(options) > 1 and options[1] != u'') or (len(options) > 2 and options[2] != u''):
-                self.assert_strlen_from_array(options, 0, 60, u'タイトルか画像を指定した場合の文字数制限（{}文字）')
-            else:
-                self.assert_strlen_from_array(options, 0, 160, u'タイトルも画像も指定しない場合の文字数制限（{}文字）')
-        elif msg in PANEL_CMDS:
-            pass
-        elif msg in IMAGEMAP_CMDS:
-            self.assert_imageurl_from_array(options, 0)
-            try:
-                if len(options) > 1 and (float(options[1]) < 0.1 or float(options[1]) > 2.0):
-                    self.raise_error(u'アスペクト比は 0.1 から 2.0 までの小数である必要があります', msg, *options)
-            except ValueError:
-                self.raise_error(u'アスペクト比に数値以外のものが指定されています', msg, *options)
-        return True
-
-    def lint_choice(self, msg, choice):
-        action_label = choice[0]
-        action_value = u''
-        action_data = u''
-        if len(choice) <= 1 or not choice[1]:
-            action_type = 'message'
-            action_value = action_label
-        else:
-            if self.parse_url(choice[1]):
-                action_type = 'url'
-                action_value = choice[1]
-            elif re.match(u'^[#＃*＊]', choice[1]):
-                action_type = 'postback'
-                action_data = choice[1]
-            else:
-                action_type = 'message'
-                action_value = choice[1]
-        if len(choice) > 2 and choice[2]:
-            if re.match(u'^[#＃*＊]', choice[2]):
-                if action_type == 'url':
-                    self.raise_error(u'アクションラベル指定時は URL を開かせることはできません', *choice)
-                action_type = 'postback'
-                action_data = choice[2]
-            else:
-                self.raise_error(u'アクションラベルは # か * で始まらないといけません', *choice)
-
-        if msg in IMAGEMAP_CMDS:
-            if action_type == 'postback':
-                self.raise_error(u'イメージマップではアクションラベルは指定できません', *choice)
-            try:
-                x, y, w, h = [int(x) for x in action_label.split(u',')]
-                if x < 0 or 1040 <= x or y < 0 or 1040 <= y or w <= 0 or 1040 < w or h <= 0 or 1040 < h:
-                    raise ValueError
-            except (ValueError, IndexError):
-                self.raise_error(u'イメージマップアクションの指定が不正です', action_label)
-        else:
-            self.assert_strlen(action_label, 20)
-        if action_type in ('message', 'postback'):
-            self.assert_strlen(action_value, 300)
-        self.assert_strlen(action_data, 300)
-        return True
-
-    def lint_panel(self, panel):
-        self.assert_strlen_from_array(panel, 1, 40)
-        self.assert_imageurl_from_array(panel, 2)
-        if (len(panel) > 1 and panel[1] != u'') or (len(panel) > 2 and panel[2] != u''):
-            self.assert_strlen_from_array(panel, 0, 60, u'タイトルか画像を指定した場合の文字数制限（{}文字）')
-        else:
-            self.assert_strlen_from_array(panel, 0, 120, u'タイトルも画像も指定しない場合の文字数制限（{}文字）')
-        return True
-
-    def __str__(self):
-        s = ''
-        for _, table in self.tables:
-            for row, choices in table.lines:
-                s += (row.join("\t") + "\n")
-        return s
 
 
 class Director(object):
-    def __init__(self, scenario, status = None):
+    def __init__(self, scenario, context):
         self.scenario = scenario
-        self.status = status or {}
         self.base_scene = None
+        self.context = context
+
+    def _get_scene_or_default(self, scene_title):
+        if scene_title in self.scenario.scenes:
+            return self.scenario.scenes[scene_title]
+        else:
+            # 指定されたシーンが無かった場合、同じタブのデフォルトシーンがあれば採用する
+            scene = self.scenario.scenes.get(scene_title.split(u'/')[0] + u'/', None)
+            if not scene:
+                # タブ名すら見つからない場合はデフォルトシーンが用いられる
+                scene = self.scenario.scenes[u'*default']
+            return scene
 
     def search_index(self, scene, action):
         if action.startswith(u'*'):
@@ -938,12 +748,12 @@ class Director(object):
                 scene_fullpath = self.jump_back_scene()
                 if scene_fullpath is None:
                     raise ValueError(u'cannot jump back')
-                self.base_scene = self.scenario.get_scene_or_default(scene_fullpath)
+                self.base_scene = self._get_scene_or_default(scene_fullpath)
             else:
                 if u'/' not in scene_fullpath:
                     # フルパスにするために現在のシーンの tab_name を補完する
                     scene_fullpath = self.base_scene.tab_name + u'/' + scene_fullpath
-                self.base_scene = self.scenario.get_scene_or_default(scene_fullpath)
+                self.base_scene = self._get_scene_or_default(scene_fullpath)
                 self.enter_new_scene(scene_fullpath)
 
             # このまま scene と action を読み替えて検索開始
@@ -994,16 +804,24 @@ class Director(object):
                     else:
                         return result[0], result[1], result[2], result[3]
             else:
-                match = cond.check(action, self.status)
+                match = cond.check(action, self.context.status)
                 if match:
                     return scene, block, n_lines, match
         return None, None, None, None
 
-    def format_cells(self, arr, match):
+    def format_value(self, value, match):
         try:
-            result = [cell.format(*match, **self.status) for cell in arr]
-        except KeyError, e:
-            logging.error('KeyError: ' + e.message)
+            result = value.format(*match, **self.context.status)
+        except (KeyError, IndexError), e:
+            logging.error('format error: ' + e.message)
+            result = value
+        return result
+
+    def format_values(self, arr, match):
+        try:
+            result = [cell.format(*match, **self.context.status) for cell in arr]
+        except (KeyError, IndexError), e:
+            logging.error('format error: ' + e.message)
             result = arr
         return result
 
@@ -1011,219 +829,103 @@ class Director(object):
         if scene_title not in self.scenario.scenes:
             logging.info(u'指定されたシーン名が存在していません:' + scene_title)
 
-        if self.status.scene is not None:
-            scene_history = self.status.scene_history
-            scene_history.append(self.status.scene)
-            self.status.scene_history = scene_history[-MAX_HISTORY:]
+        self.context.status.push_scene_history(self.context.status.scene)
 
-        self.status.scene = scene_title
-        self.status.visit_id = \
-            u''.join([random.choice(string.ascii_letters) for _ in range(8)])
+        self.context.status.scene = scene_title
+        self.context.status.create_visit_id()
         # TODO: visit_id もスタックに積んでおいた方がいいのか考える
-        #print u','.join(self.status.scene_history)
+        #print u','.join(self.context.status.scene_history)
 
     def jump_back_scene(self):
-        scene_history = self.status.scene_history
-        if not scene_history:
+        scene_title = self.context.status.pop_scene_history()
+        if not scene_title:
             return None
-        scene_title = scene_history.pop()
-        self.status.scene = scene_title
-        self.status.visit_id = \
-            u''.join([random.choice(string.ascii_letters) for _ in range(8)])
-        self.status.scene_history = scene_history[-MAX_HISTORY:]
-        #print u','.join(self.status.scene_history)
+        self.context.status.scene = scene_title
+        self.context.status.create_visit_id()
+        #print u','.join(self.context.status.scene_history)
         return scene_title
 
-    def _get_reaction_sub(self, action, scene, block, n_lines, match):
+    def _plan_reaction_sub(self, scene, block, n_lines, match):
         if n_lines is None:
-            return None, None
+            return None
 
         cond, lines = block.indices[n_lines]
-        reaction = []
-        for row, args in lines:
-            if len(reaction) >= 5:
+        for command in lines:
+            if len(self.context.reactions) > 100:
+                logging.error(u"reaction 処理内で無限ループを検出しました")
                 break
-            msg = row[0]
-            options = row[1:]
+            msg = self.format_value(command.msg, match)
+            options = command.options
+            if options is None:
+                options = ()
+            options = self.format_values(options, match)
+            row = [msg]
+            if options:
+                row.extend(options)
+            children = command.children
             if msg.startswith(u'@'):
-                if msg in ALL_TEMPLATE_CMDS:
-                    reaction.append((self.format_cells(row, match), args))
-                elif msg in OR_CMDS:
+                flag_handled = commands.invoke_runtime_run_command(self.context, msg, options, children)
+                if flag_handled:
+                    continue
+
+                if msg in OR_CMDS:
                     if len(block.indices) > n_lines+1:
-                        return reaction, (scene, block, n_lines+1, match)
+                        return (scene, block, n_lines+1, match)
                     else:
-                        return reaction, None
-                elif msg in SCENE_CMDS:
-                    scene_fullpath = options[0]
-                    if u'/' not in scene_fullpath:
-                        scene_fullpath = scene.tab_name + u'/' + scene_fullpath
-                    self.enter_new_scene(scene_fullpath)
-                elif msg in RESET_CMDS:
-                    self.status.reset()
-                elif msg in SET_CMDS:
-                    options = self.format_cells(options, match)
-                    self.status[normalize('NFKC', options[0])] = normalize('NFKC', options[1]) # format_cells で代入されたものを半角化する必要がある
-                elif msg in AI_CMDS:
-                    res = self.respond_with_ai(options, action, match)
-                    for res_msg in res:
-                        if res_msg.startswith(u'*') or res_msg.startswith(u'#'):
-                            # AIの返答にジャンプが混ざっていたらジャンプ
-                            return reaction, self.search_index(self.base_scene, res_msg)
-                        else:
-                            reaction.append((self.format_cells([res_msg], match), args))
-                elif msg in FORWARD_CMDS:
-                    reaction.append((self.format_cells(row, match), args))
-                elif msg in GROUP_ADD_CMDS:
-                    reaction.append((self.format_cells(row, match), args))
-                elif msg in GROUP_DEL_CMDS:
-                    reaction.append((self.format_cells(row, match), args))
-                elif msg in SMS_CMDS:
-                    reaction.append((self.format_cells(row, match), args))
-                elif msg in DIAL_CMDS:
-                    reaction.append((self.format_cells(row, match), args))
-                elif msg in DELAY_CMDS:
-                    reaction.append((self.format_cells(row, match), args))
-                elif msg in AI_RESET_CMDS:
-                    self.status[u'ai.read.' + options[0]] = {}
-                    self.status[u'ai.seq.' + options[0]] = {}
-                    self.status[u'ai.prev'] = ['', 0, '']
-                else:
-                    raise ValueError(u'unexpected cmd:' + msg)
+                        return None
+                elif msg in IF_CMDS:
+                    guard = Guard.from_str(options[0])
+                    if guard.eval(self.context.status):
+                        next_label = options[1]
+                    else:
+                        next_label = options[2]
+                    return self.search_index(self.base_scene, next_label)
+                # TODO: いずれは @seq もプラグインに
+                elif msg in SEQ_CMDS:
+                    node_seq = self.context.status.get(u'node.seq.' + scene.tab_name, {})
+                    command_id = command.command_id
+                    index = 0
+                    if command_id in node_seq:
+                        index = int(node_seq[command_id])
+                    if index >= len(options):
+                        index = len(options) - 1
+                    node_seq[command_id] = unicode(index + 1)
+                    self.context.status[u'node.seq.' + scene.tab_name] = node_seq
+                    return self.search_index(self.base_scene, options[index])
             elif msg.startswith(u'*') or msg.startswith(u'#'):
                 # ジャンプ
-                return reaction, self.search_index(self.base_scene, msg)
-            else:
-                reaction.append((self.format_cells(row, match), args))
-        return reaction, None
+                return self.search_index(self.base_scene, msg)
 
-    def get_reaction(self, action):
+            self.context.reactions.append((row, children))
+
+        return None
+
+    def plan_reactions(self):
         # シーン決定
-        scene_title = self.status.scene
+        scene_title = self.context.status.scene
         if scene_title is None:
             # 初回アクセス
             scene_title = self.scenario.startup_scene_title
             self.enter_new_scene(scene_title)
 
-        self.base_scene = self.scenario.get_scene_or_default(scene_title)
+        self.base_scene = self._get_scene_or_default(scene_title)
+
+        # action の割り込み読み替え
+        action = hub.filter_all_runtime_methods('modify_incoming_action', self.context, self.context.action)
+        self.context.current_action = action
+
+        if action is None:
+            # 読み替えの結果 None になった
+            return
 
         # 実行行の取得
         scene, block, n_lines, match = self.search_index(self.base_scene, action)
 
-        reactions = None
         while True:
-            cur_reactions, new_context = self._get_reaction_sub(action, scene, block, n_lines, match)
-            if cur_reactions:
-                if reactions is None:
-                    reactions = cur_reactions
-                else:
-                    reactions.extend(cur_reactions)
+            new_context = self._plan_reaction_sub(scene, block, n_lines, match)
             if new_context is None:
                 # reaction に結果が入っている場合と、何もすることが見つけられなかった場合がある
                 break
             scene, block, n_lines, match = new_context
 
-        return reactions
-
-    def respond_with_ai(self, dic_name_list, action, match):
-        ai_prev = self.status.get(u"ai.prev", ['', 0, ''])
-        ai_context = self.status.get(u"ai.context", {})
-
-        response_list = []
-        for dic_name in dic_name_list:
-            ai_dic = self.scenario.ai_dic.get(dic_name, None)
-            if ai_dic is None:
-                raise ValueError(u'ai dictionary is not exists:' + dic_name)
-
-            # %%キーワード の言葉が含まれていたら記憶する
-            memory = ai_context.get(u'memory', [])
-            memory.append(u'') # 1発言ごとに過去を忘れるために空白を追加
-            for word in ai_dic.named_entities.get(u'%%キーワード', []):
-                if word in action:
-                    # 記憶の末尾に追加
-                    if word in memory:
-                        memory.remove(word)
-                    memory.append(word)
-            ai_context[u'memory'] = memory[-MAX_MEMORY:]
-
-            ai_read = self.status.get(u"ai.read." + dic_name, {})
-
-            for conj_cond, priority, msg_list in ai_dic.conditions:
-                flag = True
-                matched_word = {}
-                for ai_cond in conj_cond:
-                    result, m = ai_cond.check(action, ai_dic.named_entities, ai_context, self.status)
-                    if result:
-                        if m is not None:
-                            matched_word[u'w{}'.format(len(matched_word)+1)] = m
-                    else:
-                        flag = False
-                        break
-                if flag:
-                    for line_no, msgs, args in msg_list:
-                        msgs = [msg.format(*match, **matched_word) for msg in msgs]
-                        if args:
-                            args = [[msg.format(*match, **matched_word) for msg in arg] for arg in args]
-                        prio = priority[0]
-                        if line_no in ai_read and ai_read[line_no] == msgs[0][0:5]:
-                            # 既読の場合
-                            # msgs[0][0:5]との比較は、シナリオ書換により行番号がずれたときの保険
-                            prio = priority[1]
-                        if ai_prev[0] == dic_name and ai_prev[1] == line_no and ai_prev[2] == msgs[0][0:5]:
-                            # 直前のメッセージとの重複であった
-                            prio = DUPLICATE_PRIORITY
-                        if prio.isdigit():
-                            prio = int(prio)
-                        elif prio in PRIORITY_MAP:
-                            prio = PRIORITY_MAP[prio]
-                        weight = 100
-                        response_list.append((prio*1000+len(matched_word), weight, dic_name, line_no, msgs, args, matched_word))
-
-        if response_list:
-            # 優先度が最大のものだけでフィルタする
-            priority_max = max(response_list, key=lambda entry: entry[0])[0]
-            filtered_response_list = [entry for entry in response_list if entry[0] == priority_max]
-
-            # フィルタ結果の中から、weight を考慮したランダム抽出を行う
-            weight_sum = sum([entry[1] for entry in filtered_response_list])
-            point = random.randint(0, weight_sum-1)
-            for prio, weight, dic_name, line_no, msgs, args, matched_word in filtered_response_list:
-                point -= weight
-                if point < 0:
-                    # このメッセージが抽選で選ばれた
-                    if msgs[0] in SEQUENCE_AI_CMDS:
-                        # 連続コマンド
-                        ai_seq = self.status.get(u'ai.seq.' + dic_name, {})
-                        index = 0
-                        if line_no in ai_seq:
-                            index = ai_seq[line_no]
-                        if index >= len(args)-1:
-                            # シーケンスの最後まで到達したら既読にする
-                            ai_seq[line_no] = 0
-                            ai_read = self.status.get(u"ai.read." + dic_name, {})
-                            ai_read[line_no] = msgs[0][0:5]
-                            self.status[u"ai.read." + dic_name] = ai_read
-                        else:
-                            ai_seq[line_no] = index+1
-                        self.status[u'ai.seq.' + dic_name] = ai_seq
-                        self.status[u'ai.prev'] = ['', 0, '']
-                        final_response = args[index]
-                    else:
-                        # 既読フラグ
-                        ai_read = self.status.get(u"ai.read." + dic_name, {})
-                        ai_read[line_no] = msgs[0][0:5]
-                        self.status[u"ai.read." + dic_name] = ai_read
-                        # 直前履歴保存
-                        self.status[u'ai.prev'] = [dic_name, line_no, msgs[0][0:5]]
-                        final_response = msgs
-
-                    # 採用された単語が記憶の中に含まれていたら記憶を新たにする
-                    memory = ai_context.get(u'memory', [])
-                    for word in matched_word:
-                        # 今回出て来た言葉は記憶の末尾に追加
-                        if word in memory:
-                            memory.remove(word)
-                            memory.append(word)
-                    ai_context[u'memory'] = memory[-MAX_MEMORY:]
-                    self.status[u'ai.context'] = ai_context
-                    return final_response
-        return None
+        return
