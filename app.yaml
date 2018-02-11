@@ -22,7 +22,6 @@ handlers:
 includes:
 - plugin/line/app.yaml
 - plugin/twilio/app.yaml
-- plugin/render_text/app.yaml
 
 libraries:
 - name: ssl

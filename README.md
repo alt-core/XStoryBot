@@ -79,22 +79,30 @@ plugin によって拡張可能な設計になっています。
   - Twilio の電話番号を取得し、必要な情報をメモ
   - Twilio の webhook に 〜/twilio/callback/＜botname＞ を設定
 
+続いて、設定ファイルを編集します。
 
     > vim settings.py
 
-前準備で準備した情報を記入。
-sheet_id は Google Sheets の編集時に URL に含まれるランダム英数字。
+前準備で準備した情報を記入してください。
+sheet_id は Google Sheets の編集時に URL に含まれるランダム英数字です。
+api_token は、WebAPI などでの認証のために使われる情報です。必ず独自の値を設定してください。
+
+    > vim app.yaml
+
+plugin の下の app.yaml を include していますので、使わない plugin をコメントアウトしてください。
+
+設定が終われば、デプロイします。
 
     > gcloud app deploy
 
-通常の GAE のデプロイ手順を参照。
+詳細は、通常の GAE のデプロイ手順を参照してください。
 
 ## シナリオの作成
 
 Google Sheets 上でシナリオを作成します。
 詳細は、シナリオフォーマットのドキュメント（未作成）を参照してください。
 
-## ダッシュボード
+## ダッシュボードからシナリオ読み込み
 
 デプロイ先のホストの 〜/dashboard/ にブラウザでアクセスすると管理画面が開きます。
 
