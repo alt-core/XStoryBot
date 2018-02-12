@@ -73,7 +73,7 @@ BOT_SETTINGS = {
 }
 
 import settings
-import xmbot
+import main
 import common_commands
 import auth
 import webapi
@@ -91,10 +91,10 @@ class TwilioPluginTestCase(unittest.TestCase):
         self.app = TestApp(webapi.app)
         common_commands.send_request = dummy_send_request_factory(self, self.app)
         self.test_bot_loader = DummyScenarioLoader()
-        self.test_bot = xmbot.get_bot('testbot')
+        self.test_bot = main.get_bot('testbot')
         self.test_bot.scenario_loader = self.test_bot_loader
         self.test_bot2_loader = DummyScenarioLoader()
-        self.test_bot2 = xmbot.get_bot('testbot2')
+        self.test_bot2 = main.get_bot('testbot2')
         self.test_bot2.scenario_loader = self.test_bot2_loader
         self.forwarded_messages = []
         import bottle

@@ -83,7 +83,7 @@ BOT_SETTINGS = {
 }
 
 import settings
-import xmbot
+import main
 
 import auth
 import common_commands
@@ -124,12 +124,12 @@ class LinePluginTestCaseBase(unittest.TestCase):
         common_commands.send_request = dummy_send_request_factory(self, self.app)
         self.bot = DummyLineBotApi()
         self.test_bot_loader = DummyScenarioLoader()
-        self.test_bot = xmbot.get_bot('testbot')
+        self.test_bot = main.get_bot('testbot')
         self.test_bot.scenario_loader = self.test_bot_loader
         self.test_bot.get_interface('line').line_bot_api = self.bot
         self.bot2 = DummyLineBotApi()
         self.test_bot2_loader = DummyScenarioLoader()
-        self.test_bot2 = xmbot.get_bot('testbot2')
+        self.test_bot2 = main.get_bot('testbot2')
         self.test_bot2.scenario_loader = self.test_bot2_loader
         self.test_bot2.get_interface('line').line_bot_api = self.bot2
         self.forwarded_messages = []

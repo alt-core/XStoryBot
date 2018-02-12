@@ -4,7 +4,7 @@ import requests
 
 from google.appengine.api import taskqueue
 
-import xmbot
+import main
 import auth
 import hub
 import commands
@@ -86,7 +86,7 @@ class CommonCommands_Runtime(object):
         elif msg in FORWARD_CMDS:
             bot_name = options[0]
             action = options[1]
-            to_bot = xmbot.get_bot(bot_name)
+            to_bot = main.get_bot(bot_name)
             if to_bot is None or to_bot.get_interface(context.service_name) is None:
                 logging.error("invalid bot name: @forward :"+ bot_name)
                 context.add_reaction(u"<<@forwardを解釈できませんでした>>")
@@ -100,7 +100,7 @@ class CommonCommands_Runtime(object):
             else:
                 bot_name = context.bot_name
                 action = options[1]
-            to_bot = xmbot.get_bot(bot_name)
+            to_bot = main.get_bot(bot_name)
             if to_bot is None or to_bot.get_interface(context.service_name) is None:
                 logging.error("invalid bot name: @delay: " + bot_name)
                 context.add_reaction(u"<<@delayを解釈できませんでした>>")

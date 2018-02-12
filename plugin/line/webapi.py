@@ -6,7 +6,7 @@ from linebot.exceptions import InvalidSignatureError
 
 import auth
 import utility
-import xmbot
+import main
 import users
 
 
@@ -21,7 +21,7 @@ def abort_json(code, msg):
 def callback(bot_name):
     response.content_type = 'text/plain; charset=UTF-8'
 
-    bot = xmbot.get_bot(bot_name)
+    bot = main.get_bot(bot_name)
     if not bot:
         abort_json(404, u'not found')
 

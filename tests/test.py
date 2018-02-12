@@ -62,7 +62,7 @@ BOT_SETTINGS = {
 }
 
 import settings
-import xmbot
+import main
 import auth
 import common_commands
 import webapi
@@ -70,12 +70,12 @@ from scenario import Scenario, ScenarioSyntaxError, ScenarioBuilder
 
 
 def reinitialize_bot(bot_settings):
-    # settings を上書きして xmbot.initialize() で再設定
+    # settings を上書きして main.initialize() で再設定
     settings.OPTIONS = bot_settings['OPTIONS']
     settings.PLUGINS = bot_settings['PLUGINS']
     settings.BOTS = bot_settings['BOTS']
 
-    xmbot.initialize()
+    main.initialize()
 
 
 class DummyScenarioLoader(object):
@@ -109,7 +109,7 @@ def dummy_send_request_factory(test, app):
     return dummy_send_request
 
 
-class XMBotTestCaseBase(unittest.TestCase):
+class BotTestCaseBase(unittest.TestCase):
 
     def setUp(self, bot_settings=BOT_SETTINGS):
         reinitialize_bot(bot_settings)
@@ -117,10 +117,10 @@ class XMBotTestCaseBase(unittest.TestCase):
         self.orig_send_request = common_commands.send_request
         common_commands.send_request = dummy_send_request_factory(self, self.app)
         self.test_bot_loader = DummyScenarioLoader()
-        self.test_bot = xmbot.get_bot('testbot')
+        self.test_bot = main.get_bot('testbot')
         self.test_bot.scenario_loader = self.test_bot_loader
         self.test_bot2_loader = DummyScenarioLoader()
-        self.test_bot2 = xmbot.get_bot('testbot2')
+        self.test_bot2 = main.get_bot('testbot2')
         self.test_bot2.scenario_loader = self.test_bot2_loader
         self.messages = []
         self.forwarded_messages = []
@@ -154,7 +154,7 @@ class XMBotTestCaseBase(unittest.TestCase):
         return self.send_action_to('testbot2', 'plaintext:0001', settings.OPTIONS['reset_keyword'])
 
 
-class MainTestCase(XMBotTestCaseBase):
+class MainTestCase(BotTestCaseBase):
     def test_scenario(self):
         self.test_bot.scenario = ScenarioBuilder.build_from_table([
             [u'test', u'てすと'],

@@ -3,7 +3,7 @@ import logging
 
 from bottle import request, response, Bottle, abort
 
-import xmbot
+import main
 import users
 import auth
 
@@ -16,7 +16,7 @@ def twilio_callback_sub(bot_name, from_tel, to_tel, is_voicecall, message):
     body = request.body.read().decode('utf-8')
     logging.info("Twilio callback: " + body)
 
-    bot = xmbot.get_bot(bot_name)
+    bot = main.get_bot(bot_name)
     if not bot:
         abort(404)
 

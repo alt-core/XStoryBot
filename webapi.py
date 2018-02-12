@@ -5,7 +5,7 @@ from google.appengine.api import taskqueue, memcache
 
 from bottle import request, response, Bottle, abort
 
-import xmbot
+import main
 import utility
 import users
 import auth
@@ -20,7 +20,7 @@ def abort_json(code, msg):
 
 @app.post('/api/build/<bot_name>')
 def api_build(bot_name):
-    bot = xmbot.get_bot(bot_name)
+    bot = main.get_bot(bot_name)
     if not bot:
         abort_json(404, u'not found')
 
@@ -44,7 +44,7 @@ def api_build(bot_name):
 @app.get('/api/build_async/<bot_name>')
 @app.post('/api/build_async/<bot_name>')
 def api_build_async(bot_name):
-    bot = xmbot.get_bot(bot_name)
+    bot = main.get_bot(bot_name)
     if not bot:
         abort_json(404, u'not found')
 
@@ -68,7 +68,7 @@ def api_build_async(bot_name):
 
 @app.get('/api/last_build_result/<bot_name>')
 def api_get_last_build_result(bot_name):
-    bot = xmbot.get_bot(bot_name)
+    bot = main.get_bot(bot_name)
     if not bot:
         abort_json(404, u'not found')
 
@@ -102,7 +102,7 @@ def _do_action_iter(result, bot, user, action, level=0):
 def do_action(bot_name):
     response.content_type = 'text/plain; charset=UTF-8'
 
-    bot = xmbot.get_bot(bot_name)
+    bot = main.get_bot(bot_name)
     if not bot:
         abort_json(404, u'not found')
 
