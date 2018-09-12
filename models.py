@@ -17,7 +17,7 @@ class GroupMembers(ndb.Model):
 class PlayerStatus(ndb.Model):
     scene = ndb.StringProperty()
     scene_history = ndb.StringProperty(repeated=True)
-    visit_id = ndb.StringProperty()
+    action_token = ndb.StringProperty()
     value = ndb.TextProperty()
 
 
@@ -34,8 +34,8 @@ class PlayerStatusDB(object):
             self.db = {}
         self.is_dirty = False
         self.is_values_dirty = False
-        if self.visit_id is None:
-            self.create_visit_id()
+        if self.action_token is None:
+            self.renew_action_token()
 
     def __getitem__(self, item):
         value = self.db[item]
@@ -75,7 +75,7 @@ class PlayerStatusDB(object):
         self.entry.scene_history = []
         self.is_dirty = True
         self.is_values_dirty = True
-        self.create_visit_id()
+        self.renew_action_token()
 
     @property
     def scene(self):
@@ -107,16 +107,16 @@ class PlayerStatusDB(object):
         return None
 
     @property
-    def visit_id(self):
-        return self.entry.visit_id
+    def action_token(self):
+        return self.entry.action_token
 
-    @visit_id.setter
-    def visit_id(self, value):
-        self.entry.visit_id = value
+    @action_token.setter
+    def action_token(self, value):
+        self.entry.action_token = value
         self.is_dirty = True
         
-    def create_visit_id(self):
-        self.visit_id = \
+    def renew_action_token(self):
+        self.action_token = \
             u''.join([random.choice(string.ascii_letters) for _ in range(8)])
 
     def __str__(self):

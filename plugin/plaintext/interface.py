@@ -7,8 +7,8 @@ import context
 
 
 class PlainTextPlugin_ActionContext(context.ActionContext):
-    def __init__(self, bot_name, interface, user, action):
-        context.ActionContext.__init__(self, bot_name, "plaintext", interface, user, action)
+    def __init__(self, bot_name, interface, user, action, attrs):
+        context.ActionContext.__init__(self, bot_name, "plaintext", interface, user, action, attrs)
 
 
 class PlainTextPlugin_Interface(object):
@@ -19,8 +19,8 @@ class PlainTextPlugin_Interface(object):
     def get_service_list(self):
         return {"plaintext": self}
 
-    def create_context(self, user, action):
-        return PlainTextPlugin_ActionContext(self.bot_name, self, user, action)
+    def create_context(self, user, action, attrs):
+        return PlainTextPlugin_ActionContext(self.bot_name, self, user, action, attrs)
 
     def respond_reaction(self, context, reactions):
         context.response = []

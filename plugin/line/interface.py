@@ -1,9 +1,10 @@
 # coding: utf-8
 
 import re
+import logging
 
 from linebot import LineBotApi, WebhookParser
-from linebot.models import MessageEvent, PostbackEvent, FollowEvent, UnfollowEvent, JoinEvent, LeaveEvent, TextMessage, LocationMessage, StickerMessage, TextSendMessage, ImageSendMessage, TemplateSendMessage, \
+from linebot.models import MessageEvent, PostbackEvent, BeaconEvent, FollowEvent, UnfollowEvent, JoinEvent, LeaveEvent, TextMessage, LocationMessage, StickerMessage, TextSendMessage, ImageSendMessage, TemplateSendMessage, \
     CarouselColumn, ImagemapSendMessage, ImagemapArea, MessageImagemapAction
 
 # SSL 警告を防ぐため / 今回のケースでは問題ないが、行儀は良くない
@@ -21,12 +22,12 @@ import utility
 
 
 class LinePlugin_ActionContext(ActionContext):
-    def __init__(self, bot_name, interface, user, action, event):
+    def __init__(self, bot_name, interface, user, action, attrs, event):
         self.event = event
         source_type, source_id = user.user_id.split(',')
         self.source_type = source_type
         self.source_id = source_id
-        ActionContext.__init__(self, bot_name, "line", interface, user, action)
+        ActionContext.__init__(self, bot_name, "line", interface, user, action, attrs)
 
 
 class LinePlugin_Interface(object):
@@ -36,52 +37,69 @@ class LinePlugin_Interface(object):
         self.line_access_token = params['line_access_token']
         self.line_channel_secret = params['line_channel_secret']
         self.line_bot_api = LineBotApi(self.line_access_token, timeout=30)
+        self.allow_special_action_text_for_debug = params.get('allow_special_action_text_for_debug', False)
         self.parser = WebhookParser(self.line_channel_secret)
 
     def get_service_list(self):
         return {'line': self}
 
-    def create_context(self, user, action):
-        return LinePlugin_ActionContext(self.bot_name, self, user, action, event=None)
+    def create_context(self, user, action, attrs):
+        return LinePlugin_ActionContext(self.bot_name, self, user, action, attrs, event=None)
 
     def create_context_from_line_event(self, event):
-        user = User("line", event.source.type + ',' + event.source.sender_id)
-        action = self._construct_action(event)
-        return LinePlugin_ActionContext(self.bot_name, self, user, action, event)
+        sender_id = None
+        if event.source.type == 'user':
+            sender_id = event.source.user_id
+        elif event.source.type == 'group':
+            sender_id = event.source.group_id
+        elif event.source.type == 'room':
+            sender_id = event.source.room_id
+        else:  
+            raise NotImplementedError
+        user = User("line", event.source.type + ',' + sender_id)
+        action, attrs = self._construct_action(event)
+        return LinePlugin_ActionContext(self.bot_name, self, user, action, attrs, event)
 
-    @staticmethod
-    def _construct_action(event):
+    def _construct_action(self, event):
+        attrs = {'line.event.type': event.type}
         if isinstance(event, MessageEvent):
             if isinstance(event.message, TextMessage):
-                return event.message.text
+                text = event.message.text
+                if not self.allow_special_action_text_for_debug:
+                    text = utility.sanitize_action(text)
+                return text, attrs
             elif isinstance(event.message, LocationMessage):
-                return u"LOC:{},{}({},{})".format(event.message.title, event.message.address, event.message.latitude, event.message.longitude)
+                return u"LINE_LOCATION:{},{}({},{})".format(event.message.title, event.message.address, event.message.latitude, event.message.longitude), attrs
             elif isinstance(event.message, StickerMessage):
-                return u"STK:{},{}".format(event.message.package_id, event.message.sticker_id)
+                return u"LINE_STICKER:{},{}".format(event.message.package_id, event.message.sticker_id), attrs
             else:
                 # 画像・動画・音声メッセージ
-                return u"ETC:{}".format(event.message.type)
+                return u"LINE_ETC:{}".format(event.message.type), attrs
         elif isinstance(event, PostbackEvent):
-            data, visit_id = event.postback.data.split(u'@@')
-            # TODO: ちゃんと visit_id が送れないケースがあるのでコメントアウト
-            #        if context.status.visit_id != visit_id and visit_id != u'FORWARD':
-            #            # 古いシーンの選択肢が送られてきた
-            #            logging.info(u'received postback with invalid visit_id')
-            #            return
-            return data
+            action, token_attrs = utility.decode_action_string(event.postback.data)
+            attrs.update(token_attrs)
+            return action, attrs
+        elif isinstance(event, BeaconEvent):
+            return u"LINE_BEACON:{},{}".format(event.beacon.type, event.beacon.hwid), attrs
         elif isinstance(event, (FollowEvent, UnfollowEvent, JoinEvent, LeaveEvent)):
-            return u'##' + event.type
+            return u'##line.' + event.type, attrs
 
     def respond_reaction(self, context, reactions):
         msgs = self._construct_responses(context, reactions)
         if len(msgs) > 5:
             msgs = [TextSendMessage(text=u'内部エラー: 送信するメッセージが多すぎます')]
+        if len(msgs) == 0:
+            return 'OK'
         self._reply_message(context, msgs)
         return 'OK' # LINE では respond_reaction の返値は見ていない
 
     def _reply_message(self, context, messages):
         if context.event is not None:
-            self.line_bot_api.reply_message(context.event.reply_token, messages)
+            if hasattr(context.event, 'reply_token'):
+                self.line_bot_api.reply_message(context.event.reply_token, messages)
+            else:
+                # unfollow イベントなどは reply_token が存在しない
+                logging.info(u'event {} doesnt have reply_token: {}'.format(context.event.type, messages))
         else:
             # API 経由で起動された場合は reply_token がない
             self.line_bot_api.push_message(context.source_id, messages)
@@ -109,7 +127,7 @@ class LinePlugin_Interface(object):
             return None
         image_url = url
         if option == "preview":
-            image_url = re.sub(r'_1024$', '_240', image_url)
+            image_url = re.sub(r'_1024\.', '_240.', image_url)
         return image_url
 
 

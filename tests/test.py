@@ -4,6 +4,7 @@ import unittest
 from pprint import pprint
 
 from webtest import TestApp
+import logging
 
 import os, sys, subprocess, json
 gcloud_info = json.loads(subprocess.check_output(['gcloud', 'info', '--format=json']))
@@ -25,12 +26,17 @@ tb.init_all_stubs()
 BOT_SETTINGS = {
     'OPTIONS': {
         'api_token': u'test_api_token',
-        'reset_keyword': u'強制リセット'
+        'reset_keyword': u'強制リセット',
+        'timezone': 'Asia/Tokyo',
     },
 
     'PLUGINS': {
         'plaintext': {},
         'google_sheets': {},
+        'timestamp': {
+            'now_format': '%Y/%m/%d %H:%M:%S',
+            'timezone': 'Asia/Tokyo',
+        },
     },
 
     'BOTS': {
@@ -126,9 +132,11 @@ class BotTestCaseBase(unittest.TestCase):
         self.forwarded_messages = []
         import bottle
         bottle.debug(True)
+        logging.disable(logging.CRITICAL)
 
     def tearDown(self):
         common_commands.send_request = self.orig_send_request
+        logging.disable(logging.NOTSET)
 
     def send_action_to(self, bot_name, user_id, action):
         res = self.app.get(('/api/v1/bots/'+bot_name+'/action?user='+user_id+'&action='+action+'&token='+auth.api_token).encode('utf-8'))
@@ -222,6 +230,7 @@ class MainTestCase(BotTestCaseBase):
     def test_default_scene(self):
         self.test_bot.scenario = ScenarioBuilder.build_from_tables([
             (u'default', [
+                [u'##error_invalid_label', u'invalid label default'],
                 [u'1', u'*1'],
                 [u'2', u'*from_default'],
                 [u'3', u'*3'],
@@ -233,6 +242,7 @@ class MainTestCase(BotTestCaseBase):
                 [u'*2', u'2'],
             ]),
             (u'tab1', [
+                [u'##error_invalid_label', u'invalid label tab1'],
                 [u'1', u'*1'],
                 [u'2', u'*from_default'],
                 [u'3', u'*3'],
@@ -252,7 +262,8 @@ class MainTestCase(BotTestCaseBase):
         self.assertEqual(len(self.messages), 1)
         self.assertEqual(self.messages[0], u"2")
         self.send_message(u'3')
-        self.assertEqual(len(self.messages), 0)
+        self.assertEqual(len(self.messages), 1)
+        self.assertEqual(self.messages[0], u"invalid label default")
         self.send_message(u'2')
         self.assertEqual(len(self.messages), 1)
         self.assertEqual(self.messages[0], u"from_default")
@@ -267,7 +278,8 @@ class MainTestCase(BotTestCaseBase):
         self.assertEqual(len(self.messages), 1)
         self.assertEqual(self.messages[0], u"tab1_2")
         self.send_message(u'3')
-        self.assertEqual(len(self.messages), 0)
+        self.assertEqual(len(self.messages), 1)
+        self.assertEqual(self.messages[0], u"invalid label tab1")
         self.send_message(u'2')
         self.assertEqual(len(self.messages), 1)
         self.assertEqual(self.messages[0], u"tab1_from_default")
@@ -826,6 +838,36 @@ class MainTestCase(BotTestCaseBase):
         self.assertEqual(self.messages[0], u"クリアしました。")
         self.send_group_message(u'all', u'from_api')
         self.assertEqual(len(self.messages), 0)
+
+    def test_common_object(self):
+        self.test_bot.scenario = ScenarioBuilder.build_from_tables([
+            (u'default', [
+                [u'id', u'ID: {Core.uid}'],
+                [u'scene', u'Scene: {Core.scene}'],
+                [u'*NewScene', u'Scene: {Core.scene}'],
+            ]),
+        ])
+        self.send_reset()
+        self.send_message(u'id')
+        self.assertEqual(len(self.messages), 1)
+        self.assertEqual(self.messages[0], u"ID: plaintext:0001")
+        self.send_message(u'*NewScene')
+        self.send_message(u'scene')
+        self.assertEqual(len(self.messages), 1)
+        self.assertEqual(self.messages[0], u"Scene: default/NewScene")
+
+    def test_timestamp(self):
+        self.test_bot.scenario = ScenarioBuilder.build_from_tables([
+            (u'default', [
+                [u'timestamp', u'DateTime: {TimeStamp.now}'],
+                [u'', u'@log', u'DateTime', u'{TimeStamp.datetime}'],
+            ]),
+        ])
+        self.send_reset()
+        self.send_message(u'timestamp')
+        self.assertEqual(len(self.messages), 1)
+        # TODO: テストする
+        # self.assertEqual(self.messages[0], u"DateTime:")
 
     def try_lint(self, table):
         try:

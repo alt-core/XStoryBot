@@ -10,12 +10,12 @@ import users
 
 
 class TwilioPlugin_ActionContext(context.ActionContext):
-    def __init__(self, bot_name, interface, user, action, from_tel, to_tel, is_voicecall, message):
-        context.ActionContext.__init__(self, bot_name, "twilio", interface, user, action)
-        self.from_tel = from_tel
-        self.to_tel = to_tel
-        self.is_voicecall = is_voicecall
-        self.message = message
+    def __init__(self, bot_name, interface, user, action, attrs):
+        context.ActionContext.__init__(self, bot_name, "twilio", interface, user, action, attrs)
+        self.from_tel = attrs.get('twilio.from_tel', user.user_id)
+        self.to_tel = attrs.get('twilio.to_tel', u"null")
+        self.is_voicecall = attrs.get('twilio.is_voicecall', False)
+        self.message = attrs.get('twilio.message', u"")
 
 
 class TwilioPlugin_Interface(object):
@@ -32,9 +32,8 @@ class TwilioPlugin_Interface(object):
     def get_service_list(self):
         return {'twilio': self}
 
-    def create_context(self, user, action):
-        return TwilioPlugin_ActionContext(self.bot_name, self, user, action,
-                                          from_tel=user.user_id, to_tel=u"null", is_voicecall=False, message=u"")
+    def create_context(self, user, action, attrs):
+        return TwilioPlugin_ActionContext(self.bot_name, self, user, action, attrs)
 
     def create_context_from_twilio_event(self, from_tel, to_tel, is_voicecall, message):
         # ユーザID は from_tel
@@ -50,8 +49,14 @@ class TwilioPlugin_Interface(object):
         else:
             # テキストメッセージの場合、action は 本文 とする
             action = message
-        return TwilioPlugin_ActionContext(self.bot_name, self, user, action,
-                                          from_tel=from_tel, to_tel=to_tel, is_voicecall=is_voicecall, message=message)
+
+        attrs = {
+            'twilio.from_tel': from_tel,
+            'twilio.to_tel': to_tel,
+            'twilio.is_voicecall': is_voicecall,
+            'twilio.message': message
+        }
+        return TwilioPlugin_ActionContext(self.bot_name, self, user, action, attrs)
 
     def respond_reaction(self, context, reactions):
         twiml = u'<?xml version="1.0" encoding="UTF-8"?>' \

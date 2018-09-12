@@ -1,6 +1,9 @@
 # coding: utf-8
 import logging
 import requests
+import datetime
+import pytz
+import json
 
 from google.appengine.api import taskqueue
 
@@ -26,8 +29,12 @@ GROUP_ADD_CMDS = (u'@group_add', u'@グループ追加')
 GROUP_DEL_CMDS = (u'@group_del', u'@グループ削除')
 GROUP_CLEAR_CMDS = (u'@group_clear', u'@グループ初期化')
 WEBHOOK_CMDS = (u'@webhook', u'@WebHook')
+LOG_CMDS = (u'@log', u'@Log')
+ERROR_CMDS = (u'@error', u'@Error')
 
-ALL_COMMON_CMDS = OR_CMDS + RESET_CMDS + SET_CMDS + FORWARD_CMDS + DELAY_CMDS + IF_CMDS + SEQ_CMDS + RESET_NODES_CMDS + GROUP_ADD_CMDS + GROUP_DEL_CMDS + GROUP_CLEAR_CMDS + WEBHOOK_CMDS
+ALL_COMMON_CMDS = OR_CMDS + RESET_CMDS + SET_CMDS + FORWARD_CMDS + DELAY_CMDS + IF_CMDS + SEQ_CMDS + RESET_NODES_CMDS + GROUP_ADD_CMDS + GROUP_DEL_CMDS + GROUP_CLEAR_CMDS + WEBHOOK_CMDS + LOG_CMDS + ERROR_CMDS
+
+COMMON_OBJECT = (u'Core',)
 
 
 def send_request(bot_name, user, action, delay_secs=None):
@@ -61,10 +68,31 @@ class CommonCommands_Builder(object):
         return True
 
 
+class CommonCommands_RuntimeObject(object):
+    def __init__(self):
+        self.context = None
+        pass
+
+    @property
+    def uid(self):
+        if self.context != None:
+            return unicode(self.context.user)
+        return u'None'
+
+    @property
+    def scene(self):
+        if self.context != None:
+            return unicode(self.context.status.scene)
+        return u'None'
+
+
 class CommonCommands_Runtime(object):
     def __init__(self, params):
         self.params = params
+        self.runtime_object = CommonCommands_RuntimeObject()
+        self.lastContext = None
         self.reset_keyword = params['reset_keyword']
+        self.timezone = pytz.timezone(params.get('timezone', 'utc'))
 
     def modify_incoming_action(self, context, action):
         if action == self.reset_keyword:
@@ -131,10 +159,37 @@ class CommonCommands_Runtime(object):
             else:
                 data = None
             requests.post(url, data=data)
+        elif msg in LOG_CMDS:
+            category = options[0]
+            if len(options) == 2:
+                message = options[1]
+            else:
+                message = options[1:]
+            timestamp = datetime.datetime.now(tz=self.timezone).strftime('%Y/%m/%d %H:%M:%S')
+            scene_str = context.status.scene
+            uid_str = unicode(context.user)
+            action_str = context.action
+            log = {
+                "type": "XSBLog",
+                "cat": category,
+                "date": timestamp,
+                "uid": uid_str,
+                "log": message,
+                "scene": scene_str,
+                "action": action_str,
+            }
+            logging.info(json.dumps(log))
+        elif msg in ERROR_CMDS:
+            message = options[0]
+            logging.error(message)
         else:
             logging.error(u'内部エラー：未知のコマンドです:' + msg)
             context.add_reaction(u"<<内部エラー：未知のコマンドです>>")
         return True
+
+    def get_runtime_object(self, _name, context):
+        self.runtime_object.context = context
+        return self.runtime_object
 
 
 def setup(params):
@@ -146,76 +201,92 @@ def setup(params):
         runtime=runtime)
     commands.register_commands([
         commands.CommandEntry(
-            command=OR_CMDS,
+            names=OR_CMDS,
             builder=builder,
             runtime=runtime,
             service='*'),
         commands.CommandEntry(
-            command=RESET_CMDS,
+            names=RESET_CMDS,
             builder=builder,
             runtime=runtime,
             service='*'),
         commands.CommandEntry(
-            command=SET_CMDS,
+            names=SET_CMDS,
             options='variable expr',
             builder=builder,
             runtime=runtime,
             service='*'),
         commands.CommandEntry(
-            command=FORWARD_CMDS,
+            names=FORWARD_CMDS,
             options='hankaku text|label',
             builder=builder,
             runtime=runtime,
             service='*'),
         commands.CommandEntry(
-            command=DELAY_CMDS,
+            names=DELAY_CMDS,
             options='number text|label',
             builder=builder,
             runtime=runtime,
             service='*'),
         commands.CommandEntry(
-            command=IF_CMDS,
+            names=IF_CMDS,
             options='expr label label',
             builder=builder,
             runtime=runtime,
             service='*'),
         commands.CommandEntry(
-            command=SEQ_CMDS,
+            names=SEQ_CMDS,
             # TODO: 可変長表現の追加
             options='label [label] [label] [label] [label] [label] [label] [label] [label] [label]',
             builder=builder,
             runtime=runtime,
             service='*'),
         commands.CommandEntry(
-            command=RESET_NODES_CMDS,
+            names=RESET_NODES_CMDS,
             options='[hankaku]',
             builder=builder,
             runtime=runtime,
             service='*'),
         commands.CommandEntry(
-            command=GROUP_ADD_CMDS,
+            names=GROUP_ADD_CMDS,
             options='hankaku',
             builder=builder,
             runtime=runtime,
             service='*'),
         commands.CommandEntry(
-            command=GROUP_DEL_CMDS,
+            names=GROUP_DEL_CMDS,
             options='hankaku',
             builder=builder,
             runtime=runtime,
             service='*'),
         commands.CommandEntry(
-            command=GROUP_CLEAR_CMDS,
+            names=GROUP_CLEAR_CMDS,
             options='hankaku',
             builder=builder,
             runtime=runtime,
             service='*'),
         commands.CommandEntry(
-            command=WEBHOOK_CMDS,
+            names=WEBHOOK_CMDS,
             options='raw',
             builder=builder,
             runtime=runtime,
             service='*'),
+        commands.CommandEntry(
+            names=LOG_CMDS,
+            options='text text',
+            builder=builder,
+            runtime=runtime,
+            service='*'),
+        commands.CommandEntry(
+            names=ERROR_CMDS,
+            options='text',
+            builder=builder,
+            runtime=runtime,
+            service='*'),
     ])
+    commands.register_object(commands.ObjectEntry(
+        names=COMMON_OBJECT,
+        runtime=runtime,
+        service='*'))
 
 

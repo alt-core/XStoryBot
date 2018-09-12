@@ -7,10 +7,15 @@ import utility
 catalog = []
 catalog_map = {}
 
+object_catalog = []
+object_catalog_map = {}
+
 
 def clear():
     del catalog[:]
     catalog_map.clear()
+    del object_catalog[:]
+    object_catalog_map.clear()
 
 
 RE_LABEL = re.compile(r'^[*＊#＃].*')
@@ -20,7 +25,7 @@ RE_NUMBER = re.compile(ur'^[\-−]?[0-9０-９]+([.．][0-9０-９]*)?$')
 
 
 class Default_Builder(object):
-    def build_from_command(self, builder, msg, options, children):
+    def build_from_command(self, builder, msg, options, children=None):
         if children:
             builder.add_command(msg, options, children)
         else:
@@ -45,9 +50,9 @@ def _convert_format_string(s):
 
 
 class CommandEntry(object):
-    def __init__(self, command, options=None, child=None, grandchild=None, builder=None, runtime=None, service='*', specs=None):
+    def __init__(self, names, options=None, child=None, grandchild=None, builder=None, runtime=None, service='*', specs=None):
         """
-        :param command: [u'@コマンド名', u'@Command']
+        :param names: [u'@コマンド名', u'@Command']
         :param options: 'label|text|expr|image|raw(MAX_LEN) [label|text|expr|image|raw(MAX_LEN)] ...'
         :param child: 'label|text|expr|raw(MAX_LEN) [label|text|expr|raw(MAX_LEN)] ...'
         :param grandchild: 'label|text|expr|raw(MAX_LEN) [label|text|expr|raw(MAX_LEN)] ...'
@@ -56,7 +61,7 @@ class CommandEntry(object):
         :param service: 'line'
         :param specs: {'children_min': 1, 'children_max': 4}
         """
-        self.command = command
+        self.command = names
         self.options = _convert_format_string(options)
         self.child = _convert_format_string(child)
         self.grandchild = _convert_format_string(grandchild)
@@ -256,3 +261,54 @@ def invoke_runtime_construct_response(context, msg, options, children):
         return entry.runtime.construct_response(context, msg, options, children)
     else:
         return entry.runtime.construct_response(context, msg, options)
+
+
+class ObjectEntry(object):
+    def __init__(self, names, runtime=None, service='*'):
+        """
+        :param names: [u'ObjectName']
+        :param runtime: SomePlugin_Runtime() or None
+        :param service: 'line'
+        """
+        self.names = names
+        self.runtime = runtime
+        self.service = service
+
+
+def register_object(entry):
+    """オブジェクトカタログにオブジェクトを登録する。
+
+    :param entry: 追加するオブジェクト
+    :type entry: ObjectEntry
+    """
+    object_catalog.append(entry)
+    for word in entry.names:
+        l = object_catalog_map.get(word, [])
+        l.append(entry)
+        object_catalog_map[word] = l
+
+
+def register_objects(entries):
+    """オブジェクトカタログに複数のオブジェクトを登録する。
+
+    :param entries: 追加するオブジェクト群
+    :type entries: ObjectEntry[]
+    """
+    for entry in entries:
+        register_object(entry)
+
+
+def get_runtime_object_dictionary(service='*', context=None):
+    """オブジェクトカタログから特定のサービス向けのオブジェクト表を生成する。
+
+    :param service: フィルタするサービス, '*' でフィルタを行わない
+    :param context: コンテキスト情報"""
+    m = {}
+
+    for entry in object_catalog:
+        if service == '*' or entry.service == '*' or entry.service == service:
+            for word in entry.names:
+                m[word] = entry.runtime.get_runtime_object(word, context)
+    return m
+
+

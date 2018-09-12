@@ -75,6 +75,17 @@ class LineDefaultCommandsPlugin_Builder(object):
 
         # 解釈はここで終了
         return True
+    
+    def callback_new_block(self, builder, cond):
+        builder.msg_count = 0
+
+    def build_plain_text(self, builder, msg, options):
+        # 通常のテキストメッセージ表示
+        # 仕様書に記述がないが、おそらく300文字が上限
+        builder.assert_strlen(msg, 300)
+        builder.msg_count += 1
+        builder.add_command(msg, options, None)
+        return True
 
     def callback_after_each_line(self, builder):
         if builder.msg_count > 5:
@@ -127,7 +138,7 @@ class LineDefaultCommandsPlugin_Runtime(object):
     def __init__(self, params):
         self.alt_text = params['alt_text']
 
-    def _build_template_actions(self, choices, visit_id):
+    def _build_template_actions(self, choices, action_token):
         results = []
         if choices is None: return results
         for choice in choices:
@@ -139,14 +150,14 @@ class LineDefaultCommandsPlugin_Runtime(object):
                 if re.match(r'^(https?|tel):', choice[1]):
                     results.append(URITemplateAction(choice[0], choice[1]))
                 elif re.match(u'^[#*]', choice[1]):
-                    results.append(PostbackTemplateAction(label=choice[0], data=utility.append_visit_id(choice[1], visit_id)))
+                    results.append(PostbackTemplateAction(label=choice[0], data=utility.encode_action_string(choice[1], action_token=action_token)))
                 else:
                     results.append(MessageTemplateAction(choice[0], choice[1]))
             elif len(choice) >= 3:
                 if choice[1]:
-                    results.append(PostbackTemplateAction(label=choice[0], text=choice[1], data=utility.append_visit_id(choice[2], visit_id)))
+                    results.append(PostbackTemplateAction(label=choice[0], text=choice[1], data=utility.encode_action_string(choice[2], action_token=action_token)))
                 else:
-                    results.append(PostbackTemplateAction(label=choice[0], data=utility.append_visit_id(choice[2], visit_id)))
+                    results.append(PostbackTemplateAction(label=choice[0], data=utility.encode_action_string(choice[2], action_token=action_token)))
         return results
 
     def _template_message(self, template):
@@ -155,7 +166,7 @@ class LineDefaultCommandsPlugin_Runtime(object):
     def construct_response(self, context, msg, options, children):
         if msg == u'@confirm' or msg == u'@確認':
             if len(options) > 0:
-                context.response.append(self._template_message(ConfirmTemplate(text=options[0], actions=self._build_template_actions(children, context.status.visit_id))))
+                context.response.append(self._template_message(ConfirmTemplate(text=options[0], actions=self._build_template_actions(children, context.status.action_token))))
             else:
                 logging.error("invalid format: @confirm")
                 context.response.append(TextSendMessage(text=u"<<@confirmを解釈できませんでした>>"))
@@ -163,7 +174,7 @@ class LineDefaultCommandsPlugin_Runtime(object):
             if len(options) > 0:
                 title = utility.safe_list_get(options, 1, None)
                 image_url = options[2] if len(options) > 2 else None
-                context.response.append(self._template_message(ButtonsTemplate(text=options[0], title=title, thumbnail_image_url=image_url, actions=self._build_template_actions(children, context.status.visit_id))))
+                context.response.append(self._template_message(ButtonsTemplate(text=options[0], title=title, thumbnail_image_url=image_url, actions=self._build_template_actions(children, context.status.action_token))))
             else:
                 logging.error("invalid format: @button")
                 context.response.append(TextSendMessage(text=u"<<@buttonを解釈できませんでした>>"))
@@ -173,7 +184,7 @@ class LineDefaultCommandsPlugin_Runtime(object):
                 title = utility.safe_list_get(panel, 1, None)
                 image_url = panel[2] if len(panel) > 2 else None
                 panel_templates.append(
-                    CarouselColumn(text=panel[0], title=title, thumbnail_image_url=image_url, actions=self._build_template_actions(choices, context.status.visit_id))
+                    CarouselColumn(text=panel[0], title=title, thumbnail_image_url=image_url, actions=self._build_template_actions(choices, context.status.action_token))
                 )
             context.response.append(self._template_message(CarouselTemplate(panel_templates)))
         elif msg == u'@imagemap' or msg == u'@イメージマップ':
@@ -215,7 +226,7 @@ def inner_load_plugin(params):
         runtime=runtime)
     commands.register_commands([
         commands.CommandEntry(
-            command=CONFIRM_CMDS,
+            names=CONFIRM_CMDS,
             options='text(240)',
             child='text [text|raw|label] [label]',
             builder=builder,
@@ -223,7 +234,7 @@ def inner_load_plugin(params):
             service='line',
             specs={'children_min': 1, 'children_max': 2}),
         commands.CommandEntry(
-            command=BUTTON_CMDS,
+            names=BUTTON_CMDS,
             options='text(160) [text(40)] [image]',
             child='text [text|raw|label] [label]',
             builder=builder,
@@ -231,7 +242,7 @@ def inner_load_plugin(params):
             service='line',
             specs={'children_min': 1, 'children_max': 4}),
         commands.CommandEntry(
-            command=IMAGEMAP_CMDS,
+            names=IMAGEMAP_CMDS,
             options='image',
             # 最後のhankaku引数は実際には付けられないが、間違えてラベルを指定されたことを lint_choice で検知するために付けている
             child='text text|label [hankaku]',
@@ -240,7 +251,7 @@ def inner_load_plugin(params):
             service='line',
             specs={'children_max': 49}),
         commands.CommandEntry(
-            command=PANEL_CMDS,
+            names=PANEL_CMDS,
             options='',
             child='text(120) [text(40)] [image]',
             grandchild='text [text|raw|label] [label]',

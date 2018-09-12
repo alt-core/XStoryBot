@@ -6,6 +6,7 @@ from google.appengine.api import taskqueue, memcache
 
 from models import GlobalBotVariables
 from scenario import Scenario, Director, ScenarioBuilder, ScenarioSyntaxError
+import commands
 
 
 def now_str():
@@ -71,6 +72,7 @@ class BotRuntime(object):
         self.check_reload()
         context.reactions = []
 
+        context.add_env(commands.get_runtime_object_dictionary(context.service_name, context))
         context.load_status()
         director = Director(self.scenario, context)
         director.plan_reactions()

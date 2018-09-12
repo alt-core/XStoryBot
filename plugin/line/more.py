@@ -10,6 +10,7 @@ from plugin.line import default_commands
 
 
 SET_NEXT_LABEL_CMD = u'@@set_next_label'
+CLEAR_NEXT_LABEL_CMDS = (u'@clear_next_label', u'@reset_next_label')
 
 
 class PlayerNextLabel(ndb.Model):
@@ -64,7 +65,7 @@ class LineMorePlugin_Builder(object):
         self.message = params['message']
         self.image_url = params['image_url']
 
-    def filter_plain_text(self, builder, msg):
+    def filter_plain_text(self, builder, msg, _options):
 
         if msg in self.command:
             if builder.i_node == len(builder.parent_node.children) - 1:
@@ -73,7 +74,7 @@ class LineMorePlugin_Builder(object):
             filepath, size = builder.build_image_for_imagemap_command(self.image_url)
             builder.add_command(default_commands.IMAGEMAP_CMDS[0], [unicode(filepath), unicode(size[0]), unicode(size[1])], [[u'0,0,{},{}'.format(size[0],size[1]), self.message]])
 
-            next_label = u'##MORE__{}__{}'.format(builder.scene.get_fullpath(), builder.node.line_no)
+            next_label = u'##MORE__{}'.format(builder.scene.get_relative_position_desc(builder.node))
             builder.add_command(SET_NEXT_LABEL_CMD, [next_label,], None)
             #logging.info(u'insert set next label cmd: {}'.format(next_label))
 
@@ -106,6 +107,13 @@ class LineMorePlugin_Runtime(object):
             # 解釈はここで終了
             return True
 
+        elif msg in CLEAR_NEXT_LABEL_CMDS:
+            PlayerNextLabelDB().clear_next_label(context.status)
+            logging.debug(u'exec reset next label command')
+
+            # 解釈はここで終了
+            return True
+
         # 解釈は継続
         return False
 
@@ -117,7 +125,12 @@ class LineMorePlugin_Runtime(object):
                 # next_label が設定されていなかったらスルー
                 return action
             else:
-                if self.action_pattern_re.search(action):
+                if action in [u'##line.follow', u'##line.join']:
+                    # 変な状態でハマった時の復旧用に ##follow と ##join で状態リセット
+                    logging.warning(u'LineMorePlugin_Runtime: reset next_label: {} {}'.format(next_label, action))
+                    db.clear_next_label(context.status)
+                    return action
+                elif self.action_pattern_re.search(action):
                     # 「続きを読む」ボタンが押されるなど、次に進む入力が来た
                     if db.compare_and_clear_next_label(context.status, next_label):
                         # クリアに成功したので next_label に入力を差し替える
@@ -125,11 +138,6 @@ class LineMorePlugin_Runtime(object):
                     else:
                         # 何か競合状態で悪いことが起こったので最初から
                         continue
-                elif action in [u'##follow', u'##join']:
-                    # 変な状態でハマった時の復旧用に ##follow と ##join で状態リセット
-                    logging.warning(u'LineMorePlugin_Runtime: reset next_label: {} {}'.format(next_label, action))
-                    db.clear_next_label(context.status)
-                    return action
                 elif self.ignore_pattern_re and self.ignore_pattern_re.search(action):
                     # そのまま通すパターン
                     return action
@@ -148,8 +156,15 @@ def load_plugin(params):
         service='line',
         builder=builder,
         runtime=runtime)
-    commands.register_command(commands.CommandEntry(
-        command=[SET_NEXT_LABEL_CMD],
-        options='label',
-        runtime=runtime,
-        service='line'))
+    commands.register_commands([
+        commands.CommandEntry(
+            names=[SET_NEXT_LABEL_CMD],
+            options='label',
+            runtime=runtime,
+            service='line'),
+        commands.CommandEntry(
+            names=CLEAR_NEXT_LABEL_CMDS,
+            builder=commands.Default_Builder(),
+            runtime=runtime,
+            service='line'),
+    ])

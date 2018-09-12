@@ -80,20 +80,20 @@ def api_get_last_build_result(bot_name):
     return result
 
 
-def _do_action_iter(result, bot, user, action, level=0):
+def _do_action_iter(result, bot, user, action, attrs, level=0):
     if level > 20:
         logging.warning(u'group infinite loop: {} {}'.format(user, action))
         abort_json(400, u'infinite loop is detected')
 
     if user.service_name == 'group':
         for member in users.get_group_members(user.user_id):
-            _do_action_iter(result, bot, member, action, level+1)
+            _do_action_iter(result, bot, member, action, attrs, level+1)
             # TODO: rate limit があるサービスでの対応
     else:
         interface = bot.get_interface(user.service_name)
         if interface is None:
             abort_json(404, u'not found')
-        context = interface.create_context(user, action)
+        context = interface.create_context(user, action, attrs)
         result.append(unicode(bot.handle_action(context)))
 
 
@@ -107,7 +107,7 @@ def do_action(bot_name):
         abort_json(404, u'not found')
 
     user_str = request.params.getunicode('user')
-    action = request.params.getunicode('action')
+    action, attrs = utility.decode_action_string(request.params.getunicode('action'))
     token = request.params.getunicode('token')
 
     logging.info(u"API call: bot_name: {}, user: {}, action: {}".format(bot_name, user_str, action))
@@ -123,7 +123,7 @@ def do_action(bot_name):
         abort_json(400, u'invalid parameter')
 
     result = []
-    _do_action_iter(result, bot, user, action)
+    _do_action_iter(result, bot, user, action, attrs)
 
     return utility.make_ok_json(u"\n".join(result))
 

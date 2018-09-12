@@ -1,0 +1,5 @@
+# リアルタイムでテキスト画像を描画するデバッグ機能が欲しい場合にのみロードすること
+
+handlers:
+- url: /text2image/.*
+  script: plugin.render_text.text2image.app

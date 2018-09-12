@@ -1,6 +1,7 @@
 # coding: utf-8
 import re
 import logging
+import string
 from unicodedata import normalize
 import hashlib
 import pickle
@@ -37,7 +38,8 @@ CONDITION_KIND_COMMAND = 100
 CONDITION_OPTION_REGEXP_NORMALIZE = 1
 CONDITION_OPTION_REGEXP_LOWER_CASE = 2
 
-http = httplib2.Http(cache=memcache)
+http = httplib2.Http()
+#http = httplib2.Http(cache=memcache) # memcache を使うと1MB制限が課される
 
 
 class ScenarioSyntaxError(Exception):
@@ -100,7 +102,7 @@ class Condition(object):
         if self.kind == CONDITION_KIND_STRING:
             return (action,) if self.value == action else None
         elif self.kind == CONDITION_KIND_REGEXP:
-            if re.match(ur'^[*＊#＃]', action):
+            if utility.is_special_action(action):
                 # postback は REGEXP にマッチさせない
                 return None
             target_string = action
@@ -131,13 +133,26 @@ class Block(object):
 
 
 class Scene(object):
-    def __init__(self, tab_name, sub_name=u''):
+    def __init__(self, tab_name, sub_name=u'', line_no=0):
         self.tab_name = tab_name
         self.sub_name = sub_name
+        self.line_no = line_no
         self.blocks = []
+    
+    def __str__(self):
+        return self.get_fullpath().encode('utf-8')
+
+    def __unicode__(self):
+        return self.get_fullpath()
 
     def get_fullpath(self):
         return self.tab_name + u'/' + self.sub_name
+
+    def get_relative_position_desc(self, node):
+        if self.tab_name == node.tab_name:
+            return u"{}_L{}".format(self.get_fullpath(), node.line_no - self.line_no)
+        else:
+            return u"{}__{}_L{}".format(self.get_fullpath(), node.tab_name, node.line_no)
 
 
 class SyntaxTree(object):
@@ -307,7 +322,7 @@ class ScenarioBuilder(object):
             # 各セル内の末尾の空白文字を除去
             row = [cell.rstrip() for cell in row]
             # #@[*%で始まっていたら先頭の空白も取り除いた上で半角化（正規化）する
-            row = [normalize('NFKC', cell.strip()) if re.match(u'^\s*[#＃@＠\[［*＊%％]', cell) else cell for cell in row]
+            row = [normalize('NFKC', cell.strip()) if re.match(ur'^\s*[#＃@＠\[［*＊%％]', cell) else cell for cell in row]
 
             # 空行・コメント行はスキップ
             if not row or row[0] == u'#':
@@ -376,16 +391,22 @@ class ScenarioBuilder(object):
             self.raise_error(u'相対指定された先が存在していません')
             return None
 
+    def _fix_relative_label_sub(self, label, block, i_label):
+        match = re.match(r'^##(\d+)?$', label)
+        if match:
+            num = int(match.group(1) or 1)
+            new_label = self._get_relative_label(block, i_label, num)
+            if new_label is not None:
+               return True, new_label
+        return False, label
+
     def _fix_relative_label_iter(self, cur_list, block, i_label):
         for index in range(len(cur_list)):
             if isinstance(cur_list[index], unicode):
-                match = re.match(r'^##(\d+)?$', cur_list[index])
-                if match:
-                    num = int(match.group(1) or 1)
-                    label = self._get_relative_label(block, i_label, num)
-                    if label is not None:
-                        #print 'overwrite options: ' + cur_list[index] + ' -> ' + label
-                        cur_list[index] = label
+                result, label = self._fix_relative_label_sub(cur_list[index], block, i_label)
+                if result:
+                    #print 'overwrite label: ' + cur_list[index] + ' -> ' + label
+                    cur_list[index] = label
             elif isinstance(cur_list[index], list):
                 self._fix_relative_label_iter(cur_list[index], block, i_label)
             else:
@@ -399,6 +420,9 @@ class ScenarioBuilder(object):
                 for i_label in range(len(block.indices)):
                     cond, lines = block.indices[i_label]
                     for command in lines:
+                        result, label = self._fix_relative_label_sub(command.msg, block, i_label)
+                        if result:
+                            command.msg = label
                         if command.options:
                             self._fix_relative_label_iter(command.options, block, i_label)
                         if command.children:
@@ -411,7 +435,7 @@ class ScenarioBuilder(object):
         cond = Condition(CONDITION_KIND_STRING, label)
         self.lines = []
         self.block.indices.append((cond, self.lines))
-        self.msg_count = 0
+        hub.invoke_all_builder_methods('callback_new_block', self, cond)
 
     def _build_from_table(self, tab_name, table):
         root = SyntaxTree(tab_name, 0, (u'**'+tab_name,))
@@ -442,7 +466,7 @@ class ScenarioBuilder(object):
                 sub_name = cond_str[1:]
                 if u'/' in sub_name:
                     self.raise_error(u'シーン名に/を含むことはできません')
-                self.scene = Scene(tab_name, sub_name)
+                self.scene = Scene(tab_name, sub_name, self.node.line_no)
                 self.scenario.scenes[self.scene.get_fullpath()] = self.scene
                 # 最初に定義されたシーンがスタートアップシーンとなる
                 if not self.scenario.startup_scene_title:
@@ -470,7 +494,7 @@ class ScenarioBuilder(object):
                 cond = Condition(CONDITION_KIND_STRING, u'#')
             elif cond_str == u'##':
                 # 無名インデックス
-                cond = Condition(CONDITION_KIND_STRING, u'##__{}__{}'.format(self.scene.get_fullpath(), self.node.line_no))
+                cond = Condition(CONDITION_KIND_STRING, u'##__{}'.format(self.scene.get_relative_position_desc(self.node)))
             else:
                 # 通常の条件セル
                 guard = None
@@ -502,7 +526,7 @@ class ScenarioBuilder(object):
             self.lines = []
             self.block.indices.append((cond, self.lines))
             # 新しい条件に来たので、メッセージ数カウンタを初期化する
-            self.msg_count = 0
+            hub.invoke_all_builder_methods('callback_new_block', self, cond)
 
             self.parent_node = self.node
             for self.i_node in range(len(self.parent_node.children)):
@@ -531,14 +555,13 @@ class ScenarioBuilder(object):
                     else:
                         # 何の装飾もないテキスト
                         # プラグインでまず処理を試みる
-                        msg = hub.filter_all_builder_methods('filter_plain_text', self, msg)
+                        msg = hub.filter_all_builder_methods('filter_plain_text', self, msg, options)
                         if msg:
-                            hub.invoke_all_builder_methods('build_plain_text', self, msg)
-                            # 通常のテキストメッセージ表示
-                            # 仕様書に記述がないが、おそらく300文字が上限
-                            self.assert_strlen(msg, 300)
-                            self.add_command(msg, options, None)
-                            self.msg_count += 1
+                            if hub.invoke_all_builder_methods('build_plain_text', self, msg, options):
+                                pass
+                            else:
+                                # 互換性のために残っているが、各プラグインの build_plain_text 内で add_command されるのが正しい
+                                self.add_command(msg, options, None)
 
                 hub.invoke_all_builder_methods('callback_after_each_line', self)
 
@@ -548,11 +571,13 @@ class ScenarioBuilder(object):
 
 
     def _make_imagemap_filepath(self, file_digest):
-        filepath = '/{}/imagemap/{}'.format(self.bucket_name, file_digest)
+        file_format, digest = file_digest.split('_', 1)
+        filepath = '/{}/imagemap/{}.{}'.format(self.bucket_name, digest, convert_image.get_ext_from_format(file_format))
         return filepath
 
     def _make_image_filepath(self, file_digest, resize_to):
-        filepath = '/{}/image/{}_{}'.format(self.bucket_name, file_digest, str(resize_to))
+        file_format, digest = file_digest.split('_', 1)
+        filepath = '/{}/image/{}_{}.{}'.format(self.bucket_name, digest, str(resize_to), convert_image.get_ext_from_format(file_format))
         return filepath
 
     def _make_url_from_filepath(self, filepath):
@@ -594,7 +619,8 @@ class ScenarioBuilder(object):
             self.raise_error(u'画像ファイルの読み込みに失敗しました。ファイルサイズなどをご確認ください。: {} {}'.format(image_url, str(e)))
         if resp.status != 200:
             self.raise_error(u'画像ファイルが読み込めません: {}'.format(image_url))
-        file_digest = hashlib.md5(content).hexdigest()
+        image_format = convert_image.get_image_format(content)
+        file_digest = '{}_{}'.format(image_format, hashlib.md5(content).hexdigest())
 
         if not self.option_force and stat is not None and file_digest == stat[0]:
             # ダイジェストが一致しているので保存を省略する
@@ -651,7 +677,7 @@ class ScenarioBuilder(object):
 
         try:
             logging.info(u'save image file: {}'.format(filepath))
-            image_file = cloudstorage.open(filepath, 'w', content_type=image_format, options={'x-goog-acl': 'public-read'})
+            image_file = cloudstorage.open(filepath, 'w', content_type=convert_image.get_content_type_from_format(image_format), options={'x-goog-acl': 'public-read'})
             image_file.write(image_data)
             image_file.close()
         except (IOError, cloudstorage.Error) as e:
@@ -724,6 +750,13 @@ class Director(object):
         self.scenario = scenario
         self.base_scene = None
         self.context = context
+        self.vformat = string.Formatter().vformat
+        self.flag_label_error = False
+
+    def _get_scene(self, scene_title):
+        if scene_title in self.scenario.scenes:
+            return self.scenario.scenes[scene_title]
+        return None
 
     def _get_scene_or_default(self, scene_title):
         if scene_title in self.scenario.scenes:
@@ -737,6 +770,9 @@ class Director(object):
             return scene
 
     def search_index(self, scene, action):
+        if scene is None or action is None:
+            return None, None, None, None
+
         if action.startswith(u'*'):
             # シーンジャンプのアクションである
             m = re.match(r'^\*([^#]+)(#.*)?$', action)
@@ -745,15 +781,26 @@ class Director(object):
             scene_fullpath = m.group(1)
             action_tag = m.group(2)
             if scene_fullpath[0] == u'*' and scene_fullpath[1:] in BACK_JUMPS:
+                # 呼び出し元に戻る特殊なジャンプ
                 scene_fullpath = self.jump_back_scene()
                 if scene_fullpath is None:
-                    raise ValueError(u'cannot jump back')
-                self.base_scene = self._get_scene_or_default(scene_fullpath)
+                    logging.error(u'cannot jump back')
+                    return None, None, None, None
+                next_scene = self._get_scene(scene_fullpath)
+                if next_scene is None:
+                    self.flag_label_error = True
+                    return None, None, None, None
+                self.base_scene = next_scene
             else:
+                # 通常のシーンジャンプ
                 if u'/' not in scene_fullpath:
                     # フルパスにするために現在のシーンの tab_name を補完する
                     scene_fullpath = self.base_scene.tab_name + u'/' + scene_fullpath
-                self.base_scene = self._get_scene_or_default(scene_fullpath)
+                next_scene = self._get_scene(scene_fullpath)
+                if next_scene is None:
+                    self.flag_label_error = True
+                    return None, None, None, None
+                self.base_scene = next_scene
                 self.enter_new_scene(scene_fullpath)
 
             # このまま scene と action を読み替えて検索開始
@@ -768,6 +815,11 @@ class Director(object):
             result = self._search_index_sub(scene, block, action, [])
             if result[2] is not None:
                 return result[0], result[1], result[2], result[3]
+        
+        if action.startswith(u'#'):
+            # tag 指定の呼び出しだったのに見つからなかった
+            self.flag_label_error = True
+
         return None, None, None, None
 
     def _search_index_sub(self, scene, block, action, visited_scene):
@@ -811,17 +863,18 @@ class Director(object):
 
     def format_value(self, value, match):
         try:
-            result = value.format(*match, **self.context.status)
+            result = self.vformat(value, match, self.context.env)
         except (KeyError, IndexError), e:
-            logging.error('format error: ' + e.message)
+            print(self.context.env_dicts[0])
+            logging.error('format error: ' + str(e))
             result = value
         return result
 
     def format_values(self, arr, match):
         try:
-            result = [cell.format(*match, **self.context.status) for cell in arr]
+            result = [self.vformat(cell, match, self.context.env) for cell in arr]
         except (KeyError, IndexError), e:
-            logging.error('format error: ' + e.message)
+            logging.error('format error: ' + str(e))
             result = arr
         return result
 
@@ -832,8 +885,8 @@ class Director(object):
         self.context.status.push_scene_history(self.context.status.scene)
 
         self.context.status.scene = scene_title
-        self.context.status.create_visit_id()
-        # TODO: visit_id もスタックに積んでおいた方がいいのか考える
+        self.context.status.renew_action_token()
+        # TODO: action_token もスタックに積んでおいた方がいいのか考える
         #print u','.join(self.context.status.scene_history)
 
     def jump_back_scene(self):
@@ -841,7 +894,7 @@ class Director(object):
         if not scene_title:
             return None
         self.context.status.scene = scene_title
-        self.context.status.create_visit_id()
+        self.context.status.renew_action_token()
         #print u','.join(self.context.status.scene_history)
         return scene_title
 
@@ -917,11 +970,32 @@ class Director(object):
         if action is None:
             # 読み替えの結果 None になった
             return
-
+        
+        if 'action_token' in self.context.attrs:
+            action_token = self.context.attrs['action_token']
+            del self.context.attrs['action_token']
+            if action_token != self.context.status.action_token:
+                logging.info(u'action_token is not matched: {} != {}'.format(action_token, self.context.status.action_token))
+                return
+ 
         # 実行行の取得
         scene, block, n_lines, match = self.search_index(self.base_scene, action)
 
+        flag_error = False
         while True:
+            if scene is None and not flag_error:
+                # 実行すべきブロックの発見に失敗した
+                if self.flag_label_error:
+                    # ラベル指定があったのに見つけられなかった
+                    logging.warning(u"ラベルを見つけられませんでした: {} @ {}".format(action, self.base_scene))
+                    # ##error_invalid_label という特殊な action を発行する
+                    scene, block, n_lines, match = self.search_index(self.base_scene, u"##error_invalid_label")
+                else:
+                    # 通常の文字指定で対応するブロックがなかった
+                    # ##error_unhandled_action という特殊な action を発行する
+                    scene, block, n_lines, match = self.search_index(self.base_scene, u"##error_unhandled_action")
+                flag_error = True
+                
             new_context = self._plan_reaction_sub(scene, block, n_lines, match)
             if new_context is None:
                 # reaction に結果が入っている場合と、何もすることが見つけられなかった場合がある

@@ -7,7 +7,8 @@ SERVER_NAME = os.getenv('SERVER_NAME', '')
 OPTIONS = {
     'api_token': u'<<YOUR API TOKEN>>',
     'admins': [],
-    'reset_keyword': u'強制リセット'
+    'reset_keyword': u'強制リセット',
+    'timezone': 'Asia/Tokyo',
 }
 
 PLUGINS = {
@@ -22,6 +23,19 @@ PLUGINS = {
     #     'ignore_pattern': ur'^「',
     #     'please_push_more_button_label': u'##please_push_more_button',
     # },
+    # 'line.image_text': {
+    #     'more_message': u'「続きを読む」',
+    #     'more_image_url': 'https://example.com/more_button.png',
+    #     'frames': {
+    #         'default': {
+    #             'size_x': 2080,
+    #             'size_y': 2080,
+    #             'margin_x': 90,
+    #             'margin_y': 90,
+    #         }
+    #     },
+    # },
+    # 'render_text': {},
     'google_sheets': {},
     # 'twilio': {
     #     'twilio_sid': '<<TWILIO_SID>>',
@@ -35,6 +49,9 @@ PLUGINS = {
     #     'secret': '<<PUSHER_APP_SECRET>>',
     #     'cluster': '<<PUSHER_APP_CLUSTER>>',
     # }
+    # 'timestamp': {
+    #     'timezone': 'Asia/Tokyo'
+    # },
 }
 
 
@@ -43,6 +60,7 @@ if SERVER_NAME.endswith('<<project-name-prod>>.appspot.com'):
     BOTS = {
         'bot': {
             'name': 'My Bot',
+            'description': '<div class="alert" style="font-weidht: bold; color: red; background: #cc88cc">これは本番環境です。更新時はご注意ください。</div>',
             'interfaces': [{
                 'type': 'line',
                 'params': {
@@ -66,6 +84,7 @@ elif SERVER_NAME.endswith('<<project-name-dev>>.appspot.com'):
     BOTS = {
         'bot': {
             'name': 'My Bot',
+            'description': '<div class="alert" style="font-weidht: bold; color: white; background: #88cc88">これは開発環境です。</div>',
             'interfaces': [{
                 'type': 'line',
                 'params': {

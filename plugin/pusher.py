@@ -39,7 +39,7 @@ def load_plugin(params):
     builder = commands.Default_Builder()
     runtime = PusherPlugin_Runtime(params)
     commands.register_command(commands.CommandEntry(
-        command=PUSHER_CMDS,
+        names=PUSHER_CMDS,
         options='raw raw raw',
         builder=builder,
         runtime=runtime,

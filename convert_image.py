@@ -4,10 +4,36 @@ from PIL import Image
 
 DEFAULT_FORMAT = 'PNG'
 
-FORMATS = {
+CONTENT_TYPES = {
     'PNG': 'image/png',
     'JPEG': 'image/jpeg',
 }
+
+EXT_NAMES = {
+    'PNG': 'png',
+    'JPEG': 'jpg',
+}
+
+
+def get_content_type_from_format(format):
+    return CONTENT_TYPES[format]
+
+
+def get_ext_from_format(format):
+    return EXT_NAMES[format]
+
+
+def get_image_format(content):
+    data = StringIO(content)
+    try:
+        image = Image.open(data)
+    except (IOError, SyntaxError, ValueError):
+        data.close()
+        return None, None
+    image_format = image.format or DEFAULT_FORMAT
+    if image_format not in CONTENT_TYPES:
+        image_format = DEFAULT_FORMAT
+    return image_format
 
 
 def resize_image(content, resize_to, force_fit_width=False, never_stretch=False):
@@ -22,7 +48,7 @@ def resize_image(content, resize_to, force_fit_width=False, never_stretch=False)
         data.close()
         return None, None
     image_format = image.format or DEFAULT_FORMAT
-    if image_format not in FORMATS:
+    if image_format not in CONTENT_TYPES:
         image_format = DEFAULT_FORMAT
 
     size_x = image.size[0]
@@ -51,10 +77,15 @@ def resize_image(content, resize_to, force_fit_width=False, never_stretch=False)
             image = image.resize((resize_x, resize_y))
         else:
             # 縮小する場合は ANTIALIAS を使った方が高品質
+            #image = image.resize((resize_x, resize_y), resample=Image.ANTIALIAS)
             image.thumbnail((resize_x, resize_y), Image.ANTIALIAS)
 
     output = StringIO()
-    image.save(output, image_format)
+    if image_format == 'JPEG':
+        #image.save(output, image_format, quality=80, optimize=True, progressive=True)
+        image.save(output, image_format, quality=90)
+    else:
+        image.save(output, image_format)
     output_buffer = output.getvalue()
     output.close()
 
@@ -62,7 +93,7 @@ def resize_image(content, resize_to, force_fit_width=False, never_stretch=False)
     height = image.size[1]
     del image
     data.close()
-    return output_buffer, FORMATS[image_format], (width, height)
+    return output_buffer, image_format, (width, height)
 
 
 def calc_size(content):

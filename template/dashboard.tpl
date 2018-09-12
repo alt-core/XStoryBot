@@ -59,6 +59,13 @@
             </ul>
         </header>
 
+        % if bot_settings[name].has_key("description"):
+        <div class="row">
+            <div class="col">
+                {{!bot_settings[name]["description"]}}
+            </div>
+        </div>
+        % end
         <div class="row">
             <div class="col">
                 <h3>シナリオ修正の反映</h3>

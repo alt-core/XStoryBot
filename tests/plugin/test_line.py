@@ -33,15 +33,20 @@ BOT_SETTINGS = {
 
     'PLUGINS': {
         'line': {
-            'alt_text': u'LINEアプリで確認してください。'
+            'alt_text': u'LINEアプリで確認してください。',
+            'allow_special_action_text_for_debug': True,
         },
         'line.more': {
             'command': [u'▽'],
             'image_url': 'https://www.google.co.jp/images/branding/googlelogo/2x/googlelogo_color_272x92dp.png',
             'message': u'「続きを読む」',
             'action_pattern': ur'^「続きを読む」$',
-            'ignore_pattern': ur'^「',
+            'ignore_pattern': ur'^「|^リセット$',
             'please_push_more_button_label': u'##please_push_more_button',
+        },
+        'line.image_text': {
+            'more_message': u'「続きを読む」',
+            'more_image_url': 'https://www.google.co.jp/images/branding/googlelogo/2x/googlelogo_color_272x92dp.png',
         },
         'google_sheets': {},
     },
@@ -274,7 +279,10 @@ class LineTestCase(LinePluginTestCaseBase):
             [u'imagemap', u'@imagemap', u'=IMAGE("https://www.google.co.jp/images/branding/googlelogo/2x/googlelogo_color_272x92dp.png")'],
             [u'', u'', u'0,0,1040,1040', u'イメージマップアクション１'],
             [u'', u'', u'100,200,300,400', u'http://example.com/imagemap_action'],
-            [u'##follow', u'フォローしました。', u''],
+            [u'##line.follow', u'follow', u''],
+            [u'##line.unfollow', u'unfollow', u''],
+            [u'##line.join', u'join', u''],
+            [u'##line.leave', u'leave', u''],
             [u'', u'', u''],
             [u'', u'', u''],
             [u'/(.*)/', u'{0}'],
@@ -298,8 +306,8 @@ class LineTestCase(LinePluginTestCaseBase):
         self.assertEqual(self.bot.messages[0].text, u"before jump")
         self.assertEqual(self.bot.messages[1].text, u"jumped")
         self.send_message(u'image')
-        self.assertEqual(self.bot.messages[0].original_content_url, u"https://storage.googleapis.com/app_default_bucket/image/80fa4bcab0351fdccb69c66fb55dcd00_1024")
-        self.assertEqual(self.bot.messages[0].preview_image_url, u"https://storage.googleapis.com/app_default_bucket/image/80fa4bcab0351fdccb69c66fb55dcd00_240")
+        self.assertEqual(self.bot.messages[0].original_content_url, u"https://storage.googleapis.com/app_default_bucket/image/80fa4bcab0351fdccb69c66fb55dcd00_1024.png")
+        self.assertEqual(self.bot.messages[0].preview_image_url, u"https://storage.googleapis.com/app_default_bucket/image/80fa4bcab0351fdccb69c66fb55dcd00_240.png")
         self.send_message(u'confirm')
         self.assertEqual(len(self.bot.messages), 1)
         self.assertEqual(self.bot.messages[0].template.text, u"Ｃｏｎｆｉｒｍの説明文")
@@ -370,7 +378,7 @@ class LineTestCase(LinePluginTestCaseBase):
         self.assertEqual(self.bot.messages[0].template.columns[0].actions[0].data.split(u'@@')[0], u"#label1")
         self.send_message(u'imagemap')
         self.assertEqual(len(self.bot.messages), 1)
-        self.assertEqual(self.bot.messages[0].base_url, u"https://storage.googleapis.com/app_default_bucket/imagemap/80fa4bcab0351fdccb69c66fb55dcd00")
+        self.assertEqual(self.bot.messages[0].base_url, u"https://storage.googleapis.com/app_default_bucket/imagemap/80fa4bcab0351fdccb69c66fb55dcd00.png")
         self.assertEqual(len(self.bot.messages[0].actions), 2)
         self.assertEqual(self.bot.messages[0].actions[0].text, u'イメージマップアクション１')
         self.assertEqual(self.bot.messages[0].actions[1].link_uri, u'http://example.com/imagemap_action')
@@ -380,7 +388,14 @@ class LineTestCase(LinePluginTestCaseBase):
         self.assertEqual(self.bot.messages[0].actions[1].area.height, 400)
         self.send_event(u'follow')
         self.assertEqual(len(self.bot.messages), 1)
-        self.assertEqual(self.bot.messages[0].text, u"フォローしました。")
+        self.assertEqual(self.bot.messages[0].text, u"follow")
+        self.send_event(u'unfollow')
+        self.assertEqual(len(self.bot.messages), 0)
+        self.send_event(u'join')
+        self.assertEqual(len(self.bot.messages), 1)
+        self.assertEqual(self.bot.messages[0].text, u"join")
+        self.send_event(u'leave')
+        self.assertEqual(len(self.bot.messages), 0)
 
     def test_scenario_build_with_skip_image_option(self):
         self.test_bot.scenario = ScenarioBuilder.build_from_table([
@@ -432,8 +447,8 @@ class LineTestCase(LinePluginTestCaseBase):
         ], options={'skip_image': True})
         self.send_reset()
         self.send_message(u'image')
-        self.assertEqual(self.bot.messages[0].original_content_url, u"https://storage.googleapis.com/app_default_bucket/image/80fa4bcab0351fdccb69c66fb55dcd00_1024")
-        self.assertEqual(self.bot.messages[0].preview_image_url, u"https://storage.googleapis.com/app_default_bucket/image/80fa4bcab0351fdccb69c66fb55dcd00_240")
+        self.assertEqual(self.bot.messages[0].original_content_url, u"https://storage.googleapis.com/app_default_bucket/image/80fa4bcab0351fdccb69c66fb55dcd00_1024.png")
+        self.assertEqual(self.bot.messages[0].preview_image_url, u"https://storage.googleapis.com/app_default_bucket/image/80fa4bcab0351fdccb69c66fb55dcd00_240.png")
         self.send_message(u'confirm')
         self.assertEqual(len(self.bot.messages), 1)
         self.assertEqual(self.bot.messages[0].template.text, u"Ｃｏｎｆｉｒｍの説明文")
@@ -483,7 +498,7 @@ class LineTestCase(LinePluginTestCaseBase):
         self.assertEqual(self.bot.messages[0].template.columns[0].actions[0].data.split(u'@@')[0], u"#label1")
         self.send_message(u'imagemap')
         self.assertEqual(len(self.bot.messages), 1)
-        self.assertEqual(self.bot.messages[0].base_url, u"https://storage.googleapis.com/app_default_bucket/imagemap/80fa4bcab0351fdccb69c66fb55dcd00")
+        self.assertEqual(self.bot.messages[0].base_url, u"https://storage.googleapis.com/app_default_bucket/imagemap/80fa4bcab0351fdccb69c66fb55dcd00.png")
         self.assertEqual(len(self.bot.messages[0].actions), 2)
         self.assertEqual(self.bot.messages[0].actions[0].text, u'イメージマップアクション１')
         self.assertEqual(self.bot.messages[0].actions[1].link_uri, u'http://example.com/imagemap_action')
@@ -494,6 +509,7 @@ class LineTestCase(LinePluginTestCaseBase):
 
     def test_button_and_next_button(self):
         self.test_bot.scenario = ScenarioBuilder.build_from_table([
+            [u'##please_push_more_button', u'先に続きを読んでください'],
             [u'next_button'],
             [u'', u'「メッセージ１」'],
             [u'', u'「メッセージ２」'],
@@ -505,6 +521,8 @@ class LineTestCase(LinePluginTestCaseBase):
             [u'', u'「メッセージ４」'],
             [u'', u'「メッセージ５」'],
             [u'', u'「メッセージ６」'],
+            [u'リセット', u'@clear_next_label'],
+            [u'', u'「メッセージ７」'],
         ])
         self.send_reset()
         self.send_message(u'next_button')
@@ -520,12 +538,33 @@ class LineTestCase(LinePluginTestCaseBase):
         self.assertEqual(self.bot.messages[0].text, u"「メッセージ３」")
         next_button = self.bot.messages[1].actions[0].text
         self.send_message(button_message)
-        self.assertEqual(len(self.bot.messages), 0)
+        self.assertEqual(len(self.bot.messages), 1)
+        self.assertEqual(self.bot.messages[0].text, u"先に続きを読んでください")
         self.send_message(next_button)
         self.assertEqual(len(self.bot.messages), 3)
         self.assertEqual(self.bot.messages[0].text, u"「メッセージ４」")
         self.assertEqual(self.bot.messages[1].text, u"「メッセージ５」")
         self.assertEqual(self.bot.messages[2].text, u"「メッセージ６」")
+        self.send_message(u'next_button')
+        self.assertEqual(len(self.bot.messages), 3)
+        self.assertEqual(self.bot.messages[0].text, u"「メッセージ１」")
+        self.assertEqual(self.bot.messages[1].text, u"「メッセージ２」")
+        self.send_message(u'next_button')
+        self.assertEqual(len(self.bot.messages), 1)
+        self.assertEqual(self.bot.messages[0].text, u"先に続きを読んでください")
+        self.send_message(u'リセット')
+        self.assertEqual(len(self.bot.messages), 1)
+        self.assertEqual(self.bot.messages[0].text, u"「メッセージ７」")
+        self.send_message(u'next_button')
+        self.assertEqual(len(self.bot.messages), 3)
+        self.assertEqual(self.bot.messages[0].text, u"「メッセージ１」")
+        self.assertEqual(self.bot.messages[1].text, u"「メッセージ２」")
+        self.send_message(u'next_button')
+        self.assertEqual(len(self.bot.messages), 1)
+        self.assertEqual(self.bot.messages[0].text, u"先に続きを読んでください")
+        self.send_message(u'リセット')
+        self.assertEqual(len(self.bot.messages), 1)
+        self.assertEqual(self.bot.messages[0].text, u"「メッセージ７」")
 
     def test_scene_labels(self):
         self.test_bot.scenario = ScenarioBuilder.build_from_tables([
@@ -564,9 +603,9 @@ class LineTestCase(LinePluginTestCaseBase):
         self.send_postback(data)
         self.assertEqual(len(self.bot.messages), 1)
         self.assertEqual(self.bot.messages[0].text, u"1")
-        # visit_id のテストを一時的に削除
-#        self.send_postback(data)
-#        self.assertEqual(len(self.bot.messages), 0)
+        # action_token により実行が無効化される
+        self.send_postback(data)
+        self.assertEqual(len(self.bot.messages), 0)
 
     def test_anonymous_label_and_seq(self):
         self.test_bot.scenario = ScenarioBuilder.build_from_tables([
@@ -766,6 +805,29 @@ class LineTestCase(LinePluginTestCaseBase):
         self.send_api_send(u'all', u'from_api')
         self.assertEqual(len(self.bot.messages), 0)
 
+    def test_image_text(self):
+        self.test_bot.scenario = ScenarioBuilder.build_from_tables([
+            (u'default', [
+                [u'imagetext', u'@imagetext', u"あ/b\nｃ"],
+                [u'long_imagetext', u'@imagetext',
+                 u"０１２３４５６７８９０１２３４５６７８９０１２３４５６７８９０１２３４５６７８９０１２３４５６７８９０１２３４５６７８９０１２３４５６７８９０１２３４５６７８９０１２３４５６７８９０１２３４５６７８９"
+                 + u"０１２３４５６７８９０１２３４５６７８９０１２３４５６７８９０１２３４５６７８９０１２３４５６７８９０１２３４５６７８９０１２３４５６７８９０１２３４５６７８９０１２３４５６７８９０１２３４５６７８９"
+                 + u"０１２３４５６７８９０１２３４５６７８９０１２３４５６７８９０１２３４５６７８９０１２３４５６７８９０１２３４５６７８９０１２３４５６７８９０１２３４５６７８９０１２３４５６７８９０１２３４５６７８９"
+                 + u"０１２３４５６７８９０１２３４５６７８９０１２３４５６７８９０１２３４５６７８９０１２３４５６７８９０１２３４５６７８９０１２３４５６７８９０１２３４５６７８９０１２３４５６７８９０１２３４５６７８９"
+                 ],
+            ]),
+        ])
+        self.send_reset()
+        self.send_message(u'imagetext')
+        self.assertEqual(len(self.bot.messages), 1)
+#        self.assertEqual(self.bot.messages[0].base_url, u"https://testbed.example.com/line/image/https%3A%2F%2Fstorage.googleapis.com%2Fapp_default_bucket%2Fimagetext%2Ff8a64e127730444bfc3b53b21de8bae0.png")
+        self.send_message(u'long_imagetext')
+        self.assertEqual(len(self.bot.messages), 2)
+#        self.assertEqual(self.bot.messages[0].base_url, u"https://testbed.example.com/line/image/https%3A%2F%2Fstorage.googleapis.com%2Fapp_default_bucket%2Fimagetext%2Fa987d0bad7daa220ecd9c5b942165099.png")
+        self.send_message(self.bot.messages[1].actions[0].text)
+        self.assertEqual(len(self.bot.messages), 1)
+#        self.assertEqual(self.bot.messages[0].base_url, u"https://testbed.example.com/line/image/https%3A%2F%2Fstorage.googleapis.com%2Fapp_default_bucket%2Fimagetext%2Fe785e8fa3b6b59748ddd377d2f41e7dd.png")
+
     def try_lint(self, table):
         try:
             ScenarioBuilder.build_from_table(table)
@@ -774,6 +836,13 @@ class LineTestCase(LinePluginTestCaseBase):
             return unicode(e)
 
     def test_lint1(self):
+        self.assertIsNone(self.try_lint([
+            [u'test', u'1'],
+            [u'', u'2'],
+            [u'', u'3'],
+            [u'', u'4'],
+            [u'', u'5'],
+        ]))
         self.assertIsNotNone(self.try_lint([
             [u'test', u'1'],
             [u'', u'2'],

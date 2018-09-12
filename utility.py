@@ -20,8 +20,28 @@ def safe_list_get(li, index, default_value):
     return li[index] if len(li) > index else default_value
 
 
-def append_visit_id(data, visit_id):
-    return data + u'@@' + visit_id
+def encode_action_string(action, action_token):
+    return action + u'@@' + action_token
+
+
+def decode_action_string(data):
+    arr = data.split(u'@@', 1)
+    action = arr[0]
+    attrs = {}
+    if len(arr) > 1:
+        attrs['action_token'] = arr[1]
+    return action, attrs
+
+
+def is_special_action(action):
+    return re.match(ur'^[*＊#＃]', action)
+
+
+def sanitize_action(action):
+    if is_special_action(action):
+        # 先頭にスペースを詰めてサニタイズ
+        return u" " + action
+    return action
 
 
 def remove_tail_empty_cells(row):
@@ -36,6 +56,14 @@ def merge_params(dic1, dic2):
     dic = dic1.copy()
     dic.update(dic2)
     return dic
+
+
+def extract_params(dic, names):
+    params = {}
+    for name in names:
+        if dic.has_key(name):
+            params[name] = dic[name]
+    return params
 
 
 def table_to_str(values):
@@ -66,3 +94,21 @@ def to_str(str_or_unicode):
     if not isinstance(str_or_unicode, unicode):
         str_or_unicode = unicode(str_or_unicode)
     return str_or_unicode.encode('utf-8')
+
+
+class CascadingDictionary(dict):
+    def __init__(self, *dicts):
+        self.dicts = dicts
+    
+    def __getitem__(self, key):
+        for d in self.dicts:
+            if d.has_key(key):
+                return d[key]
+        raise KeyError
+    
+    def __contains__(self, key):
+        for d in self.dicts:
+            if d.has_key(key):
+                return True
+        return False
+    

@@ -4,18 +4,37 @@ from models import PlayerStatusDB
 
 
 class ActionContext(object):
-    def __init__(self, bot_name, service_name, interface, user, action):
+    class RuntimeEnvironment(dict):
+        def __init__(self, context):
+            self.context = context
+        
+        def __getitem__(self, key):
+            for d in self.context.env_dicts:
+                if d.has_key(key):
+                    return d[key]
+            return self.context.status[key]
+        
+        def __contains__(self, key):
+            for d in self.context.env_dicts:
+                if d.has_key(key):
+                    return True
+            return self.context.has_key(key)
+
+    def __init__(self, bot_name, service_name, interface, user, action, attrs):
         self.bot_name = bot_name
         self.service_name = service_name
         self.user = user
         self.action = action
         self.current_action = action
+        self.attrs = attrs
         self.interfaces = {}
         self.status = None
+        self.env_dicts = []
         self.reactions = None # interface に中立なフォーマット
         self.response = None # interface 毎に異なるフォーマット
         if service_name is not None and interface is not None:
             self.add_interface(service_name, interface)
+        self.env = ActionContext.RuntimeEnvironment(self)
 
     def add_interface(self, service_name, interface):
         self.interfaces[service_name] = interface
@@ -35,3 +54,7 @@ class ActionContext(object):
         if options:
             row.extend(options)
         self.reactions.append((row, children))
+
+    def add_env(self, env):
+        if env not in self.env_dicts:
+            self.env_dicts.append(env)
