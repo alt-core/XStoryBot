@@ -27,9 +27,9 @@ class BotRuntime(object):
     def get_interface(self, service_name):
         return self.interfaces.get(service_name, None)
 
-    def build_scenario(self, options=None):
+    def build_scenario(self, options=None, version=1):
         try:
-            self.scenario = ScenarioBuilder.build_from_tables(self.scenario_loader.load_scenario(), options=options)
+            self.scenario = ScenarioBuilder.build_from_tables(self.scenario_loader.load_scenario(), options=options, version=version)
             self.scenario_uri = self.scenario.save_to_storage()
             global_bot_variables = GlobalBotVariables.get_by_id(id=self.name)
             if global_bot_variables is None:
@@ -69,8 +69,8 @@ class BotRuntime(object):
                 return False, err
 
     def handle_action(self, context):
-        self.check_reload()
         context.reactions = []
+        context.version = self.scenario.version
 
         context.add_env(commands.get_runtime_object_dictionary(context.service_name, context))
         context.load_status()
@@ -79,4 +79,5 @@ class BotRuntime(object):
         context.save_status()
 
         interface = self.get_interface(context.service_name)
-        return interface.respond_reaction(context, context.reactions)
+        result = interface.respond_reaction(context, context.reactions)
+        return result

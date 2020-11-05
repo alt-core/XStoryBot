@@ -2,6 +2,10 @@
 from __future__ import absolute_import
 import unittest
 from pprint import pprint
+import urllib
+#import sys
+#reload(sys)
+#sys.setdefaultencoding('utf-8')
 
 from webtest import TestApp
 import logging
@@ -139,7 +143,7 @@ class BotTestCaseBase(unittest.TestCase):
         logging.disable(logging.NOTSET)
 
     def send_action_to(self, bot_name, user_id, action):
-        res = self.app.get(('/api/v1/bots/'+bot_name+'/action?user='+user_id+'&action='+action+'&token='+auth.api_token).encode('utf-8'))
+        res = self.app.get(('/api/v1/bots/'+bot_name+'/action?user='+user_id+'&action='+urllib.quote(action.encode('utf-8'))+'&token='+auth.api_token).encode('utf-8'))
         self.assertEqual(res.status, "200 OK")
         self.assertEqual(res.headers["Content-Type"], u"text/plain; charset=UTF-8")
         res_json = json.loads(res.text)
@@ -151,7 +155,7 @@ class BotTestCaseBase(unittest.TestCase):
 
     def send_message(self, action):
         return self.send_action_to('testbot', 'plaintext:0001', action).split(u"\n")
-    
+
     def send_group_message(self, group_id, action):
         return self.send_action_to('testbot', 'group:'+group_id, action)
 
@@ -177,7 +181,7 @@ class MainTestCase(BotTestCaseBase):
             [u'', u'', u''],
             [u'', u'', u''],
             [u'/(.*)/', u'{0}'],
-        ], options={'force': True})
+        ], options={'force': True}, version=1)
         self.send_reset()
         self.send_message(u'test')
         self.assertEqual(len(self.messages), 2)
@@ -196,6 +200,99 @@ class MainTestCase(BotTestCaseBase):
         self.assertEqual(len(self.messages), 2)
         self.assertEqual(self.messages[0], u"before jump")
         self.assertEqual(self.messages[1], u"jumped")
+
+    def test_scenario_v2(self):
+        self.test_bot.scenario = ScenarioBuilder.build_from_table([
+            [u'test', u'てすと'],
+            [u'', u'てすと？'],
+            [u'CAPItal', u'capital'],
+            [u'ＺＥＮKAKu', u'zenkaku'],
+            [u'word', u'word'],
+            [u'/^regex$/NL', u'regex'],
+            [u'/ignorecase/i', u'ignorecase'],
+            [u'ABC&HIJ', u'abcdefghij'],
+            [u'(123|890)&(opq|stu|xyz)', u'opqrstuvwxyz'],
+            [u' (　あ　｜　い　｜　う　)　＆　（α|β） & ！', u'mix'],
+            [ur'\(\|\&\\\)', u'escape'],
+            [ur'\（\｜\＆￥\）', u'escapezen'],
+            [u'(/[あいう]/＆（　/α/ | /β/　）)&?', u'regexmix'],
+            [u'(/ab/|/a(.)c/|/d/)&(/(123)/|/4(5)6/)', u'capture:{0}/{1}/{2}'],
+            [u'//', u'not found'],
+        ], options={'force': True}, version=2)
+        self.send_reset()
+        self.send_message(u'test')
+        self.assertEqual(len(self.messages), 2)
+        self.assertEqual(self.messages[0], u"てすと")
+        self.assertEqual(self.messages[1], u"てすと？")
+        self.send_message(u'capITAL')
+        self.assertEqual(len(self.messages), 1)
+        self.assertEqual(self.messages[0], u"capital")
+        self.send_message(u'zENKＡＫＵ')
+        self.assertEqual(len(self.messages), 1)
+        self.assertEqual(self.messages[0], u"zenkaku")
+        self.send_message(u'partialwords')
+        self.assertEqual(len(self.messages), 1)
+        self.assertEqual(self.messages[0], u"word")
+        self.send_message(u'abc')
+        self.assertEqual(len(self.messages), 1)
+        self.assertEqual(self.messages[0], u"not found")
+        self.send_message(u'ReＧｅx')
+        self.assertEqual(len(self.messages), 1)
+        self.assertEqual(self.messages[0], u"regex")
+        self.send_message(u' regex')
+        self.assertEqual(len(self.messages), 1)
+        self.assertEqual(self.messages[0], u"not found")
+        self.send_message(u'regex ')
+        self.assertEqual(len(self.messages), 1)
+        self.assertEqual(self.messages[0], u"not found")
+        self.send_message(u'xxIgnoreCasexx')
+        self.assertEqual(len(self.messages), 1)
+        self.assertEqual(self.messages[0], u"ignorecase")
+        self.send_message(u'abcdefghij')
+        self.assertEqual(len(self.messages), 1)
+        self.assertEqual(self.messages[0], u"abcdefghij")
+        self.send_message(u'hijabc')
+        self.assertEqual(len(self.messages), 1)
+        self.assertEqual(self.messages[0], u"abcdefghij")
+        self.send_message(u'123')
+        self.assertEqual(len(self.messages), 1)
+        self.assertEqual(self.messages[0], u"not found")
+        self.send_message(u'xyz')
+        self.assertEqual(len(self.messages), 1)
+        self.assertEqual(self.messages[0], u"not found")
+        self.send_message(u'123xyz')
+        self.assertEqual(len(self.messages), 1)
+        self.assertEqual(self.messages[0], u"opqrstuvwxyz")
+        self.send_message(u'opqr890')
+        self.assertEqual(len(self.messages), 1)
+        self.assertEqual(self.messages[0], u"opqrstuvwxyz")
+        self.send_message(u'あいβγ!?')
+        self.assertEqual(len(self.messages), 1)
+        self.assertEqual(self.messages[0], u"mix")
+        self.send_message(u'無関係α！うくすつぬ')
+        self.assertEqual(len(self.messages), 1)
+        self.assertEqual(self.messages[0], u"mix")
+        self.send_message(u'ぁα!')
+        self.assertEqual(len(self.messages), 1)
+        self.assertEqual(self.messages[0], u"not found")
+        self.send_message(u'アα!')
+        self.assertEqual(len(self.messages), 1)
+        self.assertEqual(self.messages[0], u"not found")
+        self.send_message(ur'(|&\)')
+        self.assertEqual(len(self.messages), 1)
+        self.assertEqual(self.messages[0], u"escape")
+        self.send_message(ur'（｜＆￥）')
+        self.assertEqual(len(self.messages), 1)
+        self.assertEqual(self.messages[0], u"escapezen")
+        self.send_message(u'あいβγ?')
+        self.assertEqual(len(self.messages), 1)
+        self.assertEqual(self.messages[0], u"regexmix")
+        self.send_message(u'無関係α？うくすつぬ')
+        self.assertEqual(len(self.messages), 1)
+        self.assertEqual(self.messages[0], u"regexmix")
+        self.send_message(u'123456abcdef')
+        self.assertEqual(len(self.messages), 1)
+        self.assertEqual(self.messages[0], u"capture:abc123/b/123")
 
     def test_scene_labels(self):
         self.test_bot.scenario = ScenarioBuilder.build_from_tables([
@@ -740,11 +837,11 @@ class MainTestCase(BotTestCaseBase):
         self.assertEqual(len(self.messages), 1)
         self.assertEqual(self.messages[0], u"iNL:test:inl_123")
 
-    def test_set(self):
+    def test_set_v1(self):
         self.test_bot.scenario = ScenarioBuilder.build_from_table([
             [u'/^(on|ｏｎ|off|ｏｆｆ)$/N', u'@set', u'$flag', u'{1}'],
             [u'', u'コマンド＝{1}, フラグ＝{$flag}'],
-            [u'[$ｆｌａｇ!=on]フラグ確認', u'フラグOFF'],
+            [u'［$ｆｌａｇ!=on]フラグ確認', u'フラグOFF'],
             [u'[$flag==on]フラグ確認', u'フラグON'],
             [u'フラグリセット', u'@reset'],
             [u'フラグ2オン', u'@set', u'$フラグ2', u'on'],
@@ -753,7 +850,7 @@ class MainTestCase(BotTestCaseBase):
             [u'条件分岐', u'@if', u'$flag==on', u'##1', u'##2'],
             [u'##', u'真'],
             [u'##', u'偽'],
-        ])
+        ], version=1)
         self.send_reset()
         self.send_message(u'フラグ確認')
         self.assertEqual(len(self.messages), 1)
@@ -782,6 +879,355 @@ class MainTestCase(BotTestCaseBase):
         self.send_message(u'複合フラグ確認')
         self.assertEqual(len(self.messages), 1)
         self.assertEqual(self.messages[0], u"ON and OFF")
+
+    def test_set_v2(self):
+        self.test_bot.scenario = ScenarioBuilder.build_from_table([
+            [u'/^(on|ｏｎ|off|ｏｆｆ)$/N', u'@set', u'$flag', u'$1'],
+            [u'', u'コマンド＝{1}, フラグ＝{$flag}'],
+            [u'[$flag!="on"]単独フラグ確認', u'フラグOFF'],
+            [u'[$flag=="on"]単独フラグ確認', u'フラグON'],
+            [u'フラグリセット', u'@reset'],
+            [u'フラグ2オン', u'@set', u'$flag2', u'ON'],
+            [u'フラグ2オフ', u'@set', u'$flag2', u'OFF'],
+            [u'［$flag=="off"&&$flag2］複合フラグ確認', u'ON and OFF'],
+            [u'［$flag!="off"||$flag2!=OFF］ORフラグ確認', u'ON or ON'],
+            [u'［!($flag=="off")&&!($flag2==OFF)］NOTフラグ確認', u'ON and ON'],
+            [u'フラグ1条件分岐', u'@if', u'$flag=="on"', u'##1', u'##2'],
+            [u'##', u'真'],
+            [u'##', u'偽'],
+            [u'フラグ2条件分岐', u'@if', u'$flag2', u'##1', u'##2'],
+            [u'##', u'2真'],
+            [u'##', u'2偽'],
+            [u'フラグ2NOT条件分岐', u'@if', u'!$flag2', u'##1', u'##2'],
+            [u'##', u'2N真'],
+            [u'##', u'2N偽'],
+            [u'フラグ和確認', u'@set', u'$$tmp', u'($flag=="on")+$flag2+($flag!="off")'],
+            [u'', u'和＝{$$tmp}'],
+        ], version=2)
+        self.send_reset()
+        self.send_message(u'単独フラグ確認')
+        self.assertEqual(len(self.messages), 1)
+        self.assertEqual(self.messages[0], u"フラグOFF")
+        self.send_message(u'ｏｎ')
+        self.assertEqual(len(self.messages), 1)
+        self.assertEqual(self.messages[0], u"コマンド＝on, フラグ＝on")
+        self.send_message(u'単独フラグ確認')
+        self.assertEqual(len(self.messages), 1)
+        self.assertEqual(self.messages[0], u"フラグON")
+        self.send_message(u'フラグ1条件分岐')
+        self.assertEqual(len(self.messages), 1)
+        self.assertEqual(self.messages[0], u"真")
+        self.send_message(u'ｏｆｆ')
+        self.assertEqual(len(self.messages), 1)
+        self.assertEqual(self.messages[0], u"コマンド＝off, フラグ＝off")
+        self.send_message(u'単独フラグ確認')
+        self.assertEqual(len(self.messages), 1)
+        self.assertEqual(self.messages[0], u"フラグOFF")
+        self.send_message(u'フラグ1条件分岐')
+        self.assertEqual(len(self.messages), 1)
+        self.assertEqual(self.messages[0], u"偽")
+        self.send_message(u'複合フラグ確認')
+        self.assertEqual(len(self.messages), 0)
+        self.send_message(u'フラグ2条件分岐')
+        self.assertEqual(len(self.messages), 1)
+        self.assertEqual(self.messages[0], u"2偽")
+        self.send_message(u'フラグ2NOT条件分岐')
+        self.assertEqual(len(self.messages), 1)
+        self.assertEqual(self.messages[0], u"2N真")
+        self.send_message(u'フラグ和確認')
+        self.assertEqual(len(self.messages), 1)
+        self.assertEqual(self.messages[0], u"和＝0")
+        self.send_message(u'フラグ2オン')
+        self.send_message(u'フラグ2条件分岐')
+        self.assertEqual(len(self.messages), 1)
+        self.assertEqual(self.messages[0], u"2真")
+        self.send_message(u'フラグ2NOT条件分岐')
+        self.assertEqual(len(self.messages), 1)
+        self.assertEqual(self.messages[0], u"2N偽")
+        self.send_message(u'フラグ和確認')
+        self.assertEqual(len(self.messages), 1)
+        self.assertEqual(self.messages[0], u"和＝1")
+        self.send_message(u'複合フラグ確認')
+        self.assertEqual(len(self.messages), 1)
+        self.assertEqual(self.messages[0], u"ON and OFF")
+        self.send_message(u'ORフラグ確認')
+        self.assertEqual(len(self.messages), 1)
+        self.assertEqual(self.messages[0], u"ON or ON")
+        self.send_message(u'NOTフラグ確認')
+        self.assertEqual(len(self.messages), 0)
+        self.send_message(u'on')
+        self.send_message(u'ORフラグ確認')
+        self.assertEqual(len(self.messages), 1)
+        self.assertEqual(self.messages[0], u"ON or ON")
+        self.send_message(u'NOTフラグ確認')
+        self.assertEqual(len(self.messages), 1)
+        self.assertEqual(self.messages[0], u"ON and ON")
+        self.send_message(u'フラグ和確認')
+        self.assertEqual(len(self.messages), 1)
+        self.assertEqual(self.messages[0], u"和＝3")
+        self.send_message(u'フラグ2オフ')
+        self.send_message(u'フラグ2条件分岐')
+        self.assertEqual(len(self.messages), 1)
+        self.assertEqual(self.messages[0], u"2偽")
+        self.send_message(u'フラグ2NOT条件分岐')
+        self.assertEqual(len(self.messages), 1)
+        self.assertEqual(self.messages[0], u"2N真")
+        self.send_message(u'ORフラグ確認')
+        self.assertEqual(len(self.messages), 1)
+        self.assertEqual(self.messages[0], u"ON or ON")
+        self.send_message(u'NOTフラグ確認')
+        self.assertEqual(len(self.messages), 0)
+        self.send_message(u'フラグ和確認')
+        self.assertEqual(len(self.messages), 1)
+        self.assertEqual(self.messages[0], u"和＝2")
+        self.send_message(u'off')
+        self.send_message(u'ORフラグ確認')
+        self.assertEqual(len(self.messages), 0)
+        self.send_message(u'NOTフラグ確認')
+        self.assertEqual(len(self.messages), 0)
+        self.send_message(u'フラグ和確認')
+        self.assertEqual(len(self.messages), 1)
+        self.assertEqual(self.messages[0], u"和＝0")
+        self.send_message(u'on')
+        self.send_message(u'ORフラグ確認')
+        self.assertEqual(len(self.messages), 1)
+        self.assertEqual(self.messages[0], u"ON or ON")
+        self.send_message(u'NOTフラグ確認')
+        self.assertEqual(len(self.messages), 0)
+        self.send_message(u'フラグ和確認')
+        self.assertEqual(len(self.messages), 1)
+        self.assertEqual(self.messages[0], u"和＝2")
+
+    def test_expression_v2(self):
+        self.test_bot.scenario = ScenarioBuilder.build_from_table([
+            [u'/^on$/', u'@set', u'$$F1', u'on'],
+            [u'/^off$/', u'@set', u'$$F1', u'off'],
+            [u'/^ON$/', u'@set', u'$$F2', u'ON'],
+            [u'/^OFF$/', u'@set', u'$$F2', u'OFF'],
+            [u'/^true$/', u'@set', u'$$F3', u'true'],
+            [u'/^false$/', u'@set', u'$$F3', u'false'],
+            [u'/^TRUE$/', u'@set', u'$$F4', u'TRUE'],
+            [u'/^FALSE$/', u'@set', u'$$F4', u'FALSE'],
+            [u'/^\d+$/', u'@set', u'$$number_1', u'+$0'],
+            [u'/^N2=(\d+)$/', u'@set', u'$$number_2', u'+$1'],
+            [u'/^(N3)(=)(\d+)$/', u'@set', u'$$number_3', u'+$3'],
+            [u'/^S1=(.*)$/', u'@set', u'$$StrOne', u'$1'],
+            [u'/^S2=(.*)$/', u'@set', u'$$StrTwo', u'$1'],
+            [u'BOOL1', u'@set', u'$$tmp', u'$$F1&&$$F2&&$$F3&&$$F4'],
+            [u'', u'{$$tmp}'],
+            [u'', u'@set', u'$$tmp', u'($$F1&&$$F2)&&($$F3&&$$F4)'],
+            [u'', u'{$$tmp}'],
+            [u'BOOL2', u'@set', u'$$tmp', u'$$F1||$$F2||$$F3||$$F4'],
+            [u'', u'{$$tmp}'],
+            [u'', u'@set', u'$$tmp', u'$$F1||($$F2||$$F3)||$$F4'],
+            [u'', u'{$$tmp}'],
+            [u'BOOL3', u'@set', u'$$tmp', u'$$F1+$$F2+$$F3+$$F4'],
+            [u'', u'{$$tmp}'],
+            [u'', u'@set', u'$$tmp', u'($$F1+($$F2+($$F3+($$F4))))'],
+            [u'', u'{$$tmp}'],
+            [u'NUMBER1', u'@set', u'$$tmp', u'$$number_1+$$number_2+$$number_3'],
+            [u'', u'{$$tmp}'],
+            [u'', u'@set', u'$$tmp', u'$$number_1+($$number_2+$$number_3)'],
+            [u'', u'{$$tmp}'],
+            [u'', u'@set', u'$$tmp', u'+(+($$number_1+$$number_2)+$$number_3)'],
+            [u'', u'{$$tmp}'],
+            [u'NUMBER2', u'@set', u'$$tmp', u'$$number_1-$$number_2-$$number_3'],
+            [u'', u'{$$tmp}'],
+            [u'', u'@set', u'$$tmp', u'$$number_1+(-$$number_2-$$number_3)'],
+            [u'', u'{$$tmp}'],
+            [u'', u'@set', u'$$tmp', u'-(-($$number_1-$$number_2)+$$number_3)'],
+            [u'', u'{$$tmp}'],
+        ], version=2)
+        self.send_reset()
+        self.send_message(u'BOOL1')
+        self.assertEqual(len(self.messages), 2)
+        self.assertEqual(self.messages[0], u"0")
+        self.assertEqual(self.messages[1], u"0")
+        self.send_message(u'BOOL2')
+        self.assertEqual(len(self.messages), 2)
+        self.assertEqual(self.messages[0], u"0")
+        self.assertEqual(self.messages[1], u"0")
+        self.send_message(u'BOOL3')
+        self.assertEqual(len(self.messages), 2)
+        self.assertEqual(self.messages[0], u"0")
+        self.assertEqual(self.messages[1], u"0")
+        self.send_message(u'on')
+        self.send_message(u'BOOL1')
+        self.assertEqual(len(self.messages), 2)
+        self.assertEqual(self.messages[0], u"0")
+        self.assertEqual(self.messages[1], u"0")
+        self.send_message(u'BOOL2')
+        self.assertEqual(len(self.messages), 2)
+        self.assertEqual(self.messages[0], u"1")
+        self.assertEqual(self.messages[1], u"1")
+        self.send_message(u'BOOL3')
+        self.assertEqual(len(self.messages), 2)
+        self.assertEqual(self.messages[0], u"1")
+        self.assertEqual(self.messages[1], u"1")
+        self.send_message(u'ON')
+        self.send_message(u'BOOL1')
+        self.assertEqual(len(self.messages), 2)
+        self.assertEqual(self.messages[0], u"0")
+        self.assertEqual(self.messages[1], u"0")
+        self.send_message(u'BOOL2')
+        self.assertEqual(len(self.messages), 2)
+        self.assertEqual(self.messages[0], u"1")
+        self.assertEqual(self.messages[1], u"1")
+        self.send_message(u'BOOL3')
+        self.assertEqual(len(self.messages), 2)
+        self.assertEqual(self.messages[0], u"2")
+        self.assertEqual(self.messages[1], u"2")
+        self.send_message(u'true')
+        self.send_message(u'BOOL1')
+        self.assertEqual(len(self.messages), 2)
+        self.assertEqual(self.messages[0], u"0")
+        self.assertEqual(self.messages[1], u"0")
+        self.send_message(u'BOOL2')
+        self.assertEqual(len(self.messages), 2)
+        self.assertEqual(self.messages[0], u"1")
+        self.assertEqual(self.messages[1], u"1")
+        self.send_message(u'BOOL3')
+        self.assertEqual(len(self.messages), 2)
+        self.assertEqual(self.messages[0], u"3")
+        self.assertEqual(self.messages[1], u"3")
+        self.send_message(u'TRUE')
+        self.send_message(u'BOOL1')
+        self.assertEqual(len(self.messages), 2)
+        self.assertEqual(self.messages[0], u"1")
+        self.assertEqual(self.messages[1], u"1")
+        self.send_message(u'BOOL2')
+        self.assertEqual(len(self.messages), 2)
+        self.assertEqual(self.messages[0], u"1")
+        self.assertEqual(self.messages[1], u"1")
+        self.send_message(u'BOOL3')
+        self.assertEqual(len(self.messages), 2)
+        self.assertEqual(self.messages[0], u"4")
+        self.assertEqual(self.messages[1], u"4")
+        self.send_message(u'false')
+        self.send_message(u'BOOL1')
+        self.assertEqual(len(self.messages), 2)
+        self.assertEqual(self.messages[0], u"0")
+        self.assertEqual(self.messages[1], u"0")
+        self.send_message(u'BOOL2')
+        self.assertEqual(len(self.messages), 2)
+        self.assertEqual(self.messages[0], u"1")
+        self.assertEqual(self.messages[1], u"1")
+        self.send_message(u'BOOL3')
+        self.assertEqual(len(self.messages), 2)
+        self.assertEqual(self.messages[0], u"3")
+        self.assertEqual(self.messages[1], u"3")
+
+        self.send_message(u'NUMBER1')
+        self.assertEqual(len(self.messages), 3)
+        self.assertEqual(self.messages[0], u"0")
+        self.assertEqual(self.messages[1], u"0")
+        self.assertEqual(self.messages[2], u"0")
+        self.send_message(u'NUMBER2')
+        self.assertEqual(len(self.messages), 3)
+        self.assertEqual(self.messages[0], u"0")
+        self.assertEqual(self.messages[1], u"0")
+        self.assertEqual(self.messages[2], u"0")
+        self.send_message(u'12')
+        self.send_message(u'NUMBER1')
+        self.assertEqual(len(self.messages), 3)
+        self.assertEqual(self.messages[0], u"12")
+        self.assertEqual(self.messages[1], u"12")
+        self.assertEqual(self.messages[2], u"12")
+        self.send_message(u'NUMBER2')
+        self.assertEqual(len(self.messages), 3)
+        self.assertEqual(self.messages[0], u"12")
+        self.assertEqual(self.messages[1], u"12")
+        self.assertEqual(self.messages[2], u"12")
+        self.send_message(u'N2=3')
+        self.send_message(u'NUMBER1')
+        self.assertEqual(len(self.messages), 3)
+        self.assertEqual(self.messages[0], u"15")
+        self.assertEqual(self.messages[1], u"15")
+        self.assertEqual(self.messages[2], u"15")
+        self.send_message(u'NUMBER2')
+        self.assertEqual(len(self.messages), 3)
+        self.assertEqual(self.messages[0], u"9")
+        self.assertEqual(self.messages[1], u"9")
+        self.assertEqual(self.messages[2], u"9")
+        self.send_message(u'N3=10')
+        self.send_message(u'NUMBER1')
+        self.assertEqual(len(self.messages), 3)
+        self.assertEqual(self.messages[0], u"25")
+        self.assertEqual(self.messages[1], u"25")
+        self.assertEqual(self.messages[2], u"25")
+        self.send_message(u'NUMBER2')
+        self.assertEqual(len(self.messages), 3)
+        self.assertEqual(self.messages[0], u"-1")
+        self.assertEqual(self.messages[1], u"-1")
+        self.assertEqual(self.messages[2], u"-1")
+
+
+
+    def test_new_chapter_v2(self):
+        self.test_bot.scenario = ScenarioBuilder.build_from_table([
+            [u'フラグON', u'@set', u'$$flag', u'True'],
+            [u'', u'フラグ＝{$$flag}'],
+            [u'新章', u'@new_chapter'],
+            [u'メッセージ', u'@seq', u'##', u'##2'],
+            [u'dummy', u'ダミー'],
+            [u'##', u'メッセージ1回目'],
+            [u'#dummy', u'ダミー'],
+            [u'##', u'メッセージ2回目以降'],
+            [u'条件分岐', u'@if', u'$$flag', u'##', u'##2'],
+            [u'dummy', u'ダミー'],
+            [u'##', u'真'],
+            [u'#dummy', u'ダミー'],
+            [u'##', u'偽'],
+            [u'[!$$flag]フラグ確認', u'フラグOFF'],
+            [u'[$$flag] フラグ確認', u'フラグON'],
+        ], version=2)
+        self.send_reset()
+        self.send_message(u'フラグ確認')
+        self.assertEqual(len(self.messages), 1)
+        self.assertEqual(self.messages[0], u"フラグOFF")
+        self.send_message(u'条件分岐')
+        self.assertEqual(len(self.messages), 1)
+        self.assertEqual(self.messages[0], u"偽")
+        self.send_message(u'フラグON')
+        self.assertEqual(len(self.messages), 1)
+        self.assertEqual(self.messages[0], u"フラグ＝1")
+        self.send_message(u'フラグ確認')
+        self.assertEqual(len(self.messages), 1)
+        self.assertEqual(self.messages[0], u"フラグON")
+        self.send_message(u'条件分岐')
+        self.assertEqual(len(self.messages), 1)
+        self.assertEqual(self.messages[0], u"真")
+        self.send_message(u'メッセージ')
+        self.assertEqual(len(self.messages), 1)
+        self.assertEqual(self.messages[0], u"メッセージ1回目")
+        self.send_message(u'メッセージ')
+        self.assertEqual(len(self.messages), 1)
+        self.assertEqual(self.messages[0], u"メッセージ2回目以降")
+        self.send_message(u'メッセージ')
+        self.assertEqual(len(self.messages), 1)
+        self.assertEqual(self.messages[0], u"メッセージ2回目以降")
+        self.send_message(u'新章')
+        self.send_message(u'フラグ確認')
+        self.assertEqual(len(self.messages), 1)
+        self.assertEqual(self.messages[0], u"フラグOFF")
+        self.send_message(u'条件分岐')
+        self.assertEqual(len(self.messages), 1)
+        self.assertEqual(self.messages[0], u"偽")
+        self.send_message(u'フラグON')
+        self.assertEqual(len(self.messages), 1)
+        self.assertEqual(self.messages[0], u"フラグ＝1")
+        self.send_message(u'フラグ確認')
+        self.assertEqual(len(self.messages), 1)
+        self.assertEqual(self.messages[0], u"フラグON")
+        self.send_message(u'条件分岐')
+        self.assertEqual(len(self.messages), 1)
+        self.assertEqual(self.messages[0], u"真")
+        self.send_message(u'メッセージ')
+        self.assertEqual(len(self.messages), 1)
+        self.assertEqual(self.messages[0], u"メッセージ1回目")
+        self.send_message(u'メッセージ')
+        self.assertEqual(len(self.messages), 1)
+        self.assertEqual(self.messages[0], u"メッセージ2回目以降")
 
     def test_forward(self):
         self.test_bot.scenario = ScenarioBuilder.build_from_tables([

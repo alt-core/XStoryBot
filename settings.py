@@ -2,7 +2,8 @@
 
 import os
 
-SERVER_NAME = os.getenv('SERVER_NAME', '')
+#SERVER_NAME = os.getenv('SERVER_NAME', '')
+DEPLOY_ENV = os.getenv('XSBOT_DEPLOY_ENV', '')
 
 OPTIONS = {
     'api_token': u'<<YOUR API TOKEN>>',
@@ -13,7 +14,8 @@ OPTIONS = {
 
 PLUGINS = {
     'line': {
-        'alt_text': u'LINEアプリで確認してください。'
+        'line_abort_duration': 27,
+        'alt_text': u'LINEアプリで確認してください。',
     },
     # 'line.more': {
     #     'command': [u'▽'],
@@ -55,7 +57,7 @@ PLUGINS = {
 }
 
 
-if SERVER_NAME.endswith('<<project-name-prod>>.appspot.com'):
+if DEPLOY_ENV == 'PROD':
     # リリース環境のサーバ設定
     BOTS = {
         'bot': {
@@ -79,7 +81,7 @@ if SERVER_NAME.endswith('<<project-name-prod>>.appspot.com'):
             }
         },
     }
-elif SERVER_NAME.endswith('<<project-name-dev>>.appspot.com'):
+elif DEPLOY_ENV == 'DEV1':
     # 開発環境のサーバ設定
     BOTS = {
         'bot': {

@@ -3,6 +3,9 @@ runtime: python27
 api_version: 1
 threadsafe: false
 
+env_variables:
+  XSBOT_DEPLOY_ENV: "PROD"
+
 default_expiration: "10s"
 
 instance_class: B4
@@ -16,6 +19,9 @@ handlers:
   script: webapi.app
 - url: /api/build_async/.*
   script: webapi.app
+- url: /
+  static_files: static/top.html
+  upload: static/top.html
 
 libraries:
 - name: ssl

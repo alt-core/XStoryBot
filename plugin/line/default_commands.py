@@ -2,7 +2,8 @@
 import logging
 import re
 
-from linebot.models import MessageEvent, PostbackEvent, FollowEvent, UnfollowEvent, JoinEvent, LeaveEvent, TextMessage, LocationMessage, StickerMessage, TextSendMessage, ImageSendMessage, TemplateSendMessage, ButtonsTemplate, ConfirmTemplate, CarouselTemplate, CarouselColumn, MessageTemplateAction, PostbackTemplateAction, URITemplateAction, ImagemapSendMessage, ImagemapArea, MessageImagemapAction, URIImagemapAction, BaseSize
+from linebot.models import MessageEvent, PostbackEvent, FollowEvent, UnfollowEvent, JoinEvent, LeaveEvent, TextMessage, LocationMessage, StickerMessage, TextSendMessage, ImageSendMessage, TemplateSendMessage, ButtonsTemplate, ConfirmTemplate, CarouselTemplate, CarouselColumn, MessageTemplateAction, PostbackTemplateAction, URITemplateAction, ImagemapSendMessage, ImagemapArea, MessageImagemapAction, URIImagemapAction, BaseSize, Sender
+import json
 
 import hub
 import commands
@@ -17,25 +18,25 @@ ALL_TEMPLATE_CMDS = BUTTON_CMDS + CONFIRM_CMDS + PANEL_CMDS + IMAGEMAP_CMDS
 
 
 class LineDefaultCommandsPlugin_Builder(object):
-    def build_from_command(self, builder, msg, options, children=[], grandchildren=[]):
+    def build_from_command(self, builder, sender, msg, options, children=[], grandchildren=[]):
         if msg in CONFIRM_CMDS or msg in BUTTON_CMDS or msg in IMAGEMAP_CMDS:
             for choice in children:
                 self.lint_choice(builder, msg, choice)
 
         if msg in CONFIRM_CMDS:
-            builder.add_command(msg, options, children)
+            builder.add_command(sender, msg, options, children)
 
         elif msg in BUTTON_CMDS:
             builder._build_and_replace_imageurl(options, 2)
             if (len(options) > 1 and options[1] != u'') or (len(options) > 2 and options[2] != u''):
                 builder.assert_strlen_from_array(options, 0, 60, u'タイトルか画像を指定した場合の文字数制限（{}文字）')
-            builder.add_command(msg, options, children)
+            builder.add_command(sender, msg, options, children)
 
         elif msg in IMAGEMAP_CMDS:
             orig_url = builder.parse_imageurl(options[0])
             url, size = builder.build_image_for_imagemap_command(orig_url)
             options[:] = [unicode(url), unicode(size[0]), unicode(size[1])]
-            builder.add_command(msg, options, children)
+            builder.add_command(sender, msg, options, children)
 
         elif msg in PANEL_CMDS:
             panels = []
@@ -65,7 +66,7 @@ class LineDefaultCommandsPlugin_Builder(object):
                     builder.raise_error(u'各パネルの画像の有無がばらばらです')
                 flag_image = (image != u'')
                 panels.append([children[i], grandchildren[i]])
-            builder.add_command(msg, options, panels)
+            builder.add_command(sender, msg, options, panels)
 
         else:
             # ここには来ないはず
@@ -75,16 +76,16 @@ class LineDefaultCommandsPlugin_Builder(object):
 
         # 解釈はここで終了
         return True
-    
+
     def callback_new_block(self, builder, cond):
         builder.msg_count = 0
 
-    def build_plain_text(self, builder, msg, options):
+    def build_plain_text(self, builder, sender, msg, options):
         # 通常のテキストメッセージ表示
         # 仕様書に記述がないが、おそらく300文字が上限
         builder.assert_strlen(msg, 300)
         builder.msg_count += 1
-        builder.add_command(msg, options, None)
+        builder.add_command(sender, msg, options, None)
         return True
 
     def callback_after_each_line(self, builder):
@@ -137,6 +138,7 @@ class LineDefaultCommandsPlugin_Builder(object):
 class LineDefaultCommandsPlugin_Runtime(object):
     def __init__(self, params):
         self.alt_text = params['alt_text']
+        self.sender_icon_urls = params.get('sender_icon_urls', {})
 
     def _build_template_actions(self, choices, action_token):
         results = []
@@ -160,13 +162,19 @@ class LineDefaultCommandsPlugin_Runtime(object):
                     results.append(PostbackTemplateAction(label=choice[0], data=utility.encode_action_string(choice[2], action_token=action_token)))
         return results
 
-    def _template_message(self, template):
-        return TemplateSendMessage(self.alt_text, template)
+    def _make_sender(self, sender):
+        if sender is None:
+            return None
+        else:
+            return Sender(name=sender, icon_url=self.sender_icon_urls.get(sender, None))
 
-    def construct_response(self, context, msg, options, children):
+    def _template_message(self, template, sender):
+        return TemplateSendMessage(self.alt_text, template, sender=self._make_sender(sender))
+
+    def construct_response(self, context, sender, msg, options, children):
         if msg == u'@confirm' or msg == u'@確認':
             if len(options) > 0:
-                context.response.append(self._template_message(ConfirmTemplate(text=options[0], actions=self._build_template_actions(children, context.status.action_token))))
+                context.response.append(self._template_message(ConfirmTemplate(text=options[0], actions=self._build_template_actions(children, context.status.action_token)), sender))
             else:
                 logging.error("invalid format: @confirm")
                 context.response.append(TextSendMessage(text=u"<<@confirmを解釈できませんでした>>"))
@@ -174,7 +182,10 @@ class LineDefaultCommandsPlugin_Runtime(object):
             if len(options) > 0:
                 title = utility.safe_list_get(options, 1, None)
                 image_url = options[2] if len(options) > 2 else None
-                context.response.append(self._template_message(ButtonsTemplate(text=options[0], title=title, thumbnail_image_url=image_url, actions=self._build_template_actions(children, context.status.action_token))))
+                send_message = self._template_message(ButtonsTemplate(text=options[0], title=title, thumbnail_image_url=image_url, actions=self._build_template_actions(children, context.status.action_token)), sender)
+                #logging.warning(json.dumps(children))
+                #logging.warning(json.dumps(send_message.as_json_dict()))
+                context.response.append(send_message)
             else:
                 logging.error("invalid format: @button")
                 context.response.append(TextSendMessage(text=u"<<@buttonを解釈できませんでした>>"))
@@ -186,7 +197,7 @@ class LineDefaultCommandsPlugin_Runtime(object):
                 panel_templates.append(
                     CarouselColumn(text=panel[0], title=title, thumbnail_image_url=image_url, actions=self._build_template_actions(choices, context.status.action_token))
                 )
-            context.response.append(self._template_message(CarouselTemplate(panel_templates)))
+            context.response.append(self._template_message(CarouselTemplate(panel_templates), sender))
         elif msg == u'@imagemap' or msg == u'@イメージマップ':
             try:
                 url = options[0]
@@ -209,7 +220,9 @@ class LineDefaultCommandsPlugin_Runtime(object):
                     else:
                         imagemap_action = MessageImagemapAction(arg[1], area)
                     imagemap_actions.append(imagemap_action)
-                context.response.append(ImagemapSendMessage(url, self.alt_text, BaseSize(width, height), imagemap_actions))
+                send_message = ImagemapSendMessage(base_url=url, alt_text=self.alt_text, base_size=BaseSize(width, height), actions=imagemap_actions, sender=self._make_sender(sender))
+                #logging.warning(json.dumps(send_message.as_json_dict()))
+                context.response.append(send_message)
             except (ValueError, IndexError):
                 logging.error("invalid format: @imagemap")
                 context.response.append(TextSendMessage(text=u"<<@imagemapを解釈できませんでした>>"))

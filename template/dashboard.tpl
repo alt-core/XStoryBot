@@ -59,7 +59,7 @@
             </ul>
         </header>
 
-        % if bot_settings[name].has_key("description"):
+        % if "description" in bot_settings[name]:
         <div class="row">
             <div class="col">
                 {{!bot_settings[name]["description"]}}
@@ -80,13 +80,12 @@
         </div>
         <div class="row">
             <div class="col">
-                <h3>反映時のエラー状況</h3>
+                <h3>処理結果</h3>
                 <p>
                 <div class="embed-responsive embed-responsive-21by9">
-                    <iframe class="embed-responsive-item" src="/api/last_build_result/{{bot_name}}" id="build_result" style="border: 1px solid black"></iframe>
+                    <textarea class="embed-responsive-item" id="build_result" style="border: 1px solid black"></textarea>
                 </div>
                 </p>
-                <button type="button" class="btn btn-primary" style="width:100%" id="build_result_reload">更新</button>
             </div>
         </div>
 
@@ -117,6 +116,8 @@
             hostname = 'builder-dot-' + hostname;
         }
         var endpoint ='https://'+hostname+path;
+        var textarea = $("#build_result")
+        textarea.val('反映作業を開始します...');
         $.ajax({
             crossDomain: true,
             url: endpoint,
@@ -126,27 +127,22 @@
             .done(function(data) {
                 console.log(data);
                 var resp = JSON.parse(data);
-                if (resp.result === 'Success') { alert('反映作業を開始しました'); }
-                else { alert('反映作業の開始に失敗しました'); }
+                textarea.val(resp.message);
             })
             .fail(function() {
-                alert('反映作業の開始に失敗しました');
+                textarea.val('反映作業の開始に失敗しました');
             });
-
     }
 
     $(function(){
         $("#build_button").on("click",function(){
-            request_build('/api/build_async/{{bot_name}}', {})
+            request_build('/api/build/{{bot_name}}', {})
         });
         $("#force_build_button").on("click",function(){
-            request_build('/api/build_async/{{bot_name}}', {'force': 'true'})
+            request_build('/api/build/{{bot_name}}', {'force': 'true'})
         });
         $("#quick_build_button").on("click",function(){
-            request_build('/api/build_async/{{bot_name}}', {'skip_image': 'true'})
-        });
-        $("#build_result_reload").on("click",function(){
-            $('#build_result')[0].contentDocument.location.reload(true);
+            request_build('/api/build/{{bot_name}}', {'skip_image': 'true'})
         });
     });
 </script>

@@ -40,7 +40,7 @@ BOT_SETTINGS = {
             'command': [u'▽'],
             'image_url': 'https://www.google.co.jp/images/branding/googlelogo/2x/googlelogo_color_272x92dp.png',
             'message': u'「続きを読む」',
-            'action_pattern': ur'^「続きを読む」$',
+            'action_pattern': None,
             'ignore_pattern': ur'^「|^リセット$',
             'please_push_more_button_label': u'##please_push_more_button',
         },
@@ -112,7 +112,7 @@ class DummyLineBotApi(object):
             messages = [messages]
         self.messages = messages
 
-    def push_message(self, to, messages):
+    def push_message(self, to, messages, retry_key=None):
         self.to = to
         if not isinstance(messages, (list, tuple)):
             messages = [messages]
@@ -396,6 +396,109 @@ class LineTestCase(LinePluginTestCaseBase):
         self.assertEqual(self.bot.messages[0].text, u"join")
         self.send_event(u'leave')
         self.assertEqual(len(self.bot.messages), 0)
+
+    def test_sender(self):
+        self.test_bot.scenario = ScenarioBuilder.build_from_table([
+            [u'test', u'Sender:\nてすと'],
+            [u'', u'センダー：\nてすと？'],
+            [u'image', u'Sender:\n@image', u'=IMAGE("https://www.google.co.jp/images/branding/googlelogo/2x/googlelogo_color_272x92dp.png")'],
+            [u'confirm', u'Sender:\n@confirm', u'Ｃｏｎｆｉｒｍの説明文'],
+            [u'', u'', u'選択肢１', u'テキストメッセージのアクション'],
+            [u'', u'', u'選択肢２', u'http://example.com/action2'],
+            [u'button', u'Sender:\n＠ボタン', u'ボタンの説明文', u'ボタンのタイトル', u'=IMAGE("https://www.google.co.jp/images/branding/googlelogo/2x/googlelogo_color_272x92dp.png")'],
+            [u'', u'', u'選択肢１', u'選択肢１のアクション', u'#label1'],
+            [u'', u'', u'選択肢２', u'選択肢２のアクション', u'＃label２'],
+            [u'', u'', u'選択肢３', u'選択肢３のアクション', u'#label３'],
+            [u'', u'', u'選択肢４', u'選択肢４のアクション', u'#label4'],
+            [u'#label1', u'選択肢１のリアクション'],
+            [u'＃label２', u'選択肢２のリアクション'],
+            [u'#label３', u'選択肢３のリアクション'],
+            [u'＃label４', u'選択肢４のリアクション'],
+            [u'panel', u'Sender:\n＠パネル'],
+            [u'', u'', u'パネル１の説明', u'パネル１', u'=IMAGE("https://www.google.co.jp/images/branding/googlelogo/2x/googlelogo_color_272x92dp.png")'],
+            [u'', u'', u'', u'選択肢１', u'選択肢１のアクション', u'#label1'],
+            [u'', u'', u'', u'選択肢２', u'http://example.com/panel_action2'],
+            [u'', u'', u'', u'選択肢３', u'選択肢３のアクション'],
+            [u'', u'', u'パネル２の説明', u'パネル２', u'=IMAGE("https://www.google.co.jp/images/branding/googlelogo/2x/googlelogo_color_272x92dp.png")'],
+            [u'', u'', u'', u'選択肢１', u'選択肢１のアクション', u'#label1'],
+            [u'', u'', u'', u'選択肢２', u'選択肢２のアクション', u'#label2'],
+            [u'', u'', u'', u'選択肢３', u'選択肢３のアクション', u'#label3'],
+            [u'', u'', u'パネル３の説明', u'パネル３', u'=IMAGE("https://www.google.co.jp/images/branding/googlelogo/2x/googlelogo_color_272x92dp.png")'],
+            [u'', u'', u'', u'選択肢１', u'選択肢１のアクション', u'#label1'],
+            [u'', u'', u'', u'選択肢２', u'選択肢２のアクション', u'#label2'],
+            [u'', u'', u'', u'選択肢３', u'選択肢３のアクション', u'#label3'],
+            [u'', u'', u'パネル４の説明', u'パネル４', u'=IMAGE("https://www.google.co.jp/images/branding/googlelogo/2x/googlelogo_color_272x92dp.png")'],
+            [u'', u'', u'', u'選択肢１', u'選択肢１のアクション', u'#label1'],
+            [u'', u'', u'', u'選択肢２', u'選択肢２のアクション', u'#label2'],
+            [u'', u'', u'', u'選択肢３', u'選択肢３のアクション', u'#label3'],
+            [u'', u'', u'パネル５の説明', u'パネル５', u'=IMAGE("https://www.google.co.jp/images/branding/googlelogo/2x/googlelogo_color_272x92dp.png")'],
+            [u'', u'', u'', u'選択肢１', u'選択肢１のアクション', u'#label1'],
+            [u'', u'', u'', u'選択肢２', u'選択肢２のアクション', u'#label2'],
+            [u'', u'', u'', u'選択肢３', u'選択肢３のアクション', u'#label3'],
+            [u'imagemap', u'Sender:\n@imagemap', u'=IMAGE("https://www.google.co.jp/images/branding/googlelogo/2x/googlelogo_color_272x92dp.png")'],
+            [u'', u'', u'0,0,1040,1040', u'イメージマップアクション１'],
+            [u'', u'', u'100,200,300,400', u'http://example.com/imagemap_action'],
+            [u'', u'', u''],
+            [u'', u'', u''],
+            [u'/(.*)/', u'{0}'],
+        ], options={'force': True})
+        self.send_reset()
+        self.send_message(u'test')
+        self.assertEqual(len(self.bot.messages), 2)
+        self.assertEqual(self.bot.messages[0].text, u"てすと")
+        self.assertEqual(self.bot.messages[0].sender.name, u"Sender")
+        self.assertEqual(self.bot.messages[1].text, u"てすと？")
+        self.assertEqual(self.bot.messages[1].sender.name, u"センダー")
+        self.send_message(u'image')
+        self.assertEqual(self.bot.messages[0].original_content_url, u"https://storage.googleapis.com/app_default_bucket/image/80fa4bcab0351fdccb69c66fb55dcd00_1024.png")
+        self.assertEqual(self.bot.messages[0].preview_image_url, u"https://storage.googleapis.com/app_default_bucket/image/80fa4bcab0351fdccb69c66fb55dcd00_240.png")
+        self.assertEqual(self.bot.messages[0].sender.name, u"Sender")
+        self.send_message(u'confirm')
+        self.assertEqual(len(self.bot.messages), 1)
+        self.assertEqual(self.bot.messages[0].template.text, u"Ｃｏｎｆｉｒｍの説明文")
+        self.assertEqual(len(self.bot.messages[0].template.actions), 2)
+        self.assertEqual(self.bot.messages[0].template.actions[0].type, "message")
+        self.assertEqual(self.bot.messages[0].template.actions[0].text, u"テキストメッセージのアクション")
+        self.assertEqual(self.bot.messages[0].template.actions[1].type, "uri")
+        self.assertEqual(self.bot.messages[0].template.actions[1].uri, u"http://example.com/action2")
+        self.assertEqual(self.bot.messages[0].sender.name, u"Sender")
+        self.send_message(u'button')
+        self.assertEqual(len(self.bot.messages), 1)
+        self.assertEqual(self.bot.messages[0].template.text, u"ボタンの説明文")
+        self.assertEqual(self.bot.messages[0].sender.name, u"Sender")
+        actions = self.bot.messages[0].template.actions
+        self.assertEqual(len(actions), 4)
+        self.send_postback(actions[0].data)
+        self.assertEqual(len(self.bot.messages), 1)
+        self.assertEqual(self.bot.messages[0].text, u"選択肢１のリアクション")
+        self.send_postback(actions[1].data)
+        self.assertEqual(len(self.bot.messages), 1)
+        self.assertEqual(self.bot.messages[0].text, u"選択肢２のリアクション")
+        self.send_postback(actions[2].data)
+        self.assertEqual(len(self.bot.messages), 1)
+        self.assertEqual(self.bot.messages[0].text, u"選択肢３のリアクション")
+        self.send_postback(actions[3].data)
+        self.assertEqual(len(self.bot.messages), 1)
+        self.assertEqual(self.bot.messages[0].text, u"選択肢４のリアクション")
+        self.send_message(u'panel')
+        self.assertEqual(len(self.bot.messages), 1)
+        self.assertEqual(self.bot.messages[0].template.columns[0].text, u"パネル１の説明")
+        self.assertEqual(self.bot.messages[0].sender.name, u"Sender")
+        self.assertEqual(len(self.bot.messages[0].template.columns), 5)
+        self.assertEqual(len(self.bot.messages[0].template.columns[0].actions), 3)
+        self.assertEqual(self.bot.messages[0].template.columns[0].actions[0].text, u"選択肢１のアクション")
+        self.assertEqual(self.bot.messages[0].template.columns[0].actions[0].data.split(u'@@')[0], u"#label1")
+        self.send_message(u'imagemap')
+        self.assertEqual(len(self.bot.messages), 1)
+        self.assertEqual(self.bot.messages[0].base_url, u"https://storage.googleapis.com/app_default_bucket/imagemap/80fa4bcab0351fdccb69c66fb55dcd00.png")
+        self.assertEqual(self.bot.messages[0].sender.name, u"Sender")
+        self.assertEqual(len(self.bot.messages[0].actions), 2)
+        self.assertEqual(self.bot.messages[0].actions[0].text, u'イメージマップアクション１')
+        self.assertEqual(self.bot.messages[0].actions[1].link_uri, u'http://example.com/imagemap_action')
+        self.assertEqual(self.bot.messages[0].actions[1].area.x, 100)
+        self.assertEqual(self.bot.messages[0].actions[1].area.y, 200)
+        self.assertEqual(self.bot.messages[0].actions[1].area.width, 300)
+        self.assertEqual(self.bot.messages[0].actions[1].area.height, 400)
 
     def test_scenario_build_with_skip_image_option(self):
         self.test_bot.scenario = ScenarioBuilder.build_from_table([

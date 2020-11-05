@@ -16,13 +16,11 @@ import convert_image
 from models import ImageFileStatDB
 import hub
 import commands
+from condition_expr import ConditionExpression
+from expression import Expression
 
 
-IMAGE_CMDS = (u'@image', u'@画像')
-
-OR_CMDS = (u'@or', u'@または')
-IF_CMDS = (u'@if', u'@条件')
-SEQ_CMDS = (u'@seq', u'@順々')
+from common_commands import OR_CMDS, IF_CMDS, SEQ_CMDS, IMAGE_CMDS
 
 INCLUDE_COND_CMDS = (u'@include', u'@読込')
 
@@ -33,6 +31,7 @@ BEFORE_LINE_0 = -1
 
 CONDITION_KIND_STRING = 1
 CONDITION_KIND_REGEXP = 2
+CONDITION_KIND_EXPR = 3
 CONDITION_KIND_COMMAND = 100
 
 CONDITION_OPTION_REGEXP_NORMALIZE = 1
@@ -50,13 +49,15 @@ class ScenarioSyntaxError(Exception):
         return u','.join(self.args)
 
 
-class Guard(object):
+# version 1 用の Guard
+class Guard_V1(object):
     def __init__(self):
         self.terms = []
 
     @classmethod
     def from_str(cls, guard):
         self = cls()
+        guard = normalize('NFKC', guard)
         terms = [x.strip() for x in guard.split(u',')]
         for term in terms:
             m = re.match(r'^([^=!\s]+)\s*(==|!=)\s*([\S]+)\s*$', term)
@@ -69,15 +70,15 @@ class Guard(object):
             self.terms.append((op, lhs, rhs))
         return self
 
-    def eval(self, status):
+    def eval(self, env, match=[]):
         # 各項を and でつないだ条件
         # OR は @or でひとまずは何とか・・・
         # 項が１つもなければ True
         for op, lhs, rhs in self.terms:
             if lhs.startswith(u'$'):
-                lhs = status.get(lhs, u'')
+                lhs = env.get(lhs, u'')
             if rhs.startswith(u'$'):
-                rhs = status.get(rhs, u'')
+                rhs = env.get(rhs, u'')
             if op == u'==':
                 if not lhs == rhs:
                     return False
@@ -87,6 +88,20 @@ class Guard(object):
         return True
 
 
+class Guard_V2(object):
+    def __init__(self):
+        self.expr = None
+
+    @classmethod
+    def from_str(cls, s):
+        self = cls()
+        self.expr = Expression.from_str(s)
+        return self
+
+    def eval(self, env, matches=[]):
+        return self.expr.eval(env, matches)
+
+
 class Condition(object):
     def __init__(self, kind, value, guard=None, options=None):
         self.kind = kind
@@ -94,26 +109,29 @@ class Condition(object):
         self.guard = guard
         self.options = options
 
-    def check(self, action, status):
+    def check(self, action, env):
         if self.guard:
-            if not self.guard.eval(status):
+            if not self.guard.eval(env):
                 return None
 
         if self.kind == CONDITION_KIND_STRING:
             return (action,) if self.value == action else None
-        elif self.kind == CONDITION_KIND_REGEXP:
+        else:
             if utility.is_special_action(action):
                 # postback は REGEXP にマッチさせない
                 return None
-            target_string = action
-            if self.options and CONDITION_OPTION_REGEXP_NORMALIZE in self.options:
-                target_string = normalize('NFKC', target_string)
-            if self.options and CONDITION_OPTION_REGEXP_LOWER_CASE in self.options:
-                target_string = target_string.lower()
-            m = self.value.search(target_string)
-            return (m.group(0),) + m.groups() if m else None
-        else:
-            raise ValueError("invalid Condition: " + self.value)
+            if self.kind == CONDITION_KIND_REGEXP:
+                target_string = action
+                if self.options and CONDITION_OPTION_REGEXP_NORMALIZE in self.options:
+                    target_string = normalize('NFKC', target_string)
+                if self.options and CONDITION_OPTION_REGEXP_LOWER_CASE in self.options:
+                    target_string = target_string.lower()
+                m = self.value.search(target_string)
+                return (m.group(0),) + m.groups() if m else None
+            elif self.kind == CONDITION_KIND_EXPR:
+                return self.value.check(action)
+            else:
+                raise ValueError("invalid Condition: " + self.value)
 
     def is_command(self):
         return self.kind == CONDITION_KIND_COMMAND
@@ -138,7 +156,7 @@ class Scene(object):
         self.sub_name = sub_name
         self.line_no = line_no
         self.blocks = []
-    
+
     def __str__(self):
         return self.get_fullpath().encode('utf-8')
 
@@ -218,7 +236,8 @@ class Command(object):
         if base_name not in cls.counter:
             cls.counter[base_name] = 0
 
-    def __init__(self, msg, options, children, command_id = None):
+    def __init__(self, sender, msg, options, children, command_id = None):
+        self.sender = sender
         self.msg = msg
         self.options = options
         self.children = children
@@ -233,9 +252,10 @@ class Command(object):
 
 
 class Scenario(object):
-    def __init__(self):
+    def __init__(self, version=1):
         self.scenes = {}
         self.startup_scene_title = None
+        self.version = version
 
     @classmethod
     def load_from_uri(cls, uri):
@@ -270,12 +290,13 @@ class Scenario(object):
 
 
 class ScenarioBuilder(object):
-    def __init__(self, options):
-        self.scenario = Scenario()
+    def __init__(self, options, version=1):
+        self.scenario = Scenario(version)
         self.first_top_block = None
         self.image_file_read_cache = {}
         self.image_file_write_cache = {}
         self.bucket_name = app_identity.get_default_gcs_bucket_name()
+        self.version = version
 
         self.options = options or {}
         if self.options.get('force') == True:
@@ -292,16 +313,16 @@ class ScenarioBuilder(object):
         self.lines = None
 
     @classmethod
-    def build_from_table(cls, table, options=None):
-        self = cls(options)
+    def build_from_table(cls, table, options=None, version=1):
+        self = cls(options, version)
         self._build_from_table(u'default', table)
         if not self.scenario.scenes:
             self.raise_error(u'シナリオには1つ以上のシーンを含んでいる必要があります')
         return self.scenario
 
     @classmethod
-    def build_from_tables(cls, tables, options=None):
-        self = cls(options)
+    def build_from_tables(cls, tables, options=None, version=1):
+        self = cls(options, version)
         for tab_name, table in tables:
             # シート名は正規化する
             tab_name = normalize('NFKC', tab_name)
@@ -321,8 +342,8 @@ class ScenarioBuilder(object):
             row = [cell if isinstance(cell, unicode) else unicode(cell) for cell in row]
             # 各セル内の末尾の空白文字を除去
             row = [cell.rstrip() for cell in row]
-            # #@[*%で始まっていたら先頭の空白も取り除いた上で半角化（正規化）する
-            row = [normalize('NFKC', cell.strip()) if re.match(ur'^\s*[#＃@＠\[［*＊%％]', cell) else cell for cell in row]
+            # #@*%で始まっていたら先頭の空白も取り除いた上で半角化（正規化）する
+            row = [normalize('NFKC', cell.strip()) if re.match(ur'^\s*[#＃@＠*＊%％]', cell) else cell for cell in row]
 
             # 空行・コメント行はスキップ
             if not row or row[0] == u'#':
@@ -409,6 +430,8 @@ class ScenarioBuilder(object):
                     cur_list[index] = label
             elif isinstance(cur_list[index], list):
                 self._fix_relative_label_iter(cur_list[index], block, i_label)
+            elif isinstance(cur_list[index], Expression):
+                pass
             else:
                 self.raise_error(u'内部エラーが発生しました' + unicode(cur_list[index]))
 
@@ -428,8 +451,8 @@ class ScenarioBuilder(object):
                         if command.children:
                             self._fix_relative_label_iter(command.children, block, i_label)
 
-    def add_command(self, msg, options, children):
-        self.lines.append(Command(msg, options, children))
+    def add_command(self, sender, msg, options, children):
+        self.lines.append(Command(sender, msg, options, children))
 
     def add_new_string_index(self, label):
         cond = Condition(CONDITION_KIND_STRING, label)
@@ -498,31 +521,50 @@ class ScenarioBuilder(object):
             else:
                 # 通常の条件セル
                 guard = None
-                if cond_str.startswith(u'['):
-                    m = re.match(r'^\[([^\]]*)\][\s\n]*(.+)$', cond_str)
+                if re.match(ur'^\s*(\[|［)', cond_str):
+                    m = re.match(ur'^\s*(?:\[|［)((?:\\\]|\\］|[^\]］])*)(?:\]|］)[\s\n]*(.+)$', cond_str)
                     if m:
-                        guard = Guard.from_str(m.group(1))
-                        if guard is None:
-                            self.raise_error(u'条件指定が正しくありません')
+                        if self.version >= 2:
+                            try:
+                                guard = Guard_V2.from_str(m.group(1))
+                            except Exception as e:
+                                self.raise_error(u'条件指定が正しくありません: {} {}'.format(m.group(1), unicode(e)))
+                        else:
+                            guard = Guard_V1.from_str(m.group(1))
+                            if guard is None:
+                                self.raise_error(u'条件指定が正しくありません')
                         cond_str = m.group(2)
                     else:
                         self.raise_error(u'条件指定が正しくありません')
-                m = re.match(r'^/(.*)/([iLN]*)?', cond_str)
-                if m:
-                    option_str = m.group(2)
-                    regex_string = m.group(1)
-                    regex_option = 0
-                    condition_option = []
-                    if option_str and u'i' in option_str:
-                        regex_option = re.IGNORECASE
-                    if option_str and u'L' in option_str:
-                        condition_option.append(CONDITION_OPTION_REGEXP_LOWER_CASE)
-                    if option_str and u'N' in option_str:
-                        condition_option.append(CONDITION_OPTION_REGEXP_NORMALIZE)
-                    regex = re.compile(regex_string, regex_option)
-                    cond = Condition(CONDITION_KIND_REGEXP, regex, guard=guard, options=condition_option)
-                else:
+                if cond_str.startswith(u'#'):
+                    # ラベル条件
                     cond = Condition(CONDITION_KIND_STRING, cond_str, guard=guard)
+                elif self.version >= 2:
+                    # version 2 以降は expr 対応
+                    try:
+                        expr = ConditionExpression.from_str(cond_str)
+                    except Exception as e:
+                        self.raise_error(u'条件指定が正しくありません: {} {}'.format(cond_str, unicode(e)))
+                    cond = Condition(CONDITION_KIND_EXPR, expr, guard=guard)
+                else:
+                    m = re.match(r'^/(.*)/([iLN]*)?', cond_str)
+                    if m:
+                        # 正規表現条件
+                        option_str = m.group(2)
+                        regex_string = m.group(1)
+                        regex_option = 0
+                        condition_option = []
+                        if option_str and u'i' in option_str:
+                            regex_option = re.IGNORECASE
+                        if option_str and u'L' in option_str:
+                            condition_option.append(CONDITION_OPTION_REGEXP_LOWER_CASE)
+                        if option_str and u'N' in option_str:
+                            condition_option.append(CONDITION_OPTION_REGEXP_NORMALIZE)
+                        regex = re.compile(regex_string, regex_option)
+                        cond = Condition(CONDITION_KIND_REGEXP, regex, guard=guard, options=condition_option)
+                    else:
+                        # 一般条件
+                        cond = Condition(CONDITION_KIND_STRING, cond_str, guard=guard)
             self.lines = []
             self.block.indices.append((cond, self.lines))
             # 新しい条件に来たので、メッセージ数カウンタを初期化する
@@ -534,20 +576,24 @@ class ScenarioBuilder(object):
                 if commands.invoke_builder(self, self.node):
                     pass
                 else:
-                    msg = self.node.get_factor(0)
+                    sender, msg = utility.parse_sender(self.node.get_factor(0))
                     options = self.node.get_factors(1)
 
                     if msg in IMAGE_CMDS or self.parse_imageurl(msg):
                         # 画像
                         if msg in IMAGE_CMDS:
-                            s = options[1]
+                            if len(options) < 1:
+                                self.raise_error(u'@imageには引数が1つ必要です')
+                            s = options[0]
                         else:
                             s = msg
                         orig_url = self.parse_imageurl(s)
                         if orig_url is None:
+                            orig_url = s
+                        if orig_url is None or not orig_url.startswith(u'http'):
                             self.raise_error(u'@imageの第一引数は画像のURLである必要があります')
                         image_url, _ = self.build_image_for_image_command(orig_url)
-                        self.add_command(IMAGE_CMDS[0], [image_url,], None)
+                        self.add_command(sender, IMAGE_CMDS[0], [image_url,], None)
 
                     elif msg.startswith('@'):
                         self.raise_error(u'間違ったコマンドです')
@@ -555,13 +601,13 @@ class ScenarioBuilder(object):
                     else:
                         # 何の装飾もないテキスト
                         # プラグインでまず処理を試みる
-                        msg = hub.filter_all_builder_methods('filter_plain_text', self, msg, options)
+                        msg = hub.filter_all_builder_methods('filter_plain_text', self, msg, options, sender)
                         if msg:
-                            if hub.invoke_all_builder_methods('build_plain_text', self, msg, options):
+                            if hub.invoke_all_builder_methods('build_plain_text', self, sender, msg, options):
                                 pass
                             else:
                                 # 互換性のために残っているが、各プラグインの build_plain_text 内で add_command されるのが正しい
-                                self.add_command(msg, options, None)
+                                self.add_command(sender, msg, options, None)
 
                 hub.invoke_all_builder_methods('callback_after_each_line', self)
 
@@ -744,7 +790,6 @@ class ScenarioBuilder(object):
             return None
 
 
-
 class Director(object):
     def __init__(self, scenario, context):
         self.scenario = scenario
@@ -815,7 +860,7 @@ class Director(object):
             result = self._search_index_sub(scene, block, action, [])
             if result[2] is not None:
                 return result[0], result[1], result[2], result[3]
-        
+
         if action.startswith(u'#'):
             # tag 指定の呼び出しだったのに見つからなかった
             self.flag_label_error = True
@@ -856,24 +901,23 @@ class Director(object):
                     else:
                         return result[0], result[1], result[2], result[3]
             else:
-                match = cond.check(action, self.context.status)
+                match = cond.check(action, self.context.env)
                 if match:
                     return scene, block, n_lines, match
         return None, None, None, None
 
-    def format_value(self, value, match):
+    def format_value(self, value):
         try:
-            result = self.vformat(value, match, self.context.env)
-        except (KeyError, IndexError), e:
-            print(self.context.env_dicts[0])
+            result = self.vformat(value, self.context.env.matches, self.context.env)
+        except (KeyError, IndexError) as e:
             logging.error('format error: ' + str(e))
             result = value
         return result
 
-    def format_values(self, arr, match):
+    def format_values(self, arr):
         try:
-            result = [self.vformat(cell, match, self.context.env) for cell in arr]
-        except (KeyError, IndexError), e:
+            result = [self.vformat(cell, self.context.env.matches, self.context.env) if isinstance(cell, unicode) else cell for cell in arr]
+        except (KeyError, IndexError) as e:
             logging.error('format error: ' + str(e))
             result = arr
         return result
@@ -907,17 +951,22 @@ class Director(object):
             if len(self.context.reactions) > 100:
                 logging.error(u"reaction 処理内で無限ループを検出しました")
                 break
-            msg = self.format_value(command.msg, match)
+            sender = command.sender
+            msg = self.format_value(command.msg)
             options = command.options
             if options is None:
                 options = ()
-            options = self.format_values(options, match)
-            row = [msg]
+            options = self.format_values(options)
+            if sender is None:
+                sender_name = self.context.status.get(u'$$name', None)
+                if sender_name is not None and sender_name != u'':
+                    sender = sender_name
+            row = [sender, msg]
             if options:
                 row.extend(options)
             children = command.children
             if msg.startswith(u'@'):
-                flag_handled = commands.invoke_runtime_run_command(self.context, msg, options, children)
+                flag_handled = commands.invoke_runtime_run_command(self.context, sender, msg, options, children)
                 if flag_handled:
                     continue
 
@@ -927,8 +976,14 @@ class Director(object):
                     else:
                         return None
                 elif msg in IF_CMDS:
-                    guard = Guard.from_str(options[0])
-                    if guard.eval(self.context.status):
+                    if self.scenario.version >= 2:
+                        expr = options[0]
+                    else:
+                        expr = Guard_V1.from_str(options[0])
+                        if expr is None:
+                            logging.error(u'条件指定が正しくありません: {}'.format(options[0]))
+                            return None
+                    if expr.eval(self.context.env, self.context.env.matches):
                         next_label = options[1]
                     else:
                         next_label = options[2]
@@ -970,14 +1025,14 @@ class Director(object):
         if action is None:
             # 読み替えの結果 None になった
             return
-        
+
         if 'action_token' in self.context.attrs:
             action_token = self.context.attrs['action_token']
             del self.context.attrs['action_token']
             if action_token != self.context.status.action_token:
                 logging.info(u'action_token is not matched: {} != {}'.format(action_token, self.context.status.action_token))
                 return
- 
+
         # 実行行の取得
         scene, block, n_lines, match = self.search_index(self.base_scene, action)
 
@@ -995,8 +1050,10 @@ class Director(object):
                     # ##error_unhandled_action という特殊な action を発行する
                     scene, block, n_lines, match = self.search_index(self.base_scene, u"##error_unhandled_action")
                 flag_error = True
-                
+
+            self.context.env.set_matches(match)
             new_context = self._plan_reaction_sub(scene, block, n_lines, match)
+            self.context.env.clear_matches()
             if new_context is None:
                 # reaction に結果が入っている場合と、何もすることが見つけられなかった場合がある
                 break

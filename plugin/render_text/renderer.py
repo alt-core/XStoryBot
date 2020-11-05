@@ -14,14 +14,14 @@ NON_PRINTABLE_CHARS = u"\r"
 BURASAGARI_CHARS = u"ぁぃぅぇぉっゃゅょゎァィゥェォッャュョヮ、。」）】"
 
 
-def draw_text_horizontal(image, text, margin_x, margin_y, font, font_size, color, line_height, base_line_offset, disable_word_wrap, burasagari_chars):
+def draw_text_horizontal(image, text, margin_left, margin_right, margin_top, margin_bottom, font, font_size, color, line_height, base_line_offset, disable_word_wrap, burasagari_chars):
     text = text.rstrip() # 末尾の空白文字を除去
     draw = ImageDraw.Draw(image)
 
-    sx, sy = (margin_x, margin_y)
+    sx, sy = (margin_left, margin_top)
     size_x, size_y = image.size
-    ny = int((size_y - margin_y * 2 + font_size * (line_height - 1.0)) / (font_size * line_height))
-    wx = size_x - margin_x * 2
+    ny = int((size_y - margin_top - margin_bottom + font_size * (line_height - 1.0)) / (font_size * line_height))
+    wx = size_x - margin_left - margin_right
     iy = 0
     line_str = u''
     f_burasagari = False
@@ -41,7 +41,7 @@ def draw_text_horizontal(image, text, margin_x, margin_y, font, font_size, color
 
         elif c in NON_PRINTABLE_CHARS:
             continue
-        
+
         else:
             line_size = draw.textsize(line_str + c, font=font)
             if line_size[0] > wx:
@@ -85,14 +85,14 @@ def draw_text_horizontal(image, text, margin_x, margin_y, font, font_size, color
     return False, None
 
 
-def draw_text_vertical(image, text, margin_x, margin_y, font, font_size, color, line_height, base_line_offset, burasagari_chars, special_char_table):
+def draw_text_vertical(image, text, margin_left, margin_right, margin_top, margin_bottom, font, font_size, color, line_height, base_line_offset, burasagari_chars, special_char_table):
     text = text.rstrip() # 末尾の空白文字を除去
     draw = ImageDraw.Draw(image)
 
     size_x, size_y = image.size
-    sx, sy = (size_x - margin_x, margin_y)
-    nx = int((size_x - margin_x * 2 + font_size * (line_height - 1.0)) / (font_size * line_height))
-    ny = int((size_y - margin_y * 2) / font_size)
+    sx, sy = (size_x - margin_right, margin_top)
+    nx = int((size_x - margin_left - margin_right + font_size * (line_height - 1.0)) / (font_size * line_height))
+    ny = int((size_y - margin_top - margin_bottom) / font_size)
     ix, iy = 0, 0
     f_burasagari = False
 
@@ -168,23 +168,23 @@ def get_background_image(size, color, background):
             return Image.new('RGBA', size, background)
 
 
-def create_image_with_text(text, size_x, size_y, margin_x, margin_y, is_vertical=False, font_path=None, font_size=100, color='black', background='white', line_height=1.5, base_line_offset=0, disable_word_wrap=False, burasagari_chars=BURASAGARI_CHARS, special_char_table=SPECIAL_CHAR_TABLE):
+def create_image_with_text(text, size_x, size_y, margin_left, margin_right, margin_top, margin_bottom, is_vertical=False, font_path=None, font_size=100, color='black', background='white', line_height=1.5, base_line_offset=0, disable_word_wrap=False, burasagari_chars=BURASAGARI_CHARS, special_char_table=SPECIAL_CHAR_TABLE):
     image = get_background_image((size_x, size_y), color, background)
     if is_vertical:
         if font_path is None:
             font_path = 'plugin/render_text/font/ipaexg_tate.ttf'
         font = ImageFont.truetype(font_path, font_size)
-        flag, rest = draw_text_vertical(image, text, margin_x, margin_y, font, font_size, color, line_height, base_line_offset, burasagari_chars, special_char_table)
+        flag, rest = draw_text_vertical(image, text, margin_left, margin_right, margin_top, margin_bottom, font, font_size, color, line_height, base_line_offset, burasagari_chars, special_char_table)
     else:
         if font_path is None:
             font_path = 'plugin/render_text/font/ipaexg.ttf'
         font = ImageFont.truetype(font_path, font_size)
-        flag, rest = draw_text_horizontal(image, text, margin_x, margin_y, font, font_size, color, line_height, base_line_offset, disable_word_wrap, burasagari_chars)
+        flag, rest = draw_text_horizontal(image, text, margin_left, margin_right, margin_top, margin_bottom, font, font_size, color, line_height, base_line_offset, disable_word_wrap, burasagari_chars)
     return image, rest
 
 
-def render_text_to_png(text, size_x, size_y, margin_x, margin_y, **text_rendering_options):
-    image, rest = create_image_with_text(text, size_x, size_y, margin_x, margin_y, **text_rendering_options)
+def render_text_to_png(text, size_x, size_y, margin_left, margin_right, margin_top, margin_bottom, **text_rendering_options):
+    image, rest = create_image_with_text(text, size_x, size_y, margin_left, margin_right, margin_top, margin_bottom, **text_rendering_options)
 
     output = StringIO()
     image.save(output, 'PNG')

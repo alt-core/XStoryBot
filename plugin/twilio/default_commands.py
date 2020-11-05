@@ -14,11 +14,11 @@ DIAL_CMDS = (u'@dial', u'@電話')
 class TwilioDefaultCommandsPlugin_Builder(commands.Default_Builder):
     # build_from_command などは親クラスの Default_Builder に任せる
 
-    def build_plain_text(self, builder, msg, options):
+    def build_plain_text(self, builder, sender, msg, options):
         # 通常のテキストメッセージ表示
         # TODO: テキストメッセージの文字数制限の確認
         # builder.assert_strlen(msg, 300)
-        builder.add_command(msg, options, None)
+        builder.add_command(sender, msg, options, None)
         return True
 
 
@@ -26,7 +26,7 @@ class TwilioDefaultCommandsPlugin_Runtime(object):
     def __init__(self):
         pass
 
-    def run_command(self, context, msg, options):
+    def run_command(self, context, sender, msg, options):
         interface = context.get_interface('twilio')
 
         if msg in SMS_CMDS:

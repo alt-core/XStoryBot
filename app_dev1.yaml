@@ -2,9 +2,17 @@ runtime: python27
 api_version: 1
 threadsafe: true
 
+env_variables:
+  XSBOT_DEPLOY_ENV: "DEV1"
+
 default_expiration: "10s"
 
 instance_class: F1
+automatic_scaling:
+  max_concurrent_requests: 20
+
+inbound_services:
+- warmup
 
 handlers:
 - url: /api/last_build_result/.*
@@ -21,9 +29,25 @@ handlers:
   static_files: static/\1
   upload: static/.*
 
+- url: /
+  static_files: static/top.html
+  upload: static/top.html
+
+- url: /_ah/warmup
+  script: webapi.app
+
+- url: /_ah/start
+  script: webapi.app
+  login: admin
+
+- url: /_ah/stop
+  script: webapi.app
+  login: admin
+
 includes:
 - plugin/line/app.yaml
 - plugin/twilio/app.yaml
+- plugin/render_text/app.yaml
 
 libraries:
 - name: ssl

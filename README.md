@@ -63,7 +63,11 @@ plugin によって拡張可能な設計になっています。
 このリポジトリを clone した上で、追加のパッケージを pip で lib/ 以下にインストールします。
 
     > git clone ...
-    > pip install -r packages.txt -t lib
+    > pip install -r requirements.txt -t lib
+
+なお、line_bot_sdk が利用する requests が利用する urllib3 で chunked encoding を受信する際に例外が出る不具合があります。
+https://github.com/agfor/requests/commit/6f7af88464504d6c9a4f84ce9c9535d2eb941b39
+このパッチを lib/requests/models.py に当ててください。
 
 続いて、GAE のセットアップです。
 詳しくは、一般的な GAE のセットアップ手順を参照してください。
@@ -121,8 +125,81 @@ Google アカウントでの認証が要求されますので、GAE の admin �
 
 この時、シナリオで指定された画像等のリソースファイルも全て Google Cloud Storage 上にコピーされますので、安定したサービス提供が可能です。
 
+## ログの BigQuery での集計
+
+@log コマンドで、ユーザがシーン中の特定の箇所に来た際にログを出力することが可能です。
+Google App Engine のログは、Stackdriver Logging にまずは出力されますので、ここから直接ログを取得することも可能ですが、BigQuery を経由した方が柔軟な対応が可能となります。
+
+### Stackdriver Logging から BigQuery の接続
+
+Cloud Console の Logging > エクスポート から「エクスポートを作成」を選択。
+シンク名は適当に。シンクサービスに BigQuery、シンクのエクスポート先に「新しい BigQuery データセットを作成」を選び、ポップアップした入力欄に「log」と設定。
+
+この設定を行った後から、ログが BigQuery に取り込まれるようになります。
+
+### BigQuery でのビューの設定
+
+ログが出力されるように、bot を少し動かしてしばらく待つと、Cloud Console の BigQuery の「リソース」内の先ほど作成した log というデータセットの下に、 appengine_googleapis_com_request_log_* というテーブルが作成されます。
+
+クエリエディタ内で以下のクエリを作成し、一度「実行」してみて、問題なさそうであれば、「ビューを保存」してください。
+
+```
+SELECT
+  timestamp,
+  JSON_EXTRACT_SCALAR(l.logMessage, "$.date") AS date,
+  JSON_EXTRACT_SCALAR(l.logMessage, "$.uid") AS uid,
+  JSON_EXTRACT_SCALAR(l.logMessage, "$.cat") AS cat,
+  JSON_EXTRACT_SCALAR(l.logMessage, "$.log") AS log,
+  JSON_EXTRACT_SCALAR(l.logMessage, "$.scene") AS scene
+FROM
+  `log.appengine_googleapis_com_request_log_*`,
+  UNNEST(protoPayload.line) as l
+WHERE
+  _TABLE_SUFFIX BETWEEN 
+  FORMAT_DATE("%Y%m%d", DATE_SUB(CURRENT_DATE(), INTERVAL 12 MONTH)) AND FORMAT_DATE("%Y%m%d", CURRENT_DATE())
+  AND
+  timestamp >= TIMESTAMP("2019-01-01 00:00:00+09")
+  AND
+  l.logMessage LIKE "%XSBLog%"
+ORDER BY
+  timestamp DESC
+LIMIT 50000
+```
+
+INTERVAL 12 MONTH としている部分は、実際に何ヶ月前まで取得したいかを、timestamp と比較している日付は、ログの取得を開始したい日時（サービスインの日時など）を指定します。
+
+### BigQuery のビューの利用
+
+[データポータル（旧 Google Data Studio）](https://datastudio.google.com/)は簡易的な BI ツールです。
+
+空のレポートを作成し、「新しいデータソースを追加」から、BigQuery を選んで、上記で作成したビューを選ぶことで、ログの簡易分析が可能です。
+
+一番シンプルな、特定のログが何回出力されたかを表示するには、以下の手順で表を設定します。
+
+* 期間のディメンションを「date」に（JSTでフィルタできるようになる）
+* ディメンションを「cat」と「log」に
+* 指標は「Record Count」に
+  * ユニークユーザ数がほしい場合はカスタムから `COUNT_DISTINCT(uid)` という式を入力
+
+日付ごとのログ出力回数のグラフを作成することなども簡単にできますので、詳細はデータポータルの使い方を調べてください。
+
+また、１件ずつのデータを見ながら解析を行いたい場合は、Google App Script から BigQuery のビューデータを引っ張ってきて Google スプレッドシート上でデータ表示／分析を行うことも可能です。
+
+## ユニットテスト
+
+### 準備
+
+追加でいくつかのパッケージが必要です。
+
+    > pip install webtest pyyaml Pillow
+    > gcloud components install app-engine-python
+
+### 実行
+
+    > ./test.sh
+
 ## 注意事項
 
-Google App Engine および Google Cloud Storage は従量課金サービスです。
+Google App Engine および Google Cloud Storage, Stackdriver Logging, Google BigQuery は従量課金サービスです。
 
 不具合により、意図しない課金が発生したとしても、補償いたしかねますので、[アラート](https://cloud.google.com/billing/docs/how-to/budgets?hl=ja&ref_topic=6288636&visit_id=1-636539550464473783-319035179&rd=1)などをご活用ください。

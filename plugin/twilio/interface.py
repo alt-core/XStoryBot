@@ -64,10 +64,11 @@ class TwilioPlugin_Interface(object):
 
         context.response = []
         for reaction, children in reactions:
-            msg = reaction[0]
-            options = reaction[1:] if len(reaction) > 1 else []
+            sender = reaction[0]
+            msg = reaction[1]
+            options = reaction[2:] if len(reaction) > 2 else []
 
-            if commands.invoke_runtime_construct_response(context, msg, options, children):
+            if commands.invoke_runtime_construct_response(context, sender, msg, options, children):
                 # コマンド毎の処理メソッドの中で context.response への追加が行われている
                 pass
             elif msg.startswith(u'<'):
@@ -76,7 +77,8 @@ class TwilioPlugin_Interface(object):
                 if context.is_voicecall:
                     context.response.append(u'<Say language="ja-jp" voice="woman">' + msg + u'</Say>')
                 else:
-                    context.response.append(u'<Message>' + msg + u'</Message>')
+                    text = msg if sender is None else sender + u"：\n" + msg
+                    context.response.append(u'<Message>' + text + u'</Message>')
 
         twiml += u''.join(context.response)
         twiml += u'</Response>'

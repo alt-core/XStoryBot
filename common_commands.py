@@ -12,7 +12,10 @@ import auth
 import hub
 import commands
 import users
+from expression import Expression
 
+
+IMAGE_CMDS = (u'@image', u'@画像')
 
 OR_CMDS = (u'@or', u'@または')
 RESET_CMDS = (u'@reset', u'@リセット')
@@ -24,6 +27,7 @@ IF_CMDS = (u'@if', u'@条件')
 
 SEQ_CMDS = (u'@seq', u'@順々')
 RESET_NODES_CMDS = (u'@reset_nodes', u'@ノードリセット')
+NEW_CHAPTER_CMDS = (u'@new_chapter', u'@新章')
 
 GROUP_ADD_CMDS = (u'@group_add', u'@グループ追加')
 GROUP_DEL_CMDS = (u'@group_del', u'@グループ削除')
@@ -32,7 +36,7 @@ WEBHOOK_CMDS = (u'@webhook', u'@WebHook')
 LOG_CMDS = (u'@log', u'@Log')
 ERROR_CMDS = (u'@error', u'@Error')
 
-ALL_COMMON_CMDS = OR_CMDS + RESET_CMDS + SET_CMDS + FORWARD_CMDS + DELAY_CMDS + IF_CMDS + SEQ_CMDS + RESET_NODES_CMDS + GROUP_ADD_CMDS + GROUP_DEL_CMDS + GROUP_CLEAR_CMDS + WEBHOOK_CMDS + LOG_CMDS + ERROR_CMDS
+ALL_COMMON_CMDS = IMAGE_CMDS + OR_CMDS + RESET_CMDS + SET_CMDS + FORWARD_CMDS + DELAY_CMDS + IF_CMDS + SEQ_CMDS + RESET_NODES_CMDS + NEW_CHAPTER_CMDS + GROUP_ADD_CMDS + GROUP_DEL_CMDS + GROUP_CLEAR_CMDS + WEBHOOK_CMDS + LOG_CMDS + ERROR_CMDS
 
 COMMON_OBJECT = (u'Core',)
 
@@ -58,11 +62,15 @@ class CommonCommands_Builder(object):
     def __init__(self, params):
         self.params = params
 
-    def build_from_command(self, builder, msg, options, children=[], grandchildren=[]):
+    def build_from_command(self, builder, sender, msg, options, children=[], grandchildren=[]):
         if msg not in ALL_COMMON_CMDS:
             builder.raise_error(u'内部エラー：未知のコマンドです')
 
-        builder.add_command(msg, options, children)
+        if msg in IMAGE_CMDS:
+            # IMAGE_CMDS は scenario.py で直接対応する
+            return False
+
+        builder.add_command(sender, msg, options, children)
 
         # 解釈はここで終了
         return True
@@ -99,25 +107,28 @@ class CommonCommands_Runtime(object):
             # 強制リセットキーワードがアクションとして入ってきた場合は
             # プレイヤーの状態を初期化して処理を終了
             context.status.reset()
-            context.add_reaction(u'リセットしました')
+            context.add_reaction(None, u'リセットしました')
             return None
         return action
 
-    def run_command(self, context, msg, options, _children=[]):
-        if msg in (OR_CMDS + IF_CMDS + SEQ_CMDS):
-            # 制御系のコマンドは scenario.py 内で直接対応
+    def run_command(self, context, sender, msg, options, _children=[]):
+        if msg in (IMAGE_CMDS + OR_CMDS + IF_CMDS + SEQ_CMDS):
+            # 画像と制御系のコマンドは scenario.py 内で直接対応
             return False
         elif msg in RESET_CMDS:
             context.status.reset()
         elif msg in SET_CMDS:
-            context.status[options[0]] = options[1]
+            value = options[1]
+            if isinstance(value, Expression):
+                value = value.eval(context.env, context.env.matches)
+            context.status[options[0]] = value
         elif msg in FORWARD_CMDS:
             bot_name = options[0]
             action = options[1]
             to_bot = main.get_bot(bot_name)
             if to_bot is None or to_bot.get_interface(context.service_name) is None:
                 logging.error("invalid bot name: @forward :"+ bot_name)
-                context.add_reaction(u"<<@forwardを解釈できませんでした>>")
+                context.add_reaction(None, u"<<@forwardを解釈できませんでした>>")
                 return True
             send_request(bot_name, context.user, action)
         elif msg in DELAY_CMDS:
@@ -131,7 +142,7 @@ class CommonCommands_Runtime(object):
             to_bot = main.get_bot(bot_name)
             if to_bot is None or to_bot.get_interface(context.service_name) is None:
                 logging.error("invalid bot name: @delay: " + bot_name)
-                context.add_reaction(u"<<@delayを解釈できませんでした>>")
+                context.add_reaction(None, u"<<@delayを解釈できませんでした>>")
                 return True
             send_request(bot_name, context.user, action, delay_secs)
         elif msg in RESET_NODES_CMDS:
@@ -142,6 +153,10 @@ class CommonCommands_Runtime(object):
                 for key in context.status.keys():
                     if key.startswith(u'node.seq.'):
                         del context.status[key]
+        elif msg in NEW_CHAPTER_CMDS:
+            for key in context.status.keys():
+                if key.startswith(u'$$') or key.startswith(u'node.seq.'):
+                    del context.status[key]
         elif msg in GROUP_ADD_CMDS:
             group_name = options[0]
             users.append_group_member(group_name, context.user)
@@ -184,7 +199,7 @@ class CommonCommands_Runtime(object):
             logging.error(message)
         else:
             logging.error(u'内部エラー：未知のコマンドです:' + msg)
-            context.add_reaction(u"<<内部エラー：未知のコマンドです>>")
+            context.add_reaction(None, u"<<内部エラー：未知のコマンドです>>")
         return True
 
     def get_runtime_object(self, _name, context):
@@ -201,18 +216,18 @@ def setup(params):
         runtime=runtime)
     commands.register_commands([
         commands.CommandEntry(
+            names=IMAGE_CMDS,
+            options='image',
+            builder=builder,
+            runtime=runtime,
+            service='*'),
+        commands.CommandEntry(
             names=OR_CMDS,
             builder=builder,
             runtime=runtime,
             service='*'),
         commands.CommandEntry(
             names=RESET_CMDS,
-            builder=builder,
-            runtime=runtime,
-            service='*'),
-        commands.CommandEntry(
-            names=SET_CMDS,
-            options='variable expr',
             builder=builder,
             runtime=runtime,
             service='*'),
@@ -225,12 +240,6 @@ def setup(params):
         commands.CommandEntry(
             names=DELAY_CMDS,
             options='number text|label',
-            builder=builder,
-            runtime=runtime,
-            service='*'),
-        commands.CommandEntry(
-            names=IF_CMDS,
-            options='expr label label',
             builder=builder,
             runtime=runtime,
             service='*'),
@@ -284,6 +293,46 @@ def setup(params):
             runtime=runtime,
             service='*'),
     ])
+
+    # version別
+    # min_version の高いものから順番に
+    commands.register_commands([
+        commands.CommandEntry(
+            names=IF_CMDS,
+            options='expr label label',
+            builder=builder,
+            runtime=runtime,
+            service='*',
+            min_version=2),
+        commands.CommandEntry(
+            names=IF_CMDS,
+            options='hankaku label label',
+            builder=builder,
+            runtime=runtime,
+            service='*',
+            min_version=1),
+        commands.CommandEntry(
+            names=SET_CMDS,
+            options='variable expr',
+            builder=builder,
+            runtime=runtime,
+            service='*',
+            min_version=2),
+        commands.CommandEntry(
+            names=SET_CMDS,
+            options='variable hankaku',
+            builder=builder,
+            runtime=runtime,
+            service='*',
+            min_version=1),
+        commands.CommandEntry(
+            names=NEW_CHAPTER_CMDS,
+            builder=builder,
+            runtime=runtime,
+            service='*',
+            min_version=2),
+    ])
+
     commands.register_object(commands.ObjectEntry(
         names=COMMON_OBJECT,
         runtime=runtime,

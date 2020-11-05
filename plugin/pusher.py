@@ -26,7 +26,7 @@ class PusherPlugin_Runtime(object):
             )
         return self.pusher_client
 
-    def run_command(self, _context, _msg, options):
+    def run_command(self, _context, _sender, _msg, options):
         channel_id = options[0]
         event_id = options[1]
         message = options[2]

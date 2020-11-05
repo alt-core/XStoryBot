@@ -63,7 +63,7 @@ class PlayerStatusDB(object):
     def keys(self):
         return self.db.keys()
 
-    def get(self, item, default):
+    def get(self, item, default=None):
         if item in self:
             return self[item]
         else:

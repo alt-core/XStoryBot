@@ -52,7 +52,7 @@ def text2image(encoded_text):
 
     if len(encoded_text) > 2000:
         error('too long request: {}'.format(len(encoded_text)))
-    
+
     options = DEFAULT_RENDERING_OPTIONS.copy()
     options.update(settings.PLUGINS.get('render_text', {}).get('text2image', {}))
 
@@ -82,7 +82,7 @@ def text2image(encoded_text):
             else:
                 # 外部からの上書きを禁止しているパラメータ
                 pass
-        if not text_rendering_options.has_key(key) and options.has_key(key):
+        if not (key in text_rendering_options) and (key in options):
             text_rendering_options[key] = options[key]
 
     source_hash = hashlib.md5(encoded_text + json.dumps([size_x, size_y, margin_x, margin_y, text_rendering_options])).hexdigest()
@@ -106,7 +106,7 @@ def text2image(encoded_text):
     logging.info('text2image cache miss-hit:' + encoded_text)
 
     text = unicode(urllib.unquote_plus(encoded_text), 'utf-8')
-    output_buffer, _ = renderer.render_text_to_png(text, size_x, size_y, margin_x, margin_y, **text_rendering_options)
+    output_buffer, _ = renderer.render_text_to_png(text, size_x, size_y, margin_x, margin_x, margin_y, margin_y, **text_rendering_options)
 
     etag = hashlib.md5(output_buffer).hexdigest()
     memcache.set('text2imagecacheetag:' + source_hash, etag, time=CACHE_SEC)

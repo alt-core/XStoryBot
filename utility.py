@@ -16,6 +16,15 @@ def parse_url(cell):
         return None
 
 
+def parse_sender(raw_msg):
+    parts = raw_msg.split(u"\n", 1)
+    first_line = parts[0].strip()
+    if len(parts) >= 2 and (first_line.endswith(u"：") or first_line.endswith(u":")):
+        return first_line[:-1], parts[1]
+    else:
+        return None, raw_msg
+
+
 def safe_list_get(li, index, default_value):
     return li[index] if len(li) > index else default_value
 
@@ -61,7 +70,7 @@ def merge_params(dic1, dic2):
 def extract_params(dic, names):
     params = {}
     for name in names:
-        if dic.has_key(name):
+        if name in dic:
             params[name] = dic[name]
     return params
 
@@ -99,16 +108,16 @@ def to_str(str_or_unicode):
 class CascadingDictionary(dict):
     def __init__(self, *dicts):
         self.dicts = dicts
-    
+
     def __getitem__(self, key):
         for d in self.dicts:
-            if d.has_key(key):
+            if key in d:
                 return d[key]
         raise KeyError
-    
+
     def __contains__(self, key):
         for d in self.dicts:
-            if d.has_key(key):
+            if key in d:
                 return True
         return False
-    
+

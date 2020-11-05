@@ -24,6 +24,8 @@ def twilio_callback_sub(bot_name, from_tel, to_tel, is_voicecall, message):
     if interface is None:
         abort(404)
 
+    bot.check_reload()
+
     response.content_type = 'text/xml; charset=UTF-8'
 
     if not from_tel.startswith(u'+81'):

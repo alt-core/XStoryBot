@@ -28,17 +28,19 @@ def api_build(bot_name):
     options['skip_image'] = (request.params.get('skip_image') == 'true')
     options['force'] = (request.params.get('force') == 'true')
 
-    logging.info("start building...: options: {}".format(options))
+    version = main.get_options().get('scenario_version', 1)
 
-    ok, err = bot.build_scenario(options=options)
+    logging.info("start building...: options: {}, version: {}".format(options, version))
+
+    ok, err = bot.build_scenario(options=options, version=version)
 
     response.content_type = 'text/plain; charset=UTF-8'
     response.headers['Access-Control-Allow-Origin'] = '*'
     if ok:
         # リロードに成功した
-        return utility.make_ok_json(u"ビルドしました。")
+        return utility.make_ok_json(u"反映作業に成功しました。")
     else:
-        return utility.make_ng_json(u"ビルドに失敗しました。\n\n" + err)
+        return utility.make_ng_json(u"反映作業に失敗しました。\n\n" + err)
 
 
 @app.get('/api/build_async/<bot_name>')
@@ -122,10 +124,32 @@ def do_action(bot_name):
     if user is None or action is None:
         abort_json(400, u'invalid parameter')
 
+    bot.check_reload()
+
     result = []
     _do_action_iter(result, bot, user, action, attrs)
 
     return utility.make_ok_json(u"\n".join(result))
+
+
+@app.get('/_ah/start')
+def start_handler():
+    response.content_type = 'text/plain; charset=UTF-8'
+    return u'Start successful'
+
+
+@app.get('/_ah/stop')
+def stop_handler():
+    response.content_type = 'text/plain; charset=UTF-8'
+    return u'Stop successful'
+
+
+@app.get('/_ah/warmup')
+def warmup_handler():
+    for bot_name, bot in main.get_bots().items():
+        bot.check_reload()
+    response.content_type = 'text/plain; charset=UTF-8'
+    return u'Warmup successful'
 
 
 if __name__ == "__main__":

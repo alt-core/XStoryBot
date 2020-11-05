@@ -3,6 +3,7 @@
 import re
 
 import utility
+from expression import Expression
 
 catalog = []
 catalog_map = {}
@@ -25,11 +26,11 @@ RE_NUMBER = re.compile(ur'^[\-−]?[0-9０-９]+([.．][0-9０-９]*)?$')
 
 
 class Default_Builder(object):
-    def build_from_command(self, builder, msg, options, children=None):
+    def build_from_command(self, builder, sender, msg, options, children=None):
         if children:
-            builder.add_command(msg, options, children)
+            builder.add_command(sender, msg, options, children)
         else:
-            builder.add_command(msg, options, None)
+            builder.add_command(sender, msg, options, None)
         return True
 
 
@@ -50,7 +51,7 @@ def _convert_format_string(s):
 
 
 class CommandEntry(object):
-    def __init__(self, names, options=None, child=None, grandchild=None, builder=None, runtime=None, service='*', specs=None):
+    def __init__(self, names, options=None, child=None, grandchild=None, builder=None, runtime=None, service='*', specs=None, min_version=1):
         """
         :param names: [u'@コマンド名', u'@Command']
         :param options: 'label|text|expr|image|raw(MAX_LEN) [label|text|expr|image|raw(MAX_LEN)] ...'
@@ -60,6 +61,7 @@ class CommandEntry(object):
         :param runtime: SomePlugin_Runtime() or None
         :param service: 'line'
         :param specs: {'children_min': 1, 'children_max': 4}
+        :param min_version: scenario version
         """
         self.command = names
         self.options = _convert_format_string(options)
@@ -69,6 +71,7 @@ class CommandEntry(object):
         self.runtime = runtime
         self.service = service
         self.specs = specs or {}
+        self.min_version = min_version
 
 
 def register_command(entry):
@@ -95,14 +98,14 @@ def register_commands(entries):
         register_command(entry)
 
 
-def get_command(msg, service='*'):
+def get_command(msg, version, service='*'):
     """コマンドカタログからコマンド情報を取得する。
 
     :param msg: 取得するコマンド
     :param service: フィルタするサービス, '*' でフィルタを行わない"""
     l = catalog_map.get(msg, [])
     for entry in l:
-        if service == '*' or entry.service == '*' or entry.service == service:
+        if (service == '*' or entry.service == '*' or entry.service == service) and version >= entry.min_version:
             return entry
     return None
 
@@ -120,10 +123,22 @@ def check_format_and_normalize(builder, cell, cell_format):
         builder.raise_error(u'コマンドの引数の文字数が長すぎます（最大{}文字）'.format(max_len), cell)
 
     hankaku = False
-    if 'expr' in format_type or 'variable' in format_type or 'hankaku' in format_type:
+    lower = False
+    if 'expr' in format_type:
+        try:
+            expr = Expression.from_str(cell)
+        except Exception as e:
+            builder.raise_error(u'式が不正です: {} {}'.format(cell, unicode(e)), cell)
+        return expr
+
+    if 'variable' in format_type:
         hankaku = True
-        # TODO: 式のバリデーション
-        # 式のバリデーションが出来るようになったら variable は lvalue(左辺値) として整理する
+        lower = True
+    if 'normalize' in format_type:
+        hankaku = True
+        lower = True
+    if 'hankaku' in format_type:
+        hankaku = True
     if 'label' in format_type:
         # label の可能性がある場合は # や * で始まっていたら半角化
         if RE_LABEL.match(cell):
@@ -134,6 +149,8 @@ def check_format_and_normalize(builder, cell, cell_format):
             hankaku = True
     if hankaku:
         cell = utility.to_hankaku(cell)
+    if lower:
+        cell = cell.lower()
 
     passed = False
     if 'raw' in format_type or 'text' in format_type or 'expr' in format_type or 'hankaku' in format_type:
@@ -168,11 +185,11 @@ def check_format_and_normalize(builder, cell, cell_format):
 def invoke_builder(builder, node):
     row = node.term
     # コマンド判定は半角化して行う
-    msg = utility.to_hankaku(row[0])
+    sender, msg = utility.parse_sender(utility.to_hankaku(row[0]))
     if not msg.startswith(u'@'):
         return False
 
-    entry = get_command(msg)
+    entry = get_command(msg, builder.version)
     if entry is None:
         return False
 
@@ -228,39 +245,39 @@ def invoke_builder(builder, node):
         grandchildren.append(child_grandchild_list)
 
     if entry.grandchild:
-        return entry.builder.build_from_command(builder, msg, options, children, grandchildren)
+        return entry.builder.build_from_command(builder, sender, msg, options, children, grandchildren)
     elif entry.child:
-        return entry.builder.build_from_command(builder, msg, options, children)
+        return entry.builder.build_from_command(builder, sender, msg, options, children)
     else:
-        return entry.builder.build_from_command(builder, msg, options)
+        return entry.builder.build_from_command(builder, sender, msg, options)
 
 
-def invoke_runtime_run_command(context, msg, options, children):
+def invoke_runtime_run_command(context, sender, msg, options, children):
     if not msg.startswith(u'@'):
         return False
-    entry = get_command(msg, context.service_name)
+    entry = get_command(msg, version=context.version, service=context.service_name)
     if entry is None:
         return False
     if not hasattr(entry.runtime, 'run_command'):
         return False
     if entry.child:
-        return entry.runtime.run_command(context, msg, options, children)
+        return entry.runtime.run_command(context, sender, msg, options, children)
     else:
-        return entry.runtime.run_command(context, msg, options)
+        return entry.runtime.run_command(context, sender, msg, options)
 
 
-def invoke_runtime_construct_response(context, msg, options, children):
+def invoke_runtime_construct_response(context, sender, msg, options, children):
     if not msg.startswith(u'@'):
         return False
-    entry = get_command(msg, context.service_name)
+    entry = get_command(msg, version=context.version, service=context.service_name)
     if entry is None:
         return False
     if not hasattr(entry.runtime, 'construct_response'):
         return False
     if entry.child:
-        return entry.runtime.construct_response(context, msg, options, children)
+        return entry.runtime.construct_response(context, sender, msg, options, children)
     else:
-        return entry.runtime.construct_response(context, msg, options)
+        return entry.runtime.construct_response(context, sender, msg, options)
 
 
 class ObjectEntry(object):

@@ -1,4 +1,7 @@
 # coding: utf-8
+#import sys
+#reload(sys)
+#sys.setdefaultencoding('utf-8')
 
 import re
 
@@ -17,6 +20,12 @@ bot_dict = {}
 
 def get_bot(bot_name):
     return bot_dict.get(bot_name, None)
+
+def get_bots():
+    return bot_dict
+
+def get_options():
+    return settings.OPTIONS
 
 
 def initialize_bot_dict():
