@@ -1,4 +1,4 @@
-bottle==0.12.10
+bottle==0.12.19
 line_bot_sdk==1.17.0
 google_api_python_client==1.7.9
 twilio==6.5.1
