@@ -6,7 +6,7 @@ import uuid
 import time
 
 from linebot import LineBotApi, WebhookParser
-from linebot.models import MessageEvent, PostbackEvent, BeaconEvent, FollowEvent, UnfollowEvent, JoinEvent, LeaveEvent, TextMessage, LocationMessage, StickerMessage, TextSendMessage, ImageSendMessage, TemplateSendMessage, \
+from linebot.models import MessageEvent, PostbackEvent, BeaconEvent, FollowEvent, UnfollowEvent, JoinEvent, LeaveEvent, MemberJoinedEvent, MemberLeftEvent, TextMessage, LocationMessage, StickerMessage, TextSendMessage, ImageSendMessage, TemplateSendMessage, \
     CarouselColumn, ImagemapSendMessage, ImagemapArea, MessageImagemapAction, Sender
 
 # SSL 警告を防ぐため / 今回のケースでは問題ないが、行儀は良くない
@@ -52,6 +52,7 @@ class LinePlugin_Interface(object):
         self.line_api_retry_count = int(params.get('line_api_retry_count', LINE_API_RETRY_COUNT))
         self.line_api_retry_sleep = float(params.get('line_api_retry_sleep', LINE_API_RETRY_SLEEP))
         self.line_abort_duration_ms = float(params.get('line_abort_duration', LINE_ABORT_DURATION)) * 1000
+        self.line_abort_duration_dont_break = not not params.get('line_abort_duration_dont_break', False)
 
     def get_service_list(self):
         return {'line': self}
@@ -71,7 +72,10 @@ class LinePlugin_Interface(object):
             raise NotImplementedError
         user = User("line", event.source.type + ',' + sender_id)
         action, attrs = self._construct_action(event)
-        return LinePlugin_ActionContext(self.bot_name, self, user, action, attrs, event)
+        if action is not None:
+            return LinePlugin_ActionContext(self.bot_name, self, user, action, attrs, event)
+        else:
+            return None
 
     def _construct_action(self, event):
         attrs = {'line.event.type': event.type}
@@ -96,6 +100,9 @@ class LinePlugin_Interface(object):
             return u"LINE_BEACON:{},{}".format(event.beacon.type, event.beacon.hwid), attrs
         elif isinstance(event, (FollowEvent, UnfollowEvent, JoinEvent, LeaveEvent)):
             return u'##line.' + event.type, attrs
+        else:
+            # MemberJoinedEvent, MemberLeftEvent は活用が難しいので、そもそもイベントとして引き渡さない
+            return None, attrs
 
     def respond_reaction(self, context, reactions):
         msgs = self._construct_responses(context, reactions)

@@ -60,12 +60,16 @@ def callback(bot_name):
                 diff = current - timestamp
                 #logging.info(u'timestamp: {}, current: {}, diff: {}'.format(timestamp, current, diff))
                 if diff > interface.line_abort_duration_ms:
-                    logging.warning(u'[LINE] GAE spin-up is too late; aborted: {}'.format(diff))
-                    abort_json(504, u'Timeout')
+                    if not interface.line_abort_duration_dont_break:
+                        logging.warning(u'[LINE] GAE spin-up is too late; aborted: {}'.format(diff))
+                        abort_json(504, u'Timeout')
+                    else:
+                        logging.warning(u'[LINE] GAE spin-up is too late; continue: {}'.format(diff))
 
         for event in events:
             context = interface.create_context_from_line_event(event)
-            bot.handle_action(context)
+            if context is not None:
+                bot.handle_action(context)
     except InvalidSignatureError:
         abort_json(401, u'invalid signature')
 

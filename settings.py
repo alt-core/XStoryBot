@@ -15,6 +15,7 @@ OPTIONS = {
 PLUGINS = {
     'line': {
         'line_abort_duration': 27,
+        'line_abort_duration_dont_break': True,
         'alt_text': u'LINEアプリで確認してください。',
     },
     # 'line.more': {
