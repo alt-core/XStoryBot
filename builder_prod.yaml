@@ -23,6 +23,14 @@ handlers:
   static_files: static/top.html
   upload: static/top.html
 
+- url: /_ah/start
+  script: webapi.app
+  login: admin
+
+- url: /_ah/stop
+  script: webapi.app
+  login: admin
+
 libraries:
 - name: ssl
   version: latest

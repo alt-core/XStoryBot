@@ -708,6 +708,19 @@ class MainTestCase(BotTestCaseBase):
                 [u'#dummy', u'ダミー'],
                 [u'##', u'シーン2メッセージ2回目以降'],
                 [u'ノードリセット2to1', u'@ノードリセット', u'シーン1'],
+                [u'ループ', u'@loop', u'##', u'##2', u'##3'],
+                [u'##', u'loop1'],
+                [u'##', u'loop2'],
+                [u'##', u'loop3'],
+                [u'ランダム3', u'@random', u'##', u'##2', u'##3'],
+                [u'##', u'random1'],
+                [u'##', u'random2'],
+                [u'##', u'random3'],
+                [u'ランダム2', u'@random', u'##', u'##2'],
+                [u'##', u'random1'],
+                [u'##', u'random2'],
+                [u'ランダム1', u'@random', u'##'],
+                [u'##', u'random1'],
             ]),
         ])
         #print "\n".join([u','.join(s[0]) for s in self.test_bot.scenario.scenes[u'共通'].lines])
@@ -789,12 +802,59 @@ class MainTestCase(BotTestCaseBase):
         self.send_message(u'切替２')
         self.assertEqual(len(self.messages), 1)
         self.assertEqual(self.messages[0], u"シーン２に切り替えます")
+        self.send_message(u'ループ')
+        self.assertEqual(len(self.messages), 1)
+        self.assertEqual(self.messages[0], u"loop1")
         self.send_message(u'メッセージ')
         self.assertEqual(len(self.messages), 1)
         self.assertEqual(self.messages[0], u"シーン2メッセージ1回目")
+        self.send_message(u'ループ')
+        self.assertEqual(len(self.messages), 1)
+        self.assertEqual(self.messages[0], u"loop2")
         self.send_message(u'メッセージ')
         self.assertEqual(len(self.messages), 1)
         self.assertEqual(self.messages[0], u"シーン2メッセージ2回目以降")
+        self.send_message(u'ループ')
+        self.assertEqual(len(self.messages), 1)
+        self.assertEqual(self.messages[0], u"loop3")
+        self.send_message(u'ループ')
+        self.assertEqual(len(self.messages), 1)
+        self.assertEqual(self.messages[0], u"loop1")
+        self.send_message(u'ループ')
+        self.assertEqual(len(self.messages), 1)
+        self.assertEqual(self.messages[0], u"loop2")
+        random_history = {}
+        prev = ""
+        for i in range(100):
+            self.send_message(u'ランダム3')
+            self.assertEqual(len(self.messages), 1)
+            self.assertTrue(self.messages[0].startswith(u"random"))
+            self.assertNotEqual(self.messages[0], prev)
+            prev = self.messages[0]
+            random_history[self.messages[0]] = True
+        self.assertTrue(random_history.get(u"random1"))
+        self.assertTrue(random_history.get(u"random2"))
+        self.assertTrue(random_history.get(u"random3"))
+        random_history = {}
+        prev = ""
+        for i in range(100):
+            self.send_message(u'ランダム2')
+            self.assertEqual(len(self.messages), 1)
+            self.assertTrue(self.messages[0].startswith(u"random"))
+            self.assertNotEqual(self.messages[0], prev)
+            prev = self.messages[0]
+            random_history[self.messages[0]] = True
+        self.assertTrue(random_history.get(u"random1"))
+        self.assertTrue(random_history.get(u"random2"))
+        self.send_message(u'ランダム1')
+        self.assertEqual(len(self.messages), 1)
+        self.assertEqual(self.messages[0], u"random1")
+        self.send_message(u'ランダム1')
+        self.assertEqual(len(self.messages), 1)
+        self.assertEqual(self.messages[0], u"random1")
+        self.send_message(u'ランダム1')
+        self.assertEqual(len(self.messages), 1)
+        self.assertEqual(self.messages[0], u"random1")
 
     def test_condition_regex_flag(self):
         self.test_bot.scenario = ScenarioBuilder.build_from_table([
@@ -1166,7 +1226,7 @@ class MainTestCase(BotTestCaseBase):
     def test_new_chapter_v2(self):
         self.test_bot.scenario = ScenarioBuilder.build_from_table([
             [u'フラグON', u'@set', u'$$flag', u'True'],
-            [u'', u'フラグ＝{$$flag}'],
+            [u'', u'フラグ＝{$$Ｆlag}'],
             [u'新章', u'@new_chapter'],
             [u'メッセージ', u'@seq', u'##', u'##2'],
             [u'dummy', u'ダミー'],
@@ -1179,7 +1239,7 @@ class MainTestCase(BotTestCaseBase):
             [u'#dummy', u'ダミー'],
             [u'##', u'偽'],
             [u'[!$$flag]フラグ確認', u'フラグOFF'],
-            [u'[$$flag] フラグ確認', u'フラグON'],
+            [u'[$$Ｆlag] フラグ確認', u'フラグON'],
         ], version=2)
         self.send_reset()
         self.send_message(u'フラグ確認')

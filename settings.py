@@ -10,6 +10,7 @@ OPTIONS = {
     'admins': [],
     'reset_keyword': u'強制リセット',
     'timezone': 'Asia/Tokyo',
+    'scenario_version': 2,
 }
 
 PLUGINS = {
@@ -17,7 +18,15 @@ PLUGINS = {
         'line_abort_duration': 27,
         'line_abort_duration_dont_break': True,
         'alt_text': u'LINEアプリで確認してください。',
+        'sender_icon_urls': {
+        }
     },
+    # 'line.quick_reply': {
+    #     'command': [u'＞', u'>'],
+    #     'default_reply': u'続きを読む=>',
+    #     'retry_message': u'システム:\n【以下の返答を選んでください】',
+    #     'ignore_pattern': ur'^リセット$|^「リセット」$|^\*共通/リセット$|^##line.liff.',
+    # },
     # 'line.more': {
     #     'command': [u'▽'],
     #     'image_url': 'https://example.com/more_button.png',
@@ -38,8 +47,13 @@ PLUGINS = {
     #         }
     #     },
     # },
+    # 'liff': {},
     # 'render_text': {},
     'google_sheets': {},
+    # 'chatgpt': {
+    #     'api_key': '<<CHATGPT_API_KEY>>',
+    #     'model': 'gpt-3.5-turbo',
+    # },
     # 'twilio': {
     #     'twilio_sid': '<<TWILIO_SID>>',
     #     'twilio_auth_token': '<<TWILIO_AUTH_TOKEN>>',

@@ -192,6 +192,8 @@ def invoke_builder(builder, node):
     entry = get_command(msg, builder.version)
     if entry is None:
         return False
+    if entry.builder is None:
+        builder.raise_error(u'{} は builder が指定されていません'.format(msg))
 
     options = []
     children = []

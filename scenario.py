@@ -6,6 +6,7 @@ from unicodedata import normalize
 import hashlib
 import pickle
 import httplib2
+import random
 
 from google.appengine.api import app_identity
 from google.appengine.api import memcache
@@ -20,7 +21,7 @@ from condition_expr import ConditionExpression
 from expression import Expression
 
 
-from common_commands import OR_CMDS, IF_CMDS, SEQ_CMDS, IMAGE_CMDS
+from common_commands import OR_CMDS, IF_CMDS, SEQ_CMDS, LOOP_CMDS, RANDOM_CMDS, IMAGE_CMDS
 
 INCLUDE_COND_CMDS = (u'@include', u'@読込')
 
@@ -460,6 +461,15 @@ class ScenarioBuilder(object):
         self.block.indices.append((cond, self.lines))
         hub.invoke_all_builder_methods('callback_new_block', self, cond)
 
+    def create_anonymous_index_cond(self):
+        return Condition(CONDITION_KIND_STRING, u'##__{}'.format(self.scene.get_relative_position_desc(self.node)))        
+
+    def add_new_anonymous_index(self):
+        cond = self.create_anonymous_index_cond()
+        self.lines = []
+        self.block.indices.append((cond, self.lines))
+        hub.invoke_all_builder_methods('callback_new_block', self, cond)
+
     def _build_from_table(self, tab_name, table):
         root = SyntaxTree(tab_name, 0, (u'**'+tab_name,))
         # ファイルの先頭に特殊な親ノードを貼る
@@ -517,7 +527,7 @@ class ScenarioBuilder(object):
                 cond = Condition(CONDITION_KIND_STRING, u'#')
             elif cond_str == u'##':
                 # 無名インデックス
-                cond = Condition(CONDITION_KIND_STRING, u'##__{}'.format(self.scene.get_relative_position_desc(self.node)))
+                cond = self.create_anonymous_index_cond()
             else:
                 # 通常の条件セル
                 guard = None
@@ -790,12 +800,22 @@ class ScenarioBuilder(object):
             return None
 
 
+class StringFormatter(string.Formatter):
+    def get_value(self, key, args, kwargs):
+        if isinstance(key, unicode):
+            # field_name を正規化
+            key = normalize('NFKC', key).lower()
+            return super(StringFormatter, self).get_value(key, args, kwargs)
+        else:
+            return super(StringFormatter, self).get_value(key, args, kwargs)
+
+
 class Director(object):
     def __init__(self, scenario, context):
         self.scenario = scenario
         self.base_scene = None
         self.context = context
-        self.vformat = string.Formatter().vformat
+        self.vformat = StringFormatter().vformat
         self.flag_label_error = False
 
     def _get_scene(self, scene_title):
@@ -961,6 +981,8 @@ class Director(object):
                 sender_name = self.context.status.get(u'$$name', None)
                 if sender_name is not None and sender_name != u'':
                     sender = sender_name
+            if sender == u'': # 意図的に空文字で設定してあるときは $$name で上書きしない
+                sender = None
             row = [sender, msg]
             if options:
                 row.extend(options)
@@ -989,15 +1011,34 @@ class Director(object):
                         next_label = options[2]
                     return self.search_index(self.base_scene, next_label)
                 # TODO: いずれは @seq もプラグインに
-                elif msg in SEQ_CMDS:
+                elif msg in SEQ_CMDS or msg in LOOP_CMDS:
+                    is_loop = msg in LOOP_CMDS
                     node_seq = self.context.status.get(u'node.seq.' + scene.tab_name, {})
                     command_id = command.command_id
                     index = 0
                     if command_id in node_seq:
                         index = int(node_seq[command_id])
                     if index >= len(options):
-                        index = len(options) - 1
+                        if is_loop:
+                            index = 0
+                        else:
+                            index = len(options) - 1
                     node_seq[command_id] = unicode(index + 1)
+                    self.context.status[u'node.seq.' + scene.tab_name] = node_seq
+                    return self.search_index(self.base_scene, options[index])
+                elif msg in RANDOM_CMDS:
+                    node_seq = self.context.status.get(u'node.seq.' + scene.tab_name, {})
+                    command_id = command.command_id
+                    index = 0
+                    if command_id in node_seq:
+                        if len(options) >= 2:
+                            index = random.randint(0, len(options)-2)
+                            last_index = int(node_seq[command_id])
+                            if index >= last_index:
+                                index += 1
+                    else:
+                        index = random.randint(0, len(options)-1)
+                    node_seq[command_id] = unicode(index)
                     self.context.status[u'node.seq.' + scene.tab_name] = node_seq
                     return self.search_index(self.base_scene, options[index])
             elif msg.startswith(u'*') or msg.startswith(u'#'):

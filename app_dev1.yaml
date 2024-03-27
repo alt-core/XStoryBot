@@ -46,6 +46,7 @@ handlers:
 
 includes:
 - plugin/line/app.yaml
+- plugin/liff/app.yaml
 - plugin/twilio/app.yaml
 - plugin/render_text/app.yaml
 

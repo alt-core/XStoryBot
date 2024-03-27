@@ -2,7 +2,7 @@
 import logging
 import re
 
-from linebot.models import MessageEvent, PostbackEvent, FollowEvent, UnfollowEvent, JoinEvent, LeaveEvent, TextMessage, LocationMessage, StickerMessage, TextSendMessage, ImageSendMessage, TemplateSendMessage, ButtonsTemplate, ConfirmTemplate, CarouselTemplate, CarouselColumn, MessageTemplateAction, PostbackTemplateAction, URITemplateAction, ImagemapSendMessage, ImagemapArea, MessageImagemapAction, URIImagemapAction, BaseSize, Sender
+from linebot.models import MessageEvent, PostbackEvent, FollowEvent, UnfollowEvent, JoinEvent, LeaveEvent, TextMessage, LocationMessage, StickerMessage, TextSendMessage, ImageSendMessage, TemplateSendMessage, ButtonsTemplate, ConfirmTemplate, CarouselTemplate, CarouselColumn, MessageAction, PostbackAction, URIAction, ImagemapSendMessage, ImagemapArea, MessageImagemapAction, URIImagemapAction, BaseSize, Sender, QuickReply, QuickReplyButton
 import json
 
 import hub
@@ -14,12 +14,13 @@ BUTTON_CMDS = (u'@button', u'@ボタン')
 CONFIRM_CMDS = (u'@confirm', u'@確認')
 PANEL_CMDS = (u'@carousel', u'@カルーセル', u'@panel', u'@パネル')
 IMAGEMAP_CMDS = (u'@imagemap', u'@イメージマップ')
-ALL_TEMPLATE_CMDS = BUTTON_CMDS + CONFIRM_CMDS + PANEL_CMDS + IMAGEMAP_CMDS
+REPLY_CMDS = (u'@reply', u'@リプライ')
+ALL_TEMPLATE_CMDS = BUTTON_CMDS + CONFIRM_CMDS + PANEL_CMDS + IMAGEMAP_CMDS + REPLY_CMDS
 
 
 class LineDefaultCommandsPlugin_Builder(object):
     def build_from_command(self, builder, sender, msg, options, children=[], grandchildren=[]):
-        if msg in CONFIRM_CMDS or msg in BUTTON_CMDS or msg in IMAGEMAP_CMDS:
+        if msg in CONFIRM_CMDS or msg in BUTTON_CMDS or msg in IMAGEMAP_CMDS or msg in REPLY_CMDS:
             for choice in children:
                 self.lint_choice(builder, msg, choice)
 
@@ -67,6 +68,12 @@ class LineDefaultCommandsPlugin_Builder(object):
                 flag_image = (image != u'')
                 panels.append([children[i], grandchildren[i]])
             builder.add_command(sender, msg, options, panels)
+
+        elif msg in REPLY_CMDS:
+            if (builder.msg_count == 0):
+                builder.raise_error(u'クイックリプライをつける対象のメッセージがありません')
+            builder.add_command(sender, msg, options, children)
+            builder.msg_count -= 1 # REPLY_CMDSはメッセージ数を消費しない
 
         else:
             # ここには来ないはず
@@ -123,7 +130,7 @@ class LineDefaultCommandsPlugin_Builder(object):
                 builder.raise_error(u'イメージマップではアクションラベルは指定できません', *choice)
             try:
                 x, y, w, h = [int(x) for x in action_label.split(u',')]
-                if x < 0 or 1040 <= x or y < 0 or 1040 <= y or w <= 0 or 1040 < w or h <= 0 or 1040 < h:
+                if x < 0 or 1040 <= x or y < 0 or w <= 0 or 1040 < w or h <= 0:
                     raise ValueError
             except (ValueError, IndexError):
                 builder.raise_error(u'イメージマップアクションの指定が不正です', action_label)
@@ -147,19 +154,44 @@ class LineDefaultCommandsPlugin_Runtime(object):
             if len(choice) == 0:
                 continue
             elif len(choice) == 1:
-                results.append(MessageTemplateAction(choice[0], choice[0]))
+                results.append(MessageAction(choice[0], choice[0]))
             elif len(choice) == 2:
                 if re.match(r'^(https?|tel):', choice[1]):
-                    results.append(URITemplateAction(choice[0], choice[1]))
+                    results.append(URIAction(choice[0], choice[1]))
                 elif re.match(u'^[#*]', choice[1]):
-                    results.append(PostbackTemplateAction(label=choice[0], data=utility.encode_action_string(choice[1], action_token=action_token)))
+                    results.append(PostbackAction(label=choice[0], display_text=choice[0], data=utility.encode_action_string(choice[1], action_token=action_token)))
                 else:
-                    results.append(MessageTemplateAction(choice[0], choice[1]))
+                    results.append(MessageAction(choice[0], choice[1]))
             elif len(choice) >= 3:
                 if choice[1]:
-                    results.append(PostbackTemplateAction(label=choice[0], text=choice[1], data=utility.encode_action_string(choice[2], action_token=action_token)))
+                    results.append(PostbackAction(label=choice[0], display_text=choice[1], data=utility.encode_action_string(choice[2], action_token=action_token)))
                 else:
-                    results.append(PostbackTemplateAction(label=choice[0], data=utility.encode_action_string(choice[2], action_token=action_token)))
+                    results.append(PostbackAction(label=choice[0], data=utility.encode_action_string(choice[2], action_token=action_token)))
+        return results
+
+    def _build_quick_reply_actions(self, choices, action_token):
+        results = []
+        if choices is None: return results
+        for choice in choices:
+            action = None
+            if len(choice) == 0:
+                continue
+            elif len(choice) == 1:
+                action = MessageAction(choice[0], choice[0])
+            elif len(choice) == 2:
+                if re.match(r'^(https?|tel):', choice[1]):
+                    action = URIAction(choice[0], choice[1])
+                elif re.match(u'^[#*]', choice[1]):
+                    action = PostbackAction(label=choice[0], display_text=choice[0], data=utility.encode_action_string(choice[1], action_token=action_token))
+                else:
+                    action = MessageAction(choice[0], choice[1])
+            elif len(choice) >= 3:
+                if choice[1]:
+                    action = PostbackAction(label=choice[0], display_text=choice[1], data=utility.encode_action_string(choice[2], action_token=action_token))
+                else:
+                    action = PostbackAction(label=choice[0], data=utility.encode_action_string(choice[2], action_token=action_token))
+            if action is not None:
+                results.append(QuickReplyButton(action=action))
         return results
 
     def _make_sender(self, sender):
@@ -226,6 +258,10 @@ class LineDefaultCommandsPlugin_Runtime(object):
             except (ValueError, IndexError):
                 logging.error("invalid format: @imagemap")
                 context.response.append(TextSendMessage(text=u"<<@imagemapを解釈できませんでした>>"))
+        elif msg in REPLY_CMDS:
+            if len(context.response) == 0:
+                logging.error("invalid format: @reply")
+            context.response[-1].quick_reply = QuickReply(items=self._build_quick_reply_actions(children, context.status.action_token))
         # 解釈はここで終了
         return True
 
@@ -272,4 +308,12 @@ def inner_load_plugin(params):
             runtime=runtime,
             service='line',
             specs={'children_min': 1, 'children_max': 5}),
+        commands.CommandEntry(
+            names=REPLY_CMDS,
+            options='',
+            child='text [text|raw|label] [label]',
+            builder=builder,
+            runtime=runtime,
+            service='line',
+            specs={'children_min': 1, 'children_max': 13}),
     ])

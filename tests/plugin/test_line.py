@@ -36,6 +36,12 @@ BOT_SETTINGS = {
             'alt_text': u'LINEアプリで確認してください。',
             'allow_special_action_text_for_debug': True,
         },
+        'line.quick_reply': {
+            'command': [u'＞', u'>'],
+            'default_reply': u'続きを読む=>',
+            'retry_message': u'システム:\n【以下の返答を選んでください】',
+            'ignore_pattern': ur'^リセット$',
+        },
         'line.more': {
             'command': [u'▽'],
             'image_url': 'https://www.google.co.jp/images/branding/googlelogo/2x/googlelogo_color_272x92dp.png',
@@ -374,7 +380,7 @@ class LineTestCase(LinePluginTestCaseBase):
         self.assertEqual(self.bot.messages[0].template.columns[0].text, u"パネル１の説明")
         self.assertEqual(len(self.bot.messages[0].template.columns), 5)
         self.assertEqual(len(self.bot.messages[0].template.columns[0].actions), 3)
-        self.assertEqual(self.bot.messages[0].template.columns[0].actions[0].text, u"選択肢１のアクション")
+        self.assertEqual(self.bot.messages[0].template.columns[0].actions[0].display_text, u"選択肢１のアクション")
         self.assertEqual(self.bot.messages[0].template.columns[0].actions[0].data.split(u'@@')[0], u"#label1")
         self.send_message(u'imagemap')
         self.assertEqual(len(self.bot.messages), 1)
@@ -486,7 +492,7 @@ class LineTestCase(LinePluginTestCaseBase):
         self.assertEqual(self.bot.messages[0].sender.name, u"Sender")
         self.assertEqual(len(self.bot.messages[0].template.columns), 5)
         self.assertEqual(len(self.bot.messages[0].template.columns[0].actions), 3)
-        self.assertEqual(self.bot.messages[0].template.columns[0].actions[0].text, u"選択肢１のアクション")
+        self.assertEqual(self.bot.messages[0].template.columns[0].actions[0].display_text, u"選択肢１のアクション")
         self.assertEqual(self.bot.messages[0].template.columns[0].actions[0].data.split(u'@@')[0], u"#label1")
         self.send_message(u'imagemap')
         self.assertEqual(len(self.bot.messages), 1)
@@ -597,7 +603,7 @@ class LineTestCase(LinePluginTestCaseBase):
         self.assertEqual(self.bot.messages[0].template.columns[0].text, u"パネル１の説明")
         self.assertEqual(len(self.bot.messages[0].template.columns), 5)
         self.assertEqual(len(self.bot.messages[0].template.columns[0].actions), 3)
-        self.assertEqual(self.bot.messages[0].template.columns[0].actions[0].text, u"選択肢１のアクション")
+        self.assertEqual(self.bot.messages[0].template.columns[0].actions[0].display_text, u"選択肢１のアクション")
         self.assertEqual(self.bot.messages[0].template.columns[0].actions[0].data.split(u'@@')[0], u"#label1")
         self.send_message(u'imagemap')
         self.assertEqual(len(self.bot.messages), 1)
@@ -609,6 +615,109 @@ class LineTestCase(LinePluginTestCaseBase):
         self.assertEqual(self.bot.messages[0].actions[1].area.y, 200)
         self.assertEqual(self.bot.messages[0].actions[1].area.width, 300)
         self.assertEqual(self.bot.messages[0].actions[1].area.height, 400)
+
+    def test_quick_reply(self):
+        self.test_bot.scenario = ScenarioBuilder.build_from_table([
+            [u'##line.follow', u''],
+            [u'##line.join', u''],
+            [u'next_button', u''],
+            [u'', u'「メッセージ１」'],
+            [u'', u'「メッセージ２」'],
+            [u'', u'＞'],
+            [u'', u'＠ボタン', u'ボタンの説明文', u'ボタンのタイトル', u'=IMAGE("https://www.google.co.jp/images/branding/googlelogo/2x/googlelogo_color_272x92dp.png")'],
+            [u'', u'', u'選択肢１', u'選択肢１のアクション', u'##'],
+            [u'##', u'#label'],
+            [u'#label', u'「メッセージ３」'],
+            [u'', u'＞', u'選択肢1', u'選択肢2=>選択肢2の表示文', u'選択肢3=>'],
+            [u'', u'「メッセージ４」'],
+            [u'', u'#label'],
+            [u'##', u'「メッセージ５」'],
+            [u'##', u'「メッセージ６」'],
+            [u'リセット', u'@clear_quick_reply_state'],
+        ])
+        self.send_reset()
+        self.send_message(u'next_button')
+        self.assertEqual(len(self.bot.messages), 2)
+        self.assertEqual(self.bot.messages[0].text, u"「メッセージ１」")
+        self.assertEqual(self.bot.messages[1].text, u"「メッセージ２」")
+        #print(self.bot.messages[1].quick_reply)
+        self.assertEqual(self.bot.messages[1].quick_reply.items[0].action.type, u"postback")
+        self.assertEqual(self.bot.messages[1].quick_reply.items[0].action.label, u"続きを読む")
+        self.assertEqual(self.bot.messages[1].quick_reply.items[0].action.display_text, None)
+        self.send_postback(self.bot.messages[1].quick_reply.items[0].action.data)
+        self.assertEqual(len(self.bot.messages), 1)
+        self.assertEqual(self.bot.messages[0].template.text, u"ボタンの説明文")
+        self.send_postback(self.bot.messages[0].template.actions[0].data)
+        self.assertEqual(len(self.bot.messages), 1)
+        self.assertEqual(self.bot.messages[0].text, u"「メッセージ３」")
+        self.assertEqual(self.bot.messages[0].quick_reply.items[0].action.label, u"選択肢1")
+        self.assertEqual(self.bot.messages[0].quick_reply.items[0].action.display_text, u"選択肢1")
+        self.assertEqual(self.bot.messages[0].quick_reply.items[1].action.label, u"選択肢2")
+        self.assertEqual(self.bot.messages[0].quick_reply.items[1].action.display_text, u"選択肢2の表示文")
+        self.assertEqual(self.bot.messages[0].quick_reply.items[2].action.label, u"選択肢3")
+        self.assertEqual(self.bot.messages[0].quick_reply.items[2].action.display_text, None)
+        self.send_message(u"dummy")
+        self.assertEqual(len(self.bot.messages), 1)
+        self.assertEqual(self.bot.messages[0].text, u"【以下の返答を選んでください】")
+        self.assertEqual(self.bot.messages[0].quick_reply.items[0].action.label, u"選択肢1")
+        self.assertEqual(self.bot.messages[0].quick_reply.items[0].action.display_text, u"選択肢1")
+        self.assertEqual(self.bot.messages[0].quick_reply.items[1].action.label, u"選択肢2")
+        self.assertEqual(self.bot.messages[0].quick_reply.items[1].action.display_text, u"選択肢2の表示文")
+        self.assertEqual(self.bot.messages[0].quick_reply.items[2].action.label, u"選択肢3")
+        self.assertEqual(self.bot.messages[0].quick_reply.items[2].action.display_text, None)
+        self.send_postback(self.bot.messages[0].quick_reply.items[0].action.data)
+        #print(self.bot.messages[0].text.encode('utf-8'))
+        self.assertEqual(len(self.bot.messages), 2)
+        self.assertEqual(self.bot.messages[0].text, u"「メッセージ４」")
+        self.assertEqual(self.bot.messages[1].text, u"「メッセージ３」")
+        self.assertEqual(self.bot.messages[1].quick_reply.items[0].action.label, u"選択肢1")
+        self.assertEqual(self.bot.messages[1].quick_reply.items[0].action.display_text, u"選択肢1")
+        self.assertEqual(self.bot.messages[1].quick_reply.items[1].action.label, u"選択肢2")
+        self.assertEqual(self.bot.messages[1].quick_reply.items[1].action.display_text, u"選択肢2の表示文")
+        self.assertEqual(self.bot.messages[1].quick_reply.items[2].action.label, u"選択肢3")
+        self.assertEqual(self.bot.messages[1].quick_reply.items[2].action.display_text, None)
+        self.send_postback(self.bot.messages[1].quick_reply.items[1].action.data)
+        self.assertEqual(len(self.bot.messages), 1)
+        self.assertEqual(self.bot.messages[0].text, u"「メッセージ５」")
+        self.send_message(u'next_button')
+        self.assertEqual(len(self.bot.messages), 2)
+        self.assertEqual(self.bot.messages[0].text, u"「メッセージ１」")
+        self.assertEqual(self.bot.messages[1].text, u"「メッセージ２」")
+        self.assertEqual(self.bot.messages[1].quick_reply.items[0].action.label, u"続きを読む")
+        self.send_message(u'next_button')
+        self.assertEqual(len(self.bot.messages), 1)
+        self.assertEqual(self.bot.messages[0].text, u"【以下の返答を選んでください】")
+        self.assertEqual(self.bot.messages[0].sender.name, u"システム")
+        self.send_postback(self.bot.messages[0].quick_reply.items[0].action.data)
+        self.send_postback(self.bot.messages[0].template.actions[0].data)
+        self.send_postback(self.bot.messages[0].quick_reply.items[2].action.data)
+        self.assertEqual(len(self.bot.messages), 1)
+        self.assertEqual(self.bot.messages[0].text, u"「メッセージ６」")
+        self.send_message(u'next_button')
+        self.send_message(u'next_button')
+        self.assertEqual(len(self.bot.messages), 1)
+        self.assertEqual(self.bot.messages[0].text, u"【以下の返答を選んでください】")
+        self.send_message(u'next_button')
+        self.assertEqual(len(self.bot.messages), 1)
+        self.assertEqual(self.bot.messages[0].text, u"【以下の返答を選んでください】")
+        self.send_message(u"##line.follow")
+        self.send_message(u'next_button')
+        self.assertEqual(len(self.bot.messages), 2)
+        self.assertEqual(self.bot.messages[0].text, u"「メッセージ１」")
+        self.assertEqual(self.bot.messages[1].text, u"「メッセージ２」")
+        self.send_message(u"##line.join")
+        self.send_message(u'next_button')
+        self.assertEqual(len(self.bot.messages), 2)
+        self.assertEqual(self.bot.messages[0].text, u"「メッセージ１」")
+        self.assertEqual(self.bot.messages[1].text, u"「メッセージ２」")
+        self.send_message(u'next_button')
+        self.assertEqual(len(self.bot.messages), 1)
+        self.assertEqual(self.bot.messages[0].text, u"【以下の返答を選んでください】")
+        self.send_message(u"リセット")
+        self.send_message(u'next_button')
+        self.assertEqual(len(self.bot.messages), 2)
+        self.assertEqual(self.bot.messages[0].text, u"「メッセージ１」")
+        self.assertEqual(self.bot.messages[1].text, u"「メッセージ２」")
 
     def test_button_and_next_button(self):
         self.test_bot.scenario = ScenarioBuilder.build_from_table([
@@ -635,12 +744,11 @@ class LineTestCase(LinePluginTestCaseBase):
         self.send_message(self.bot.messages[2].actions[0].text)
         self.assertEqual(len(self.bot.messages), 1)
         self.assertEqual(self.bot.messages[0].template.text, u"ボタンの説明文")
-        button_message = self.bot.messages[0].template.actions[0].text
         self.send_postback(self.bot.messages[0].template.actions[0].data)
         self.assertEqual(len(self.bot.messages), 2)
         self.assertEqual(self.bot.messages[0].text, u"「メッセージ３」")
         next_button = self.bot.messages[1].actions[0].text
-        self.send_message(button_message)
+        self.send_message('dummy')
         self.assertEqual(len(self.bot.messages), 1)
         self.assertEqual(self.bot.messages[0].text, u"先に続きを読んでください")
         self.send_message(next_button)

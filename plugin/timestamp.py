@@ -6,7 +6,7 @@ import datetime
 import pytz
 import logging
 
-TIMESTAMP_OBJECT = (u'TimeStamp',)
+TIMESTAMP_OBJECT = (u'timestamp',)
 
 
 class TimestampPlugin_RuntimeObject(object):

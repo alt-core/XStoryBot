@@ -26,8 +26,11 @@ DELAY_CMDS = (u'@delay', u'@遅延')
 IF_CMDS = (u'@if', u'@条件')
 
 SEQ_CMDS = (u'@seq', u'@順々')
+LOOP_CMDS = (u'@loop', u'@ループ')
 RESET_NODES_CMDS = (u'@reset_nodes', u'@ノードリセット')
 NEW_CHAPTER_CMDS = (u'@new_chapter', u'@新章')
+
+RANDOM_CMDS = (u'@random', u'@ランダム')
 
 GROUP_ADD_CMDS = (u'@group_add', u'@グループ追加')
 GROUP_DEL_CMDS = (u'@group_del', u'@グループ削除')
@@ -36,9 +39,9 @@ WEBHOOK_CMDS = (u'@webhook', u'@WebHook')
 LOG_CMDS = (u'@log', u'@Log')
 ERROR_CMDS = (u'@error', u'@Error')
 
-ALL_COMMON_CMDS = IMAGE_CMDS + OR_CMDS + RESET_CMDS + SET_CMDS + FORWARD_CMDS + DELAY_CMDS + IF_CMDS + SEQ_CMDS + RESET_NODES_CMDS + NEW_CHAPTER_CMDS + GROUP_ADD_CMDS + GROUP_DEL_CMDS + GROUP_CLEAR_CMDS + WEBHOOK_CMDS + LOG_CMDS + ERROR_CMDS
+ALL_COMMON_CMDS = IMAGE_CMDS + OR_CMDS + RESET_CMDS + SET_CMDS + FORWARD_CMDS + DELAY_CMDS + IF_CMDS + SEQ_CMDS + LOOP_CMDS + RANDOM_CMDS + RESET_NODES_CMDS + NEW_CHAPTER_CMDS + GROUP_ADD_CMDS + GROUP_DEL_CMDS + GROUP_CLEAR_CMDS + WEBHOOK_CMDS + LOG_CMDS + ERROR_CMDS
 
-COMMON_OBJECT = (u'Core',)
+COMMON_OBJECT = (u'core',)
 
 
 def send_request(bot_name, user, action, delay_secs=None):
@@ -112,7 +115,7 @@ class CommonCommands_Runtime(object):
         return action
 
     def run_command(self, context, sender, msg, options, _children=[]):
-        if msg in (IMAGE_CMDS + OR_CMDS + IF_CMDS + SEQ_CMDS):
+        if msg in (IMAGE_CMDS + OR_CMDS + IF_CMDS + SEQ_CMDS + LOOP_CMDS + RANDOM_CMDS):
             # 画像と制御系のコマンドは scenario.py 内で直接対応
             return False
         elif msg in RESET_CMDS:
@@ -246,7 +249,21 @@ def setup(params):
         commands.CommandEntry(
             names=SEQ_CMDS,
             # TODO: 可変長表現の追加
-            options='label [label] [label] [label] [label] [label] [label] [label] [label] [label]',
+            options='label [label] [label] [label] [label] [label] [label] [label] [label] [label] [label] [label] [label] [label] [label] [label]',
+            builder=builder,
+            runtime=runtime,
+            service='*'),
+        commands.CommandEntry(
+            names=LOOP_CMDS,
+            # TODO: 可変長表現の追加
+            options='label [label] [label] [label] [label] [label] [label] [label] [label] [label] [label] [label] [label] [label] [label] [label]',
+            builder=builder,
+            runtime=runtime,
+            service='*'),
+        commands.CommandEntry(
+            names=RANDOM_CMDS,
+            # TODO: 可変長表現の追加
+            options='label [label] [label] [label] [label] [label] [label] [label] [label] [label] [label] [label] [label] [label] [label] [label]',
             builder=builder,
             runtime=runtime,
             service='*'),
