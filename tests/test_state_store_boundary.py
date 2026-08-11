@@ -241,7 +241,6 @@ class GcpStateStoreAtomicOperationTest(unittest.TestCase):
 class FacadeBoundaryTest(unittest.TestCase):
     def test_modelsはprovider非依存facadeのまま新規Playerを保存する(self):
         state_store = Mock()
-        state_store.client = object()
         state_store.load_player_status.return_value = None
         version = StateVersion('version-1')
         state_store.create_player_status.return_value = version
@@ -267,11 +266,10 @@ class FacadeBoundaryTest(unittest.TestCase):
         self.assertEqual(status.id, 'shared:line:user-1')
         self.assertEqual(status.last_update_time, version)
         self.assertFalse(status.is_dirty)
-        self.assertIs(module.db, state_store.client)
+        self.assertIs(module.get_state_store(), state_store)
 
     def test_build_cacheは初回利用までStateStoreを生成しない(self):
         state_store = Mock()
-        state_store.client = Mock()
         state_store.get_build_cache.return_value = b'cached'
         cloud_backend = types.ModuleType('cloud_backend')
         cloud_backend.create_state_store = Mock(return_value=state_store)

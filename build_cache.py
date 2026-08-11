@@ -3,29 +3,11 @@ import datetime
 from cloud_backend import create_state_store
 
 _state_store = None
-_client = None
-_collection = None
-
-def get_client():
-    global _state_store
-    global _client
-    global _collection
-    if _client is None:
-        _state_store = create_state_store()
-        _client = _state_store.client
-    if _collection is None:
-        _collection = _client.collection('build_cache')
-    return _client
-
-def get_collection():
-    global _collection
-    if _collection is None:
-        _ = get_client()
-    return _collection
 
 def get_state_store():
+    global _state_store
     if _state_store is None:
-        _ = get_client()
+        _state_store = create_state_store()
     return _state_store
 
 def set_cache(key, value, sec=None):

@@ -15,8 +15,6 @@ from plugin.line import default_commands, quick_reply
 IMAGE_TEXT_CMDS = ('@imagetext', '@画像テキスト', '@novel', '@小説')
 
 _state_store = create_state_store()
-# 既存のimport時client所有を確認するテストとの互換性を維持する。
-db = _state_store.client
 
 class ImageTextStatDB:
     @classmethod

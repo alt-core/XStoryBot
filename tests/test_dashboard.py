@@ -104,9 +104,6 @@ def load_dashboard(initialize_side_effect=None):
     task_client = types.ModuleType('task_client')
     task_client.create_task = Mock(return_value='task-123')
 
-    models = types.ModuleType('models')
-    models.db = object()
-
     utility = types.ModuleType('utility')
     utility.make_ok_json = make_ok_json
     utility.make_error_json = make_error_json
@@ -156,7 +153,6 @@ def load_dashboard(initialize_side_effect=None):
         'auth_middleware': auth_middleware,
         'main': main,
         'task_client': task_client,
-        'models': models,
         'utility': utility,
         'build_cache': build_cache,
         'users': users,

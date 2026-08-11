@@ -10,7 +10,6 @@ import auth_middleware
 from cloud_backend import create_credential_source
 import main
 import task_client
-from models import db
 import utility
 import build_cache
 import users

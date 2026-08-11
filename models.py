@@ -12,8 +12,6 @@ from utility import deep_dump
 DEBUG = False
 
 _state_store = create_state_store()
-# group_message_task_db.pyの段階移行が終わるまで、既存の内部参照を維持する。
-db = _state_store.client
 
 
 def get_state_store():

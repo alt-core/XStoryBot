@@ -429,9 +429,10 @@ class FirestoreAndImageTextContractTest(unittest.TestCase):
     def test_each_module_owns_an_import_time_firestore_client(self):
         models_module, more_module, image_module, _renderer = self._load_modules()
         self.assertEqual(3, self.client.call_count)
-        self.assertIs(self.models_db, models_module.db)
-        self.assertIs(self.more_db, more_module.db)
-        self.assertIs(self.image_db, image_module.db)
+        self.assertIs(
+            self.models_db, models_module.get_state_store().client)
+        self.assertIs(self.more_db, more_module._state_store.client)
+        self.assertIs(self.image_db, image_module._state_store.client)
 
     def test_player_next_label_uses_full_status_id_as_document_id(self):
         _models_module, more_module, _image_module, _renderer = self._load_modules()

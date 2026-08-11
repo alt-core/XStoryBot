@@ -14,8 +14,6 @@ CLEAR_NEXT_LABEL_CMDS = ('@clear_next_label', '@reset_next_label')
 
 
 _state_store = create_state_store()
-# 既存のimport時client所有を確認するテストとの互換性を維持する。
-db = _state_store.client
 
 
 class PlayerNextLabelDB:
