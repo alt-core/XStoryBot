@@ -6,7 +6,7 @@ import datetime
 import pytz
 import logging
 
-TIMESTAMP_OBJECT = (u'timestamp',)
+TIMESTAMP_OBJECT = ('timestamp',)
 
 
 class TimestampPlugin_RuntimeObject(object):
@@ -43,7 +43,7 @@ class TimestampPlugin_Runtime(object):
         try:
             self.timezone = pytz.timezone(tzname)
         except pytz.exceptions.UnknownTimeZoneError:
-            logging.error(u'unknown timezone: {}'.format(tzname))
+            logging.error('unknown timezone: {}'.format(tzname))
             self.timezone = pytz.utc
         self.runtime_object = TimestampPlugin_RuntimeObject(self.timezone, self.time_format)
 

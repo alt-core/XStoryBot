@@ -19,6 +19,9 @@ class PlainTextPlugin_Interface(object):
     def get_service_list(self):
         return {"plaintext": self}
 
+    def get_retry_count(self):
+        return self.params.get('retry_count', 3)
+
     def create_context(self, user, action, attrs):
         return PlainTextPlugin_ActionContext(self.bot_name, self, user, action, attrs)
 
@@ -33,10 +36,10 @@ class PlainTextPlugin_Interface(object):
                 # コマンド毎の処理メソッドの中で context.response への追加が行われている
                 pass
             else:
-                text = msg if sender is None else sender + u"：\n" + msg
+                text = msg if sender is None else sender + "：\n" + msg
                 context.response.append(text)
 
-        return u"\n".join(context.response) + u"\n"
+        return "\n".join(context.response) + "\n"
 
 
 class PlainTextPlugin_InterfaceFactory(object):
