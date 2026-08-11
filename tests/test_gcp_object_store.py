@@ -8,6 +8,7 @@ from cloud_backend.contracts import (
     ObjectNotFoundError,
     ObjectStoreError,
 )
+from cloud_backend import gcp as gcp_backend
 from cloud_backend.gcp import object_store as object_store_module
 from cloud_backend.gcp.object_store import GcpObjectStore
 
@@ -78,6 +79,37 @@ class GcpObjectStoreTest(unittest.TestCase):
             reference,
             'gs://trusted-bucket/group_tasks/task/members.json',
         )
+
+    def test_provider内ではScenarioとgroupが同じObjectStoreを共有する(self):
+        object_store = Mock()
+        original = gcp_backend._object_store
+        gcp_backend._object_store = None
+        try:
+            with patch.object(
+                    object_store_module, 'GcpObjectStore',
+                    return_value=object_store) as constructor:
+                first = gcp_backend.create_object_store()
+                second = gcp_backend.create_object_store()
+        finally:
+            gcp_backend._object_store = original
+
+        self.assertIs(first, object_store)
+        self.assertIs(second, object_store)
+        constructor.assert_called_once_with()
+
+    def test_privateはbucket未設定を操作時まで遅延して検出する(self):
+        settings_without_bucket = dict(GCP_SETTINGS, storage_bucket='')
+        store = GcpObjectStore(
+            settings_without_bucket,
+            client=self.public_client,
+            private_client_factory=self.private_client_factory,
+        )
+
+        with self.assertRaisesRegex(
+                ValueError, 'Storage bucket not configured'):
+            store.load_private('group_tasks/task/members.json')
+
+        self.private_client_factory.assert_not_called()
 
     def test_scenarioはMD5keyを公開しGCS_HTTPS参照を返す(self):
         blob = Mock()

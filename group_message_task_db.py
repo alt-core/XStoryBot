@@ -3,10 +3,9 @@ import time
 import uuid
 import logging
 
-from google.cloud import firestore, storage, exceptions
-
-from models import GroupMembersDB, db
-from utility import deep_dump
+from cloud_backend import create_object_store
+from cloud_backend.contracts import ObjectNotFoundError, ObjectStoreError
+from models import GroupMembersDB, get_state_store
 
 class GroupMessageTaskDB:
     # クラス定数
@@ -21,8 +20,9 @@ class GroupMessageTaskDB:
     STATUS_ABORTED = 'aborted'     # 中断（ユーザーによる）
 
     # 設定用変数
-    _gcp_settings = None
     _options = None
+    _state_store = None
+    _object_store = None
 
     # タスク設定のキャッシュ
     _task_settings = {}
@@ -31,19 +31,16 @@ class GroupMessageTaskDB:
     _default_max_rate = 500  # デフォルト値
 
     @staticmethod
-    def initialize(gcp_settings, options):
-        GroupMessageTaskDB._gcp_settings = gcp_settings
+    def initialize(backend_settings, options):
         GroupMessageTaskDB._options = options
+        GroupMessageTaskDB._state_store = get_state_store()
+        GroupMessageTaskDB._object_store = create_object_store()
 
         # Managerと同じフラットな設定値を使う。
         GroupMessageTaskDB._task_settings = {}
         GroupMessageTaskDB._batch_size = options.get('group_batch_size', 2000)
         GroupMessageTaskDB._default_max_workers = options.get('group_max_workers', 150)
         GroupMessageTaskDB._default_max_rate = options.get('group_max_rate', 500)
-
-    @staticmethod
-    def _get_storage_bucket():
-        return GroupMessageTaskDB._gcp_settings.get('storage_bucket')
 
     @staticmethod
     def create_task(bot_name, group_id, action, attrs, created_by, scheduled_at=None):
@@ -63,8 +60,6 @@ class GroupMessageTaskDB:
             'group_id': group_id,
             'action': action,
             'attrs': attrs,
-            'created_at': firestore.SERVER_TIMESTAMP,
-            'updated_at': firestore.SERVER_TIMESTAMP,
             'created_by': created_by,
             'status': GroupMessageTaskDB.STATUS_PENDING,
             'total_members': total_members,
@@ -83,65 +78,48 @@ class GroupMessageTaskDB:
         if scheduled_at:
             task_data['scheduled_at'] = scheduled_at
 
-        doc_ref = db.collection('group_message_tasks').document(task_id)
-        doc_ref.set(task_data)
+        GroupMessageTaskDB._state_store.create_group_message_task(
+            task_id, task_data)
 
         return task_id
 
     @staticmethod
     def _store_member_list(task_id, members):
-        storage_bucket = GroupMessageTaskDB._get_storage_bucket()
-        if not storage_bucket:
-            raise ValueError("Storage bucket not configured")
-
         member_ids = [member for member in members]
 
         try:
-            client = storage.Client()
-            bucket = client.bucket(storage_bucket)
-            blob = bucket.blob(f"group_tasks/{task_id}/members.json")
-            blob.upload_from_string(json.dumps(member_ids))
+            reference = GroupMessageTaskDB._object_store.store_private(
+                f"group_tasks/{task_id}/members.json",
+                json.dumps(member_ids),
+            )
             logging.info(f"Stored member list for task {task_id} to GCS.")
-            return f"gs://{storage_bucket}/group_tasks/{task_id}/members.json"
-        except exceptions.GoogleCloudError as e:
+            return reference
+        except ObjectStoreError as e:
             logging.error(f"Failed to store member list for task {task_id} to GCS: {type(e).__name__} - {str(e)}")
             # 例外を再発生させてタスク作成を失敗させる
             raise  # 例外を再発生させてタスク作成を失敗させる
 
     @staticmethod
     def get_members_from_storage(task_id):
-        storage_bucket = GroupMessageTaskDB._get_storage_bucket()
-        if not storage_bucket:
-            raise ValueError("Storage bucket not configured")
-
         try:
-            client = storage.Client()
-            bucket = client.bucket(storage_bucket)
-            blob = bucket.blob(f"group_tasks/{task_id}/members.json")
-
-            content = blob.download_as_bytes().decode('utf-8')
+            content = GroupMessageTaskDB._object_store.load_private(
+                f"group_tasks/{task_id}/members.json").decode('utf-8')
             return json.loads(content)
-        except exceptions.NotFound as e:
+        except ObjectNotFoundError as e:
             logging.error(f"Member list file not found in GCS for task {task_id}: {str(e)}")
             raise # ファイルがない場合は致命的なので例外を発生させる
-        except exceptions.GoogleCloudError as e:
+        except ObjectStoreError as e:
             logging.error(f"Failed to get member list for task {task_id} from GCS: {type(e).__name__} - {str(e)}")
             raise # その他のGCSエラーも例外を発生させる
 
     @staticmethod
     def get_task(task_id):
-        doc_ref = db.collection('group_message_tasks').document(task_id)
-        doc = doc_ref.get()
-        if doc.exists:
-            return doc.to_dict()
-        return None
+        return GroupMessageTaskDB._state_store.get_group_message_task(task_id)
 
     @staticmethod
     def update_task_status(task_id, status, processed=None, successful=None, failed=None, error=None, current_batch=None, interval_ms=None, failed_member_id=None):
-        doc_ref = db.collection('group_message_tasks').document(task_id)
         update_data = {
             'status': status,
-            'updated_at': firestore.SERVER_TIMESTAMP
         }
 
         if processed is not None:
@@ -159,27 +137,20 @@ class GroupMessageTaskDB:
         if interval_ms is not None:
             update_data['interval_ms'] = interval_ms
 
-        transaction = db.transaction()
-
-        @firestore.transactional
-        def update_in_transaction(transaction):
-            doc = doc_ref.get(transaction=transaction)
-            if not doc.exists:
-                return False
-
-            data = doc.to_dict()
+        def build_update(data):
+            current_update = dict(update_data)
 
             if error is not None:
-                errors = data.get('error_messages', [])
+                errors = list(data.get('error_messages', []))
                 if len(errors) >= GroupMessageTaskDB.MAX_ERROR_MESSAGES_IN_DB: # ★★★ 定数使用 ★★★
                     # 古いものから削除 (リストの末尾に追加される想定なら pop(0))
                     # 現在は先頭に追加しているので、末尾を削除
                     errors = errors[:GroupMessageTaskDB.MAX_ERROR_MESSAGES_IN_DB - 1]
                 errors.insert(0, error) # 新しいエラーを先頭に追加
-                update_data['error_messages'] = errors
+                current_update['error_messages'] = errors
 
             if failed_member_id is not None:
-                # GCSへの追記（トランザクション外）
+                # 従来どおりStateStoreのtransaction callback内で追記する。
                 try:
                     GroupMessageTaskDB._append_failed_member_list(task_id, [failed_member_id])
                 except Exception as e_gcs:
@@ -187,7 +158,7 @@ class GroupMessageTaskDB:
                     logging.error(f"Failed to append failed member {failed_member_id} to GCS for task {task_id}: {str(e_gcs)}")
 
                 # Firestoreには最新の N 件のみを保持（UI表示用）
-                failed_ids = data.get('failed_member_ids', [])
+                failed_ids = list(data.get('failed_member_ids', []))
 
                 if failed_member_id not in failed_ids:
                     if len(failed_ids) >= GroupMessageTaskDB.MAX_FAILED_IDS_IN_DB: # ★★★ 定数使用 ★★★
@@ -196,45 +167,34 @@ class GroupMessageTaskDB:
                         failed_ids = failed_ids[1:]
                     failed_ids.append(failed_member_id) # 新しいIDを末尾に追加
 
-                    update_data['failed_member_ids'] = failed_ids
+                    current_update['failed_member_ids'] = failed_ids
 
-            transaction.update(doc_ref, update_data)
-            return True
+            return current_update
 
-        return update_in_transaction(transaction)
+        return GroupMessageTaskDB._state_store.update_group_message_task(
+            task_id, build_update)
 
     @staticmethod
     def _store_failed_member_list(task_id, failed_members):
-        storage_bucket = GroupMessageTaskDB._get_storage_bucket()
-        if not storage_bucket:
-            raise ValueError("Storage bucket not configured")
-
         try:
-            client = storage.Client()
-            bucket = client.bucket(storage_bucket)
-            blob = bucket.blob(f"group_tasks/{task_id}/failed_members.json")
-            blob.upload_from_string(json.dumps(failed_members))
+            reference = GroupMessageTaskDB._object_store.store_private(
+                f"group_tasks/{task_id}/failed_members.json",
+                json.dumps(failed_members),
+            )
             logging.info(f"Stored failed member list for task {task_id} to GCS.")
-            return f"gs://{storage_bucket}/group_tasks/{task_id}/failed_members.json"
-        except exceptions.GoogleCloudError as e:
+            return reference
+        except ObjectStoreError as e:
             logging.error(f"Failed to store failed member list for task {task_id} to GCS: {type(e).__name__} - {str(e)}")
             raise # GCSエラーは呼び出し元に伝える
 
     @staticmethod
     def _append_failed_member_list(task_id, new_failed_members):
-        storage_bucket = GroupMessageTaskDB._get_storage_bucket()
-        if not storage_bucket:
-            raise ValueError("Storage bucket not configured")
-
         try:
-            client = storage.Client()
-            bucket = client.bucket(storage_bucket)
-            blob = bucket.blob(f"group_tasks/{task_id}/failed_members.json")
-
             try:
-                content = blob.download_as_bytes().decode('utf-8')
+                content = GroupMessageTaskDB._object_store.load_private(
+                    f"group_tasks/{task_id}/failed_members.json").decode('utf-8')
                 failed_members = json.loads(content)
-            except exceptions.NotFound:
+            except ObjectNotFoundError:
                 # ファイルが存在しない場合は空リストから開始
                 failed_members = []
             except Exception as e_read: # GCS以外の読み取り/JSONパースエラー
@@ -248,34 +208,30 @@ class GroupMessageTaskDB:
                     added_count += 1
 
             if added_count > 0:
-                blob.upload_from_string(json.dumps(failed_members))
+                GroupMessageTaskDB._object_store.store_private(
+                    f"group_tasks/{task_id}/failed_members.json",
+                    json.dumps(failed_members),
+                )
                 logging.debug(f"Appended {added_count} members to failed_members.json for task {task_id}. Total: {len(failed_members)}")
             else:
                 logging.debug(f"No new members to append to failed_members.json for task {task_id}.")
 
-        except exceptions.GoogleCloudError as e:
+        except ObjectStoreError as e:
             logging.error(f"Failed to append to failed_members.json for task {task_id} in GCS: {type(e).__name__} - {str(e)}")
             raise # GCSエラーは呼び出し元に伝える
 
     @staticmethod
     def _get_failed_members_from_storage(task_id):
-        storage_bucket = GroupMessageTaskDB._get_storage_bucket()
-        if not storage_bucket:
-            raise ValueError("Storage bucket not configured")
-
         try:
-            client = storage.Client()
-            bucket = client.bucket(storage_bucket)
-            blob = bucket.blob(f"group_tasks/{task_id}/failed_members.json")
-
-            content = blob.download_as_bytes().decode('utf-8')
+            content = GroupMessageTaskDB._object_store.load_private(
+                f"group_tasks/{task_id}/failed_members.json").decode('utf-8')
             members = json.loads(content)
             logging.debug(f"Retrieved {len(members)} failed members from Cloud Storage for task {task_id}")
             return members
-        except exceptions.NotFound:
+        except ObjectNotFoundError:
             logging.debug(f"failed_members.json not found in GCS for task {task_id}. Returning empty list.")
             return []
-        except exceptions.GoogleCloudError as e:
+        except ObjectStoreError as e:
             logging.error(f"Failed to retrieve failed members from GCS for task {task_id}: {type(e).__name__} - {str(e)}")
             return [] # エラー時は空リストを返す（リトライできない可能性がある）
         except Exception as e: # GCS以外の予期せぬエラー
@@ -455,53 +411,38 @@ class GroupMessageTaskDB:
 
     @staticmethod
     def _store_successful_members(task_id, successful_members):
-        storage_bucket = GroupMessageTaskDB._get_storage_bucket()
-        if not storage_bucket:
-            raise ValueError("Storage bucket not configured")
-
         try:
-            client = storage.Client()
-            bucket = client.bucket(storage_bucket)
-            blob = bucket.blob(f"group_tasks/{task_id}/successful_members.json")
-            blob.upload_from_string(json.dumps(successful_members))
+            GroupMessageTaskDB._object_store.store_private(
+                f"group_tasks/{task_id}/successful_members.json",
+                json.dumps(successful_members),
+            )
             logging.info(f"Stored successful members list for task {task_id} to GCS.")
-        except exceptions.GoogleCloudError as e:
+        except ObjectStoreError as e:
             logging.error(f"Failed to store successful members list for task {task_id} to GCS: {type(e).__name__} - {str(e)}")
             # このエラーは処理結果の記録に関するものなので、ログ出力に留める
 
     @staticmethod
     def _store_error_logs(task_id, error_logs):
-        storage_bucket = GroupMessageTaskDB._get_storage_bucket()
-        if not storage_bucket:
-            raise ValueError("Storage bucket not configured")
-
         try:
-            client = storage.Client()
-            bucket = client.bucket(storage_bucket)
-            blob = bucket.blob(f"group_tasks/{task_id}/error_logs.json")
-            blob.upload_from_string(json.dumps(error_logs))
+            GroupMessageTaskDB._object_store.store_private(
+                f"group_tasks/{task_id}/error_logs.json",
+                json.dumps(error_logs),
+            )
             logging.info(f"Stored error logs for task {task_id} to GCS.")
-        except exceptions.GoogleCloudError as e:
+        except ObjectStoreError as e:
             logging.error(f"Failed to store error logs for task {task_id} to GCS: {type(e).__name__} - {str(e)}")
             # このエラーは処理結果の記録に関するものなので、ログ出力に留める
 
     @staticmethod
     def get_successful_members(task_id):
-        storage_bucket = GroupMessageTaskDB._get_storage_bucket()
-        if not storage_bucket:
-            raise ValueError("Storage bucket not configured")
-
         try:
-            client = storage.Client()
-            bucket = client.bucket(storage_bucket)
-            blob = bucket.blob(f"group_tasks/{task_id}/successful_members.json")
-
-            content = blob.download_as_bytes().decode('utf-8')
+            content = GroupMessageTaskDB._object_store.load_private(
+                f"group_tasks/{task_id}/successful_members.json").decode('utf-8')
             return json.loads(content)
-        except exceptions.NotFound:
+        except ObjectNotFoundError:
             logging.debug(f"successful_members.json not found in GCS for task {task_id}. Returning empty list.")
             return []
-        except exceptions.GoogleCloudError as e:
+        except ObjectStoreError as e:
             logging.error(f"Failed to retrieve successful members from GCS for task {task_id}: {type(e).__name__} - {str(e)}")
             return []
         except Exception as e: # GCS以外の予期せぬエラー
@@ -510,21 +451,14 @@ class GroupMessageTaskDB:
 
     @staticmethod
     def get_error_logs(task_id):
-        storage_bucket = GroupMessageTaskDB._get_storage_bucket()
-        if not storage_bucket:
-            raise ValueError("Storage bucket not configured")
-
         try:
-            client = storage.Client()
-            bucket = client.bucket(storage_bucket)
-            blob = bucket.blob(f"group_tasks/{task_id}/error_logs.json")
-
-            content = blob.download_as_bytes().decode('utf-8')
+            content = GroupMessageTaskDB._object_store.load_private(
+                f"group_tasks/{task_id}/error_logs.json").decode('utf-8')
             return json.loads(content)
-        except exceptions.NotFound:
+        except ObjectNotFoundError:
             logging.debug(f"error_logs.json not found in GCS for task {task_id}. Returning empty list.")
             return []
-        except exceptions.GoogleCloudError as e:
+        except ObjectStoreError as e:
             logging.error(f"Failed to retrieve error logs from GCS for task {task_id}: {type(e).__name__} - {str(e)}")
             return []
         except Exception as e: # GCS以外の予期せぬエラー
@@ -555,14 +489,11 @@ class GroupMessageTaskDB:
 
         member_list_url = GroupMessageTaskDB._store_member_list(task_id, remaining_members)
 
-        doc_ref = db.collection('group_message_tasks').document(task_id)
-        doc_ref.set({
+        task_data = {
             'bot_name': original_task['bot_name'],
             'group_id': original_task['group_id'],
             'action': original_task['action'],
             'attrs': original_task['attrs'],
-            'created_at': firestore.SERVER_TIMESTAMP,
-            'updated_at': firestore.SERVER_TIMESTAMP,
             'created_by': created_by,
             'status': GroupMessageTaskDB.STATUS_PENDING,
             'total_members': len(remaining_members),
@@ -577,28 +508,17 @@ class GroupMessageTaskDB:
             'error_messages': [],
             'original_task_id': original_task_id,
             'is_retry': True
-        })
+        }
+        GroupMessageTaskDB._state_store.create_group_message_task(
+            task_id, task_data)
 
         return task_id
 
     @staticmethod
     def get_recent_tasks(bot_name, limit=10):
-        tasks = []
         try:
-            from google.cloud.firestore_v1.base_query import FieldFilter
-            query = db.collection('group_message_tasks').where(filter=FieldFilter('bot_name', '==', bot_name)).limit(limit)
-            docs = list(query.stream())
-            def get_created_at(doc):
-                data = doc.to_dict()
-                return data.get('created_at', 0) or 0
-            sorted_docs = sorted(docs, key=get_created_at, reverse=True)[:limit]
-
-            for doc in sorted_docs:
-                task = doc.to_dict()
-                task['id'] = doc.id
-                tasks.append(task)
-
-            return tasks
+            return GroupMessageTaskDB._state_store.get_recent_group_message_tasks(
+                bot_name, limit)
         except Exception as e:
             logging.error(f"Error fetching recent tasks: {str(e)}")
             # エラー時でも空のリストを返す

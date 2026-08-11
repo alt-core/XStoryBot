@@ -48,6 +48,8 @@ class GcpObjectStore(ObjectStore):
 
     def _private_bucket(self):
         # group JSONは従来どおり、操作ごとにADCのClientを生成する。
+        if not self._bucket_name:
+            raise ValueError('Storage bucket not configured')
         return self._private_client_factory().bucket(self._bucket_name)
 
     def store_scenario(self, key, data):

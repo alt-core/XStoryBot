@@ -16,6 +16,11 @@ _state_store = create_state_store()
 db = _state_store.client
 
 
+def get_state_store():
+    """同じmoduleが所有するStateStoreを返す。"""
+    return _state_store
+
+
 class GlobalBotVariablesDB:
     @staticmethod
     def get_by_bot_name(bot_name):

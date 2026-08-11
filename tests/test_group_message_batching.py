@@ -1,10 +1,14 @@
 import datetime
 import importlib.util
+import json
 from pathlib import Path
 import sys
 import types
 import unittest
 from unittest.mock import Mock, call, patch
+
+import cloud_backend
+from cloud_backend.contracts import ObjectNotFoundError, ObjectStoreError
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -60,35 +64,15 @@ def load_group_message_task_manager():
 
 
 def load_group_message_task_db():
-    """Google Cloudとmodelsをスタブ化し、DB層の純粋な処理を読み込む。"""
-    google_module = types.ModuleType('google')
-    cloud_module = types.ModuleType('google.cloud')
-    firestore_module = types.ModuleType('google.cloud.firestore')
-    storage_module = types.ModuleType('google.cloud.storage')
-    exceptions_module = types.ModuleType('google.cloud.exceptions')
-
-    class GoogleCloudError(Exception):
-        pass
-
-    class NotFound(GoogleCloudError):
-        pass
-
-    firestore_module.SERVER_TIMESTAMP = object()
-    firestore_module.transactional = lambda function: function
-    storage_module.Client = Mock()
-    exceptions_module.GoogleCloudError = GoogleCloudError
-    exceptions_module.NotFound = NotFound
-    cloud_module.firestore = firestore_module
-    cloud_module.storage = storage_module
-    cloud_module.exceptions = exceptions_module
-    google_module.cloud = cloud_module
+    """cloud境界とmodelsをスタブ化し、DB層の純粋な処理を読み込む。"""
+    state_store = Mock()
+    object_store = Mock()
+    object_store.store_private.return_value = (
+        'gs://test-bucket/group_tasks/task/members.json')
 
     models_module = types.ModuleType('models')
     models_module.GroupMembersDB = Mock()
-    models_module.db = Mock()
-
-    utility_module = types.ModuleType('utility')
-    utility_module.deep_dump = Mock()
+    models_module.get_state_store = Mock(return_value=state_store)
 
     module_name = 'group_message_task_db_for_batching_test'
     spec = importlib.util.spec_from_file_location(
@@ -96,16 +80,17 @@ def load_group_message_task_db():
         PROJECT_ROOT / 'group_message_task_db.py',
     )
     module = importlib.util.module_from_spec(spec)
-    with patch.dict(sys.modules, {
-        'google': google_module,
-        'google.cloud': cloud_module,
-        'google.cloud.firestore': firestore_module,
-        'google.cloud.storage': storage_module,
-        'google.cloud.exceptions': exceptions_module,
-        'models': models_module,
-        'utility': utility_module,
-    }):
+    with (
+        patch.object(
+            cloud_backend, 'create_object_store',
+            return_value=object_store,
+        ),
+        patch.dict(sys.modules, {'models': models_module}),
+    ):
         spec.loader.exec_module(module)
+    module._test_state_store = state_store
+    module._test_object_store = object_store
+    module._test_group_members_db = models_module.GroupMembersDB
     return module
 
 
@@ -374,6 +359,13 @@ class GroupMessageTaskDBTest(unittest.TestCase):
     def setUp(self):
         self.module = load_group_message_task_db()
         self.db = self.module.GroupMessageTaskDB
+        self.db.initialize(
+            {'storage_bucket': 'test-bucket'},
+            {},
+        )
+        self.state_store = self.module._test_state_store
+        self.object_store = self.module._test_object_store
+        self.group_members_db = self.module._test_group_members_db
 
     def test_flat設定と既定値を使う(self):
         self.db.initialize(
@@ -473,14 +465,7 @@ class GroupMessageTaskDBTest(unittest.TestCase):
             'successful_members': 499,
             'failed_members': 1,
         }
-        document = Mock()
-        collection = Mock()
-        collection.document.return_value = document
-        fake_db = Mock()
-        fake_db.collection.return_value = collection
-
         with (
-            patch.object(self.module, 'db', fake_db),
             patch.object(self.db, 'get_task', return_value=original_task),
             patch.object(
                 self.db,
@@ -506,11 +491,150 @@ class GroupMessageTaskDBTest(unittest.TestCase):
         get_failed.assert_called_once_with('message-1')
         get_remaining.assert_not_called()
         store_members.assert_called_once_with(retry_task_id, [failed_member])
-        retry_data = document.set.call_args.args[0]
+        self.state_store.create_group_message_task.assert_called_once()
+        stored_task_id, retry_data = (
+            self.state_store.create_group_message_task.call_args.args)
+        self.assertEqual(stored_task_id, retry_task_id)
         self.assertEqual(retry_data['total_members'], 1)
         self.assertEqual(retry_data['total_batches'], 1)
         self.assertEqual(retry_data['original_task_id'], 'message-1')
         self.assertIs(retry_data['is_retry'], True)
+
+    def test_createはmember_JSON保存後にtaskをStateStoreへ保存する(self):
+        self.group_members_db.get_members.return_value = [
+            'mock-line:user-1', 'mock-line:user-2']
+        self.object_store.store_private.return_value = (
+            'gs://test-bucket/group_tasks/task/members.json')
+        calls = []
+        self.object_store.store_private.side_effect = (
+            lambda *args, **kwargs: (
+                calls.append(('object', args, kwargs)) or
+                'gs://test-bucket/group_tasks/task/members.json'))
+        self.state_store.create_group_message_task.side_effect = (
+            lambda *args, **kwargs: calls.append(('state', args, kwargs)))
+
+        with (
+            patch.object(self.module.time, 'time', return_value=123),
+            patch.object(
+                self.module.uuid, 'uuid4',
+                return_value=types.SimpleNamespace(hex='abcdef0123456789')),
+        ):
+            task_id = self.db.create_task(
+                'test-bot', 'test-group', 'notice', {'key': 'value'},
+                'admin@example.invalid')
+
+        self.assertEqual(task_id, '123-abcdef01')
+        self.assertEqual([entry[0] for entry in calls], ['object', 'state'])
+        key, content = calls[0][1]
+        self.assertEqual(key, 'group_tasks/123-abcdef01/members.json')
+        self.assertEqual(
+            json.loads(content),
+            ['mock-line:user-1', 'mock-line:user-2'])
+        stored_task_id, task_data = calls[1][1]
+        self.assertEqual(stored_task_id, task_id)
+        self.assertNotIn('created_at', task_data)
+        self.assertNotIn('updated_at', task_data)
+        self.assertEqual(task_data['total_members'], 2)
+        self.assertEqual(
+            task_data['member_list_url'],
+            'gs://test-bucket/group_tasks/task/members.json')
+
+    def test_空groupはObjectStoreとStateStoreを呼ばない(self):
+        self.group_members_db.get_members.return_value = []
+
+        with self.assertRaises(ValueError):
+            self.db.create_task(
+                'test-bot', 'empty-group', 'notice', {},
+                'admin@example.invalid')
+
+        self.object_store.store_private.assert_not_called()
+        self.state_store.create_group_message_task.assert_not_called()
+
+    def test_update_builderはtransaction内のlist規則とGCS追記を維持する(self):
+        old_errors = [f'error-{index}' for index in range(10)]
+        old_failed = [f'user-{index}' for index in range(100)]
+        self.object_store.load_private.return_value = json.dumps(
+            ['existing-user']).encode('utf-8')
+
+        def update_task(_task_id, builder):
+            self.updated_data = builder({
+                'error_messages': old_errors,
+                'failed_member_ids': old_failed,
+            })
+            return True
+
+        self.state_store.update_group_message_task.side_effect = update_task
+
+        result = self.db.update_task_status(
+            'task-1', self.db.STATUS_FAILED,
+            processed=101, successful=100, failed=1,
+            error='new-error', failed_member_id='new-user')
+
+        self.assertIs(result, True)
+        self.assertEqual(
+            self.updated_data['error_messages'],
+            ['new-error'] + old_errors[:9])
+        self.assertEqual(
+            self.updated_data['failed_member_ids'],
+            old_failed[1:] + ['new-user'])
+        self.object_store.load_private.assert_called_once_with(
+            'group_tasks/task-1/failed_members.json')
+        self.object_store.store_private.assert_called_once_with(
+            'group_tasks/task-1/failed_members.json',
+            json.dumps(['existing-user', 'new-user']))
+
+    def test_task不存在ならupdate_builderとGCS追記を実行しない(self):
+        self.state_store.update_group_message_task.return_value = False
+
+        result = self.db.update_task_status(
+            'missing-task', self.db.STATUS_FAILED,
+            failed_member_id='new-user')
+
+        self.assertIs(result, False)
+        builder = self.state_store.update_group_message_task.call_args.args[1]
+        self.assertTrue(callable(builder))
+        self.object_store.load_private.assert_not_called()
+        self.object_store.store_private.assert_not_called()
+
+    def test_member_JSONのNotFoundとStoreErrorは致命的なまま(self):
+        for error in (
+                ObjectNotFoundError('missing'),
+                ObjectStoreError('failed')):
+            with self.subTest(error=type(error).__name__):
+                self.object_store.load_private.reset_mock()
+                self.object_store.load_private.side_effect = error
+                with self.assertRaises(type(error)):
+                    self.db.get_members_from_storage('task-1')
+
+    def test_failed_JSON読取失敗は空listから上書きする既存挙動を維持する(self):
+        self.object_store.load_private.side_effect = ValueError('broken JSON')
+
+        self.db._append_failed_member_list('task-1', ['new-user'])
+
+        self.object_store.store_private.assert_called_once_with(
+            'group_tasks/task-1/failed_members.json',
+            json.dumps(['new-user']))
+
+    def test_result_JSON取得失敗は空listを返す(self):
+        getters = (
+            self.db._get_failed_members_from_storage,
+            self.db.get_successful_members,
+            self.db.get_error_logs,
+        )
+        for getter in getters:
+            for error in (
+                    ObjectNotFoundError('missing'),
+                    ObjectStoreError('failed'),
+                    ValueError('broken JSON')):
+                with self.subTest(getter=getter.__name__, error=type(error).__name__):
+                    self.object_store.load_private.reset_mock()
+                    self.object_store.load_private.side_effect = error
+                    self.assertEqual(getter('task-1'), [])
+
+    def test_facadeはGoogle_SDKを直接importしない(self):
+        source = (PROJECT_ROOT / 'group_message_task_db.py').read_text()
+        self.assertNotIn('from google.', source)
+        self.assertNotIn('import google.', source)
 
 
 if __name__ == '__main__':
