@@ -8,6 +8,8 @@ from unittest.mock import Mock, patch
 from urllib.parse import parse_qs
 import uuid
 
+from cloud_backend.contracts import CredentialData
+
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
@@ -25,7 +27,7 @@ class FakeTimestamp:
         self.value = value
 
 
-def load_task_client():
+def load_task_queue():
     tasks_v2 = types.ModuleType('google.cloud.tasks_v2')
     tasks_v2.HttpMethod = types.SimpleNamespace(POST='POST')
     tasks_v2.HttpRequest = Record
@@ -36,6 +38,7 @@ def load_task_client():
     service_account = types.ModuleType('google.oauth2.service_account')
     credentials_class = type('Credentials', (), {})
     credentials_class.from_service_account_file = Mock()
+    credentials_class.from_service_account_info = Mock()
     service_account.Credentials = credentials_class
 
     timestamp_pb2 = types.ModuleType('google.protobuf.timestamp_pb2')
@@ -55,9 +58,9 @@ def load_task_client():
     auth = types.ModuleType('auth')
     auth.get_api_token = Mock(return_value='shared-api-token')
 
-    module_name = 'task_client_for_unit_test'
+    module_name = 'gcp_task_queue_for_unit_test'
     spec = importlib.util.spec_from_file_location(
-        module_name, PROJECT_ROOT / 'task_client.py')
+        module_name, PROJECT_ROOT / 'cloud_backend' / 'gcp' / 'task_queue.py')
     module = importlib.util.module_from_spec(spec)
     modules = {
         'google': google,
@@ -77,6 +80,20 @@ def load_task_client():
         service_account=service_account,
         auth=auth,
     )
+
+
+class FakeCredentialSource:
+    def __init__(self, credential_data=None):
+        self.credential_data = credential_data
+        self.calls = []
+
+    def get_google_service_account(self, reference=None, allow_default=False):
+        self.calls.append((reference, allow_default))
+        if self.credential_data is not None:
+            return self.credential_data
+        if allow_default and not reference:
+            return CredentialData(use_default=True)
+        return CredentialData(file_path=reference)
 
 
 def make_settings(credentials_path=''):
@@ -104,21 +121,24 @@ def make_client():
 
 class TaskClientInitializationTest(unittest.TestCase):
     def setUp(self):
-        self.module, self.dependencies = load_task_client()
+        self.module, self.dependencies = load_task_queue()
+        self.credential_source = FakeCredentialSource()
+        self.queue = self.module.GcpTaskQueue(
+            credential_source=self.credential_source)
 
     def test_初期化前はclientを作らない(self):
         with self.assertRaisesRegex(ValueError, 'not initialized'):
-            self.module.get_client()
+            self.queue.get_client()
         self.dependencies.tasks_v2.CloudTasksClient.assert_not_called()
 
     def test_鍵file未指定時はADCを使う(self):
         client = make_client()
         self.dependencies.tasks_v2.CloudTasksClient.return_value = client
 
-        self.module.initialize(make_settings())
+        self.queue.initialize(make_settings())
 
-        self.assertIs(self.module.get_client(), client)
-        self.assertIs(self.module.get_client(), client)
+        self.assertIs(self.queue.get_client(), client)
+        self.assertIs(self.queue.get_client(), client)
         self.dependencies.tasks_v2.CloudTasksClient.assert_called_once_with()
         loader = (
             self.dependencies.service_account.Credentials
@@ -134,9 +154,9 @@ class TaskClientInitializationTest(unittest.TestCase):
         client = make_client()
         self.dependencies.tasks_v2.CloudTasksClient.return_value = client
 
-        self.module.initialize(make_settings('/keys/example.json'))
+        self.queue.initialize(make_settings('/keys/example.json'))
 
-        self.assertIs(self.module.get_client(), client)
+        self.assertIs(self.queue.get_client(), client)
         loader.assert_called_once_with('/keys/example.json')
         self.dependencies.tasks_v2.CloudTasksClient.assert_called_once_with(
             credentials=credentials)
@@ -147,25 +167,46 @@ class TaskClientInitializationTest(unittest.TestCase):
         self.dependencies.tasks_v2.CloudTasksClient.side_effect = [
             first_client, second_client]
 
-        self.module.initialize(make_settings())
-        self.assertIs(self.module.get_client(), first_client)
-        self.module.initialize(make_settings())
-        self.assertIs(self.module.get_client(), second_client)
+        self.queue.initialize(make_settings())
+        self.assertIs(self.queue.get_client(), first_client)
+        self.queue.initialize(make_settings())
+        self.assertIs(self.queue.get_client(), second_client)
 
         self.assertEqual(
             self.dependencies.tasks_v2.CloudTasksClient.call_count, 2)
 
+    def test_inline_JSONをclient資格情報へ変換する(self):
+        credentials = object()
+        loader = (
+            self.dependencies.service_account.Credentials
+            .from_service_account_info)
+        loader.return_value = credentials
+        self.queue = self.module.GcpTaskQueue(
+            credential_source=FakeCredentialSource(CredentialData(
+                inline_json='{"project_id":"test-project"}')))
+        client = make_client()
+        self.dependencies.tasks_v2.CloudTasksClient.return_value = client
+
+        self.queue.initialize(make_settings('/parameter/gcp-key'))
+
+        loader.assert_called_once_with({'project_id': 'test-project'})
+        self.assertIs(self.queue.get_client(), client)
+        self.dependencies.tasks_v2.CloudTasksClient.assert_called_once_with(
+            credentials=credentials)
+
 
 class TaskCreationTest(unittest.TestCase):
     def setUp(self):
-        self.module, self.dependencies = load_task_client()
-        self.module.initialize(make_settings())
+        self.module, self.dependencies = load_task_queue()
+        self.queue = self.module.GcpTaskQueue(
+            credential_source=FakeCredentialSource())
+        self.queue.initialize(make_settings())
         self.client = make_client()
 
     def create_task(self, queue_name, url, params, delay_seconds=None):
         with patch.object(
-                self.module, 'get_client', return_value=self.client):
-            return self.module.create_task(
+                self.queue, 'get_client', return_value=self.client):
+            return self.queue.create_task(
                 queue_name, url, params, delay_seconds=delay_seconds)
 
     def test_全queueでtokenはheaderだけに入れる(self):
@@ -204,6 +245,15 @@ class TaskCreationTest(unittest.TestCase):
 
         self.client.task_path.assert_not_called()
         self.assertEqual(self.dependencies.auth.get_api_token.call_count, 3)
+
+    def test_既存task_idを新しい相関IDで上書きする(self):
+        task_id = self.create_task(
+            'action-queue', '/api/action', {'task_id': 'caller-value'})
+        request = self.client.create_task.call_args.args[0]
+        body = parse_qs(request.task.http_request.body.decode('utf-8'))
+
+        self.assertEqual([task_id], body['task_id'])
+        self.assertNotEqual('caller-value', task_id)
 
     def test_予約時刻はutcnowを基準にする(self):
         original_datetime = datetime.datetime
@@ -247,7 +297,7 @@ class TaskCreationTest(unittest.TestCase):
             self.dependencies.service_account.Credentials
             .from_service_account_file)
         loader.return_value = object()
-        self.module.initialize(make_settings('/keys/example.json'))
+        self.queue.initialize(make_settings('/keys/example.json'))
         self.dependencies.auth.get_api_token.return_value = (
             'secret-header-token')
         with patch.object(self.module.logging, 'info') as log_info:
@@ -262,6 +312,44 @@ class TaskCreationTest(unittest.TestCase):
         self.assertNotIn('secret-header-token', messages)
         self.assertNotIn('secret-action-value', messages)
         self.assertNotIn('/keys/example.json', messages)
+
+
+def load_task_client_facade(task_queue):
+    cloud_backend = types.ModuleType('cloud_backend')
+    cloud_backend.create_task_queue = Mock(return_value=task_queue)
+    module_name = 'task_client_facade_for_unit_test'
+    spec = importlib.util.spec_from_file_location(
+        module_name, PROJECT_ROOT / 'task_client.py')
+    module = importlib.util.module_from_spec(spec)
+    with patch.dict(sys.modules, {'cloud_backend': cloud_backend}):
+        spec.loader.exec_module(module)
+    return module, cloud_backend
+
+
+class TaskClientFacadeTest(unittest.TestCase):
+    def test_初期化前は従来の例外を返す(self):
+        module, _ = load_task_client_facade(Mock())
+
+        with self.assertRaisesRegex(ValueError, 'not initialized'):
+            module.get_client()
+        with self.assertRaisesRegex(ValueError, 'not initialized'):
+            module.create_task('action-queue', '/action', {})
+
+    def test_署名と戻り値をadapterへ委譲する(self):
+        queue = Mock()
+        queue.create_task.return_value = 'task-id'
+        module, cloud_backend = load_task_client_facade(queue)
+        gcp_settings = make_settings()
+
+        module.initialize(gcp_settings)
+        result = module.create_task(
+            'action-queue', '/action', {'value': '1'}, delay_seconds=30)
+
+        cloud_backend.create_task_queue.assert_called_once_with()
+        queue.initialize.assert_called_once_with(gcp_settings)
+        queue.create_task.assert_called_once_with(
+            'action-queue', '/action', {'value': '1'}, delay_seconds=30)
+        self.assertEqual('task-id', result)
 
 
 def load_common_commands(task_client):
