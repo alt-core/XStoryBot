@@ -43,7 +43,9 @@ class GcpStateStore(StateStore):
         visited = set()
         while current is not None and id(current) not in visited:
             visited.add(id(current))
-            if type(current).__name__ in cls._CONFLICT_ERROR_NAMES:
+            if (
+                    cls._is_google_error(current)
+                    and type(current).__name__ in cls._CONFLICT_ERROR_NAMES):
                 return True
             current = current.__cause__ or current.__context__
         return False

@@ -154,6 +154,18 @@ class GcpStateStorePlayerTest(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, 'application error'):
             self.store.create_player_status('new', {'value': '{}'})
 
+        application_conflict = type(
+            'Conflict',
+            (Exception,),
+            {'__module__': 'application.domain'},
+        )
+        error = application_conflict('application conflict')
+        self.document.create.side_effect = error
+        with self.assertRaises(application_conflict) as raised:
+            self.store.create_player_status('new', {'value': '{}'})
+
+        self.assertIs(raised.exception, error)
+
 
 class GcpStateStoreAtomicOperationTest(unittest.TestCase):
     def setUp(self):
