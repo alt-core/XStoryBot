@@ -6,30 +6,24 @@ import copy
 
 import logging
 
-from google.cloud import firestore
-
+from cloud_backend import create_state_store
 from utility import deep_dump
 
 DEBUG = False
 
-db = firestore.Client()
+_state_store = create_state_store()
+# group_message_task_db.pyの段階移行が終わるまで、既存の内部参照を維持する。
+db = _state_store.client
 
 
 class GlobalBotVariablesDB:
     @staticmethod
     def get_by_bot_name(bot_name):
-        doc_ref = db.collection('global_bot_variables').document(bot_name)
-        doc = doc_ref.get()
-        if doc.exists:
-            return doc.to_dict()
-        return None
+        return _state_store.get_global_bot_variables(bot_name)
 
     @staticmethod
     def save(bot_name, scenario_uri):
-        doc_ref = db.collection('global_bot_variables').document(bot_name)
-        doc_ref.set({
-            'scenario_uri': scenario_uri
-        })
+        _state_store.save_global_bot_variables(bot_name, scenario_uri)
 
 
 class PlayerStatusDB:
@@ -39,10 +33,9 @@ class PlayerStatusDB:
         self.bot_name = bot_name
         self.user_id = user_id
         self.id = bot_name + ':' + user_id
-        doc_ref = db.collection('player_status').document(self.id)
-        doc = doc_ref.get()
-        if doc.exists:
-            data = doc.to_dict()
+        state = _state_store.load_player_status(self.id)
+        if state is not None:
+            data = state.data
             if DEBUG:
                 from pprint import pprint
                 print('==PlayerStatusDB==')
@@ -55,7 +48,7 @@ class PlayerStatusDB:
             }
             self.rollback_entry = copy.deepcopy(self.entry)
             self.db = self._str_to_db(self.entry['value'])
-            self.last_update_time = doc.update_time
+            self.last_update_time = state.version
         else:
             self.entry = {
                 'scene': '*start',
@@ -160,17 +153,17 @@ class PlayerStatusDB:
             if DEBUG:
                 print('== SAVED ==')
             self.entry['value'] = new_value
-            doc_ref = db.collection('player_status').document(self.id)
             if force:
-                result = doc_ref.set(self.entry)
+                self.last_update_time = _state_store.force_put_player_status(
+                    self.id, self.entry)
             elif self.last_update_time is not None:
                 # 更新の場合は前回の更新時間を指定することで並行実行を排除する
                 # 失敗したときは例外が上がるはず
-                result = doc_ref.update(self.entry,
-                                        option=db.write_option(last_update_time=self.last_update_time))
+                self.last_update_time = _state_store.update_player_status(
+                    self.id, self.entry, self.last_update_time)
             else:
-                result = doc_ref.create(self.entry)
-            self.last_update_time = result.update_time
+                self.last_update_time = _state_store.create_player_status(
+                    self.id, self.entry)
             self.is_dirty = False
         else:
             if DEBUG:
@@ -184,8 +177,7 @@ class PlayerStatusDB:
             self.save(force=True)
             self.is_dirty = False
         else:
-            doc_ref = db.collection('player_status').document(self.id)
-            doc_ref.delete()
+            _state_store.delete_player_status(self.id)
             self.reset()
 
 
@@ -199,77 +191,25 @@ class GroupMembersDB:
 
     @staticmethod
     def get_members(group_id):
-        shard_collection = db.collection('group_members').document(group_id).collection('shards')
-        members = []
-        for shard_doc in shard_collection.stream():
-            data = shard_doc.to_dict()
-            members.extend(data.get('members', []))
-        return members
+        return _state_store.get_group_members(group_id)
 
     @staticmethod
     def append_member(group_id, member):
         shard_id = GroupMembersDB._get_shard_id(member)
-        shard_ref = db.collection('group_members').document(group_id).collection('shards').document(shard_id)
-        transaction = db.transaction()
-
-        @firestore.transactional
-        def update_shard(transaction, shard_ref):
-            snapshot = shard_ref.get(transaction=transaction)
-            data = snapshot.to_dict() if snapshot.exists else {}
-            members = data.get('members', [])
-            if member not in members:
-                members.append(member)
-                transaction.set(shard_ref, {'members': members})
-        update_shard(transaction, shard_ref)
+        _state_store.append_group_member(group_id, shard_id, member)
 
     @staticmethod
     def remove_member(group_id, member):
         shard_id = GroupMembersDB._get_shard_id(member)
-        shard_ref = db.collection('group_members').document(group_id).collection('shards').document(shard_id)
-        transaction = db.transaction()
-
-        @firestore.transactional
-        def update_shard(transaction, shard_ref):
-            snapshot = shard_ref.get(transaction=transaction)
-            if not snapshot.exists:
-                return
-            data = snapshot.to_dict()
-            members = data.get('members', [])
-            if member in members:
-                members.remove(member)
-                transaction.set(shard_ref, {'members': members})
-        update_shard(transaction, shard_ref)
+        _state_store.remove_group_member(group_id, shard_id, member)
 
     @staticmethod
     def clear(group_id):
-        shard_collection = db.collection('group_members').document(group_id).collection('shards')
-        # バッチ処理で全削除
-        batch = db.batch()
-        for shard_doc in shard_collection.stream():
-            batch.delete(shard_doc.reference)
-        batch.commit()
+        _state_store.clear_group_members(group_id)
 
     @staticmethod
     def get_all_groups():
-        groups = []
-        # サブコレクションを持つすべてのグループを取得
-        group_refs = db.collection_group('shards').get()
-
-        # ユニークなグループIDを抽出
-        group_ids = set()
-        for ref in group_refs:
-            # パスからグループIDを抽出
-            # 例: 'group_members/{group_id}/shards/{shard_id}'
-            path_parts = ref.reference.path.split('/')
-            if len(path_parts) >= 2:
-                group_id = path_parts[1]  # グループIDは2番目の要素
-                group_ids.add(group_id)
-
-        # 重複なしでグループリストを作成
-        for group_id in group_ids:
-            groups.append({'id': group_id})
-
-        return groups
+        return _state_store.get_all_groups()
 
 
 import urllib.parse
@@ -278,18 +218,15 @@ class ImageFileStatDB:
     @staticmethod
     def get_cached_image_file_stat(kind, image_url):
         key = f'{kind}|{urllib.parse.quote_plus(image_url)}'
-        doc_ref = db.collection('image_file_stats').document(key)
-        doc = doc_ref.get()
-        if doc.exists:
-            data = doc.to_dict()
+        data = _state_store.get_image_file_stat(key)
+        if data is not None:
             return data.get('file_digest'), (data.get('width'), data.get('height'))
         return None
 
     @staticmethod
     def put_cached_image_file_stat(kind, image_url, file_digest, size):
         key = f'{kind}|{urllib.parse.quote_plus(image_url)}'
-        doc_ref = db.collection('image_file_stats').document(key)
-        doc_ref.set({
+        _state_store.put_image_file_stat(key, {
             'file_digest': file_digest,
             'width': size[0],
             'height': size[1]
@@ -299,18 +236,15 @@ class MediaFileStatDB:
     @staticmethod
     def get_cached_media_file_stat(kind, media_url):
         key = f'{kind}|{urllib.parse.quote_plus(media_url)}'
-        doc_ref = db.collection('media_file_stats').document(key)
-        doc = doc_ref.get()
-        if doc.exists:
-            data = doc.to_dict()
+        data = _state_store.get_media_file_stat(key)
+        if data is not None:
             return data.get('file_type'), data.get('file_size'), data.get('file_digest'), data.get('attributes', {})
         return None
 
     @staticmethod
     def put_cached_media_file_stat(kind, media_url, file_type, file_size, file_digest, attributes=None):
         key = f'{kind}|{urllib.parse.quote_plus(media_url)}'
-        doc_ref = db.collection('media_file_stats').document(key)
-        doc_ref.set({
+        _state_store.put_media_file_stat(key, {
             'file_type': file_type,
             'file_size': file_size,
             'file_digest': file_digest,

@@ -3,8 +3,7 @@ import hashlib
 import logging
 import json
 
-from google.cloud import firestore
-
+from cloud_backend import create_state_store
 from plugin.render_text import renderer
 
 from plugin.line import more
@@ -15,17 +14,16 @@ from plugin.line import default_commands, quick_reply
 
 IMAGE_TEXT_CMDS = ('@imagetext', '@画像テキスト', '@novel', '@小説')
 
-# Firestoreクライアントの初期化
-db = firestore.Client()
+_state_store = create_state_store()
+# 既存のimport時client所有を確認するテストとの互換性を維持する。
+db = _state_store.client
 
 class ImageTextStatDB:
     @classmethod
     def get_cached_image_text_stat(cls, text, frame_opt):
         text_digest = hashlib.md5(f'{text}\n{frame_opt}'.encode('utf-8')).hexdigest()
-        doc_ref = db.collection('image_text_stats').document(text_digest)
-        doc = doc_ref.get()
-        if doc.exists:
-            data = doc.to_dict()
+        data = _state_store.get_image_text_stat(text_digest)
+        if data is not None:
             if data['text'] == text and data['frame_opt'] == frame_opt:
                 return data.get('url'), (data.get('width'), data.get('height')), data.get('rest')
         return None
@@ -33,8 +31,7 @@ class ImageTextStatDB:
     @classmethod
     def put_cached_image_text_stat(cls, text, frame_opt, file_digest, url, size, rest):
         text_digest = hashlib.md5(f'{text}\n{frame_opt}'.encode('utf-8')).hexdigest()
-        doc_ref = db.collection('image_text_stats').document(text_digest)
-        doc_ref.set({
+        _state_store.put_image_text_stat(text_digest, {
             'text': text,
             'frame_opt': frame_opt,
             'file_digest': file_digest,

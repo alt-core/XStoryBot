@@ -2,8 +2,7 @@
 import logging
 import re
 
-from google.cloud import firestore
-
+from cloud_backend import create_state_store
 import hub
 import commands
 from plugin.line import default_commands
@@ -14,75 +13,29 @@ SET_NEXT_LABEL_CMD = '@@set_next_label'
 CLEAR_NEXT_LABEL_CMDS = ('@clear_next_label', '@reset_next_label')
 
 
-# Firestoreクライアントの初期化
-db = firestore.Client()
+_state_store = create_state_store()
+# 既存のimport時client所有を確認するテストとの互換性を維持する。
+db = _state_store.client
 
 
 class PlayerNextLabelDB:
     @staticmethod
     def set_next_label(label, trigger_message, status):
-        transaction = db.transaction()
-
-        @firestore.transactional
-        def update_in_transaction(transaction, label, trigger_message):
-            doc_ref = db.collection('player_next_labels').document(status.id)
-            doc = doc_ref.get(transaction=transaction)
-            overwrite = (None, None)
-
-            if not doc.exists:
-                transaction.set(doc_ref, {
-                    'next_label': label,
-                    'trigger_message': trigger_message
-                })
-            else:
-                data = doc.to_dict()
-                if data.get('next_label'):
-                    overwrite = (data['next_label'], data.get('trigger_message'))
-                transaction.update(doc_ref, {
-                    'next_label': label,
-                    'trigger_message': trigger_message
-                })
-            return overwrite
-
-        return update_in_transaction(transaction, label, trigger_message)
+        return _state_store.set_next_label(
+            status.id, label, trigger_message)
 
     @staticmethod
     def get_next_label(status):
-        doc_ref = db.collection('player_next_labels').document(status.id)
-        doc = doc_ref.get()
-        if doc.exists:
-            data = doc.to_dict()
-            return data.get('next_label'), data.get('trigger_message')
-        return None, None
+        return _state_store.get_next_label(status.id)
 
     @staticmethod
     def compare_and_clear_next_label(status, next_label):
-        transaction = db.transaction()
-
-        @firestore.transactional
-        def update_in_transaction(transaction, status, next_label):
-            doc_ref = db.collection('player_next_labels').document(status.id)
-            doc = doc_ref.get(transaction=transaction)
-            if doc.exists:
-                data = doc.to_dict()
-                ret = data.get('next_label'), data.get('trigger_message')
-                if ret[0] == next_label:
-                    transaction.update(doc_ref, {
-                        'next_label': None,
-                        'trigger_message': None
-                    })
-                    return ret
-            return None, None
-
-        return update_in_transaction(transaction, status, next_label)
+        return _state_store.compare_and_clear_next_label(
+            status.id, next_label)
 
     @staticmethod
     def clear_next_label(status):
-        doc_ref = db.collection('player_next_labels').document(status.id)
-        doc_ref.set({
-            'next_label': None,
-            'trigger_message': None
-        })
+        _state_store.clear_next_label(status.id)
 
 
 class LineMorePlugin_Builder(object):
