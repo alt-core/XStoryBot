@@ -1,54 +1,48 @@
 # coding: utf-8
 
-from models import GroupMembers, GroupDB
+from models import GroupMembersDB
 
 
 class User(object):
     def __init__(self, service_name, user_id):
-        self.service_name = unicode(service_name)
-        self.user_id = unicode(user_id)
-
-    def __unicode__(self):
-        return self.serialize()
+        self.service_name = str(service_name)
+        self.user_id = str(user_id)
 
     def __str__(self):
-        return unicode(self).encode('utf-8')
+        return self.serialize()
 
     def serialize(self):
         values = [self.service_name, self.user_id]
-        values = [s.replace(u'%', u'%25').replace(u':', u'%3A') for s in values]
-        return u':'.join(values)
+        values = [s.replace('%', '%25').replace(':', '%3A') for s in values]
+        return ':'.join(values)
 
     @classmethod
     def deserialize(cls, string):
-        values = unicode(string).split(u':')
+        values = str(string).split(':')
         if len(values) != 2:
             return None
-        service_name, user_id = [s.replace(u'%3A', u':').replace(u'%25', u'%') for s in values]
+        service_name, user_id = [s.replace('%3A', ':').replace('%25', '%') for s in values]
         return cls(service_name, user_id)
 
 
 def get_group_members(group):
-    group_members = GroupMembers.get_by_id(id=group)
-    if group_members:
-        members = group_members.members
-    else:
-        members = []
+    members = GroupMembersDB.get_members(group)
     return [User.deserialize(member) for member in members]
 
 
 def append_group_member(group, user):
-    group = GroupDB(group)
     member = user.serialize()
-    group.append_member(member)
+    GroupMembersDB.append_member(group, member)
 
 
 def remove_group_member(group, user):
-    group = GroupDB(group)
     member = user.serialize()
-    group.remove_member(member)
+    GroupMembersDB.remove_member(group, member)
 
 
 def clear_group(group):
-    group = GroupDB(group)
-    group.clear()
+    GroupMembersDB.clear(group)
+
+
+def get_all_groups():
+    return GroupMembersDB.get_all_groups()

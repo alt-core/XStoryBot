@@ -35,7 +35,10 @@ def callback(bot_name):
     if interface is None:
         abort_json(404, u'not found')
 
-    signature = request.headers['X-Line-Signature']
+    signature = request.headers.get('X-Line-Signature')
+    if signature is None:
+        abort_json(401, u'invalid signature')
+
     body = request.body.read().decode('utf-8')
     # logging.info(u"Signature: %s" % signature)
     # gen_signature = base64.b64encode(hmac.new(
@@ -44,11 +47,11 @@ def callback(bot_name):
     #     hashlib.sha256
     # ).digest())
     # logging.info(u"Gen-Signature: %s" % gen_signature)
-    logging.info(u'Request body: {}'.format(body))
     #logging.info(u'Headers: {}'.format(repr(request.environ)))
 
     try:
         events = interface.parser.parse(body, signature)
+        logging.info(u'Request body: {}'.format(body))
 
         bot.check_reload()
 
@@ -74,5 +77,4 @@ def callback(bot_name):
         abort_json(401, u'invalid signature')
 
     return utility.make_ok_json(u'OK')
-
 

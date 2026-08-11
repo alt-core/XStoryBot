@@ -1,98 +1,120 @@
-# coding: utf-8
 import json
 import random
 import string
+import hashlib
+import copy
 
-from google.appengine.ext import ndb
+import logging
 
+from google.cloud import firestore
 
-class GlobalBotVariables(ndb.Model):
-    scenario_uri = ndb.StringProperty()
+from utility import deep_dump
 
+DEBUG = False
 
-class GroupMembers(ndb.Model):
-    members = ndb.StringProperty(repeated=True)
-
-
-class PlayerStatus(ndb.Model):
-    scene = ndb.StringProperty()
-    scene_history = ndb.StringProperty(repeated=True)
-    action_token = ndb.StringProperty()
-    value = ndb.TextProperty()
+db = firestore.Client()
 
 
-class PlayerStatusDB(object):
+class GlobalBotVariablesDB:
+    @staticmethod
+    def get_by_bot_name(bot_name):
+        doc_ref = db.collection('global_bot_variables').document(bot_name)
+        doc = doc_ref.get()
+        if doc.exists:
+            return doc.to_dict()
+        return None
+
+    @staticmethod
+    def save(bot_name, scenario_uri):
+        doc_ref = db.collection('global_bot_variables').document(bot_name)
+        doc_ref.set({
+            'scenario_uri': scenario_uri
+        })
+
+
+class PlayerStatusDB:
     MAX_HISTORY = 5 # ヒストリーは最大5つまで
 
-    def __init__(self, user_id):
-        self.id = user_id
-        self.entry = PlayerStatus.get_by_id(user_id)
-        if self.entry:
-            self.db = json.loads(self.entry.value) or {}
+    def __init__(self, bot_name, user_id):
+        self.bot_name = bot_name
+        self.user_id = user_id
+        self.id = bot_name + ':' + user_id
+        doc_ref = db.collection('player_status').document(self.id)
+        doc = doc_ref.get()
+        if doc.exists:
+            data = doc.to_dict()
+            if DEBUG:
+                from pprint import pprint
+                print('==PlayerStatusDB==')
+                pprint(data)
+            self.entry = {
+                'scene': data.get('scene'),
+                'scene_history': data.get('scene_history', []),
+                'action_token': data.get('action_token'),
+                'value': data.get('value', '{}')
+            }
+            self.rollback_entry = copy.deepcopy(self.entry)
+            self.db = self._str_to_db(self.entry['value'])
+            self.last_update_time = doc.update_time
         else:
-            self.entry = PlayerStatus(id=user_id, scene="*start", value="{}")
+            self.entry = {
+                'scene': '*start',
+                'scene_history': [],
+                'action_token': None,
+                'value': None
+            }
+            self.rollback_entry = None
             self.db = {}
-        self.is_dirty = False
-        self.is_values_dirty = False
+            self.last_update_time = None
+        self.is_dirty = False # is_dirty は self.db 以外の値の更新確認
         if self.action_token is None:
             self.renew_action_token()
 
     def __getitem__(self, item):
-        value = self.db[item]
-        return value
+        return self.db[item]
 
     def __setitem__(self, item, value):
-        if isinstance(value, list) or isinstance(value, dict):
-            is_ref = True
-        else:
-            is_ref = False
-        if item not in self.db or (self.db[item] != value or is_ref):
-            # 参照型は直接中身を書き換えられてしまうと更新チェックができないので、保守的に倒す
-            self.db[item] = value
-            self.is_dirty = True
-            self.is_values_dirty = True
+        if DEBUG:
+            print(f'PlayerStatusDB: {item} = {value}')
+        self.db[item] = value
+        # db の更新は保存時に dump して比較する
 
     def __delitem__(self, item):
         del self.db[item]
-        self.is_dirty = True
-        self.is_values_dirty = True
 
     def __contains__(self, item):
         return item in self.db
 
     def keys(self):
-        return self.db.keys()
+        return list(self.db.keys())
 
     def get(self, item, default=None):
-        if item in self:
-            return self[item]
-        else:
-            return default
+        return self.db.get(item, default)
 
     def reset(self):
         self.db = {}
-        self.entry.scene = None
-        self.entry.scene_history = []
+        self.entry['scene'] = None
+        self.entry['scene_history'] = []
+        self.entry['action_token'] = None
         self.is_dirty = True
-        self.is_values_dirty = True
         self.renew_action_token()
 
     @property
     def scene(self):
-        return self.entry.scene
+        return self.entry['scene']
 
     @scene.setter
     def scene(self, value):
-        self.entry.scene = value
+        self.entry['scene'] = value
         self.is_dirty = True
 
     @property
     def scene_history(self):
-        return self.entry.scene_history
+        return self.entry['scene_history']
 
     @scene_history.setter
     def scene_history(self, value):
-        self.entry.scene_history = value
+        self.entry['scene_history'] = value
         self.is_dirty = True
 
     def push_scene_history(self, scene_title):
@@ -108,75 +130,189 @@ class PlayerStatusDB(object):
 
     @property
     def action_token(self):
-        return self.entry.action_token
+        return self.entry['action_token']
 
     @action_token.setter
     def action_token(self, value):
-        self.entry.action_token = value
+        self.entry['action_token'] = value
         self.is_dirty = True
-        
+
     def renew_action_token(self):
-        self.action_token = \
-            u''.join([random.choice(string.ascii_letters) for _ in range(8)])
+        self.action_token = ''.join([random.choice(string.ascii_letters) for _ in range(8)])
 
     def __str__(self):
         return str(self.db)
 
-    def save(self):
-        if self.is_dirty:
-            if self.is_values_dirty:
-                self.entry.value = json.dumps(self.db)
-            self.entry.put()
+    def _db_to_str(self, db):
+        # $_ で始まるローカル変数は保存しない
+        return json.dumps({k: v for k, v in db.items() if not k.startswith('$_')})
 
+    def _str_to_db(self, s):
+        return json.loads(s)
 
-class GroupDB(object):
-    def __init__(self, group_id):
-        self.entry = GroupMembers.get_by_id(id=group_id)
-        if self.entry is None:
-            self.entry = GroupMembers(id=group_id, members=[])
-
-    def append_member(self, member):
-        if member not in self.entry.members:
-            self.entry.members.append(member)
-            self.entry.put()
-
-    def remove_member(self, member):
-        if member in self.entry.members:
-            self.entry.members.remove(member)
-            self.entry.put()
-
-    def clear(self):
-        if self.entry.members:
-            del self.entry.members[:]
-            self.entry.put()
-
-
-class ImageFileStatDB(ndb.Model):
-    file_digest = ndb.StringProperty()
-    width = ndb.IntegerProperty()
-    height = ndb.IntegerProperty()
-
-    @classmethod
-    def get_cached_image_file_stat(cls, kind, image_url):
-        key = u'{}|{}'.format(kind, image_url)
-        stat = cls.get_by_id(id=key)
-        if stat is None:
-            return None
-        size = (stat.width, stat.height)
-        return stat.file_digest, size
-
-    @classmethod
-    def put_cached_image_file_stat(cls, kind, image_url, file_digest, size):
-        key = u'{}|{}'.format(kind, image_url)
-        entry = cls.get_by_id(id=key)
-        if entry is None:
-            entry = cls(id=key, file_digest=file_digest, width=size[0], height=size[1])
+    def save(self, force=False):
+        if DEBUG:
+            from pprint import pprint
+            print('==DB @ save==')
+            deep_dump(self.db)
+        new_value = self._db_to_str(self.db)
+        if force or self.is_dirty or self.entry['value'] != new_value:
+            if DEBUG:
+                print('== SAVED ==')
+            self.entry['value'] = new_value
+            doc_ref = db.collection('player_status').document(self.id)
+            if force:
+                result = doc_ref.set(self.entry)
+            elif self.last_update_time is not None:
+                # 更新の場合は前回の更新時間を指定することで並行実行を排除する
+                # 失敗したときは例外が上がるはず
+                result = doc_ref.update(self.entry,
+                                        option=db.write_option(last_update_time=self.last_update_time))
+            else:
+                result = doc_ref.create(self.entry)
+            self.last_update_time = result.update_time
+            self.is_dirty = False
         else:
-            if entry.file_digest == file_digest:
-                # 更新しない
+            if DEBUG:
+                print('== not saved ==')
+
+    def rollback(self):
+        logging.info(f'Rollback: {self.id}')
+        if self.rollback_entry is not None:
+            self.entry = copy.deepcopy(self.rollback_entry)
+            self.db = self._str_to_db(self.entry['value'])
+            self.save(force=True)
+            self.is_dirty = False
+        else:
+            doc_ref = db.collection('player_status').document(self.id)
+            doc_ref.delete()
+            self.reset()
+
+
+class GroupMembersDB:
+    @staticmethod
+    def _get_shard_id(member):
+        # シャードIDとして、user_id の SHA256 ハッシュの 16進数表現先頭2文字 (256個) を使う
+        # firestore は 1 エントリが 1MB までなので、1つのシャードには 10000 人程度を想定
+        h = hashlib.sha256(member.encode('utf-8')).hexdigest()
+        return h[:2]
+
+    @staticmethod
+    def get_members(group_id):
+        shard_collection = db.collection('group_members').document(group_id).collection('shards')
+        members = []
+        for shard_doc in shard_collection.stream():
+            data = shard_doc.to_dict()
+            members.extend(data.get('members', []))
+        return members
+
+    @staticmethod
+    def append_member(group_id, member):
+        shard_id = GroupMembersDB._get_shard_id(member)
+        shard_ref = db.collection('group_members').document(group_id).collection('shards').document(shard_id)
+        transaction = db.transaction()
+
+        @firestore.transactional
+        def update_shard(transaction, shard_ref):
+            snapshot = shard_ref.get(transaction=transaction)
+            data = snapshot.to_dict() if snapshot.exists else {}
+            members = data.get('members', [])
+            if member not in members:
+                members.append(member)
+                transaction.set(shard_ref, {'members': members})
+        update_shard(transaction, shard_ref)
+
+    @staticmethod
+    def remove_member(group_id, member):
+        shard_id = GroupMembersDB._get_shard_id(member)
+        shard_ref = db.collection('group_members').document(group_id).collection('shards').document(shard_id)
+        transaction = db.transaction()
+
+        @firestore.transactional
+        def update_shard(transaction, shard_ref):
+            snapshot = shard_ref.get(transaction=transaction)
+            if not snapshot.exists:
                 return
-            entry.file_digest = file_digest
-            entry.width, entry.height = size
-        entry.put()
+            data = snapshot.to_dict()
+            members = data.get('members', [])
+            if member in members:
+                members.remove(member)
+                transaction.set(shard_ref, {'members': members})
+        update_shard(transaction, shard_ref)
+
+    @staticmethod
+    def clear(group_id):
+        shard_collection = db.collection('group_members').document(group_id).collection('shards')
+        # バッチ処理で全削除
+        batch = db.batch()
+        for shard_doc in shard_collection.stream():
+            batch.delete(shard_doc.reference)
+        batch.commit()
+
+    @staticmethod
+    def get_all_groups():
+        groups = []
+        # サブコレクションを持つすべてのグループを取得
+        group_refs = db.collection_group('shards').get()
+
+        # ユニークなグループIDを抽出
+        group_ids = set()
+        for ref in group_refs:
+            # パスからグループIDを抽出
+            # 例: 'group_members/{group_id}/shards/{shard_id}'
+            path_parts = ref.reference.path.split('/')
+            if len(path_parts) >= 2:
+                group_id = path_parts[1]  # グループIDは2番目の要素
+                group_ids.add(group_id)
+
+        # 重複なしでグループリストを作成
+        for group_id in group_ids:
+            groups.append({'id': group_id})
+
+        return groups
 
 
+import urllib.parse
+
+class ImageFileStatDB:
+    @staticmethod
+    def get_cached_image_file_stat(kind, image_url):
+        key = f'{kind}|{urllib.parse.quote_plus(image_url)}'
+        doc_ref = db.collection('image_file_stats').document(key)
+        doc = doc_ref.get()
+        if doc.exists:
+            data = doc.to_dict()
+            return data.get('file_digest'), (data.get('width'), data.get('height'))
+        return None
+
+    @staticmethod
+    def put_cached_image_file_stat(kind, image_url, file_digest, size):
+        key = f'{kind}|{urllib.parse.quote_plus(image_url)}'
+        doc_ref = db.collection('image_file_stats').document(key)
+        doc_ref.set({
+            'file_digest': file_digest,
+            'width': size[0],
+            'height': size[1]
+        })
+
+class MediaFileStatDB:
+    @staticmethod
+    def get_cached_media_file_stat(kind, media_url):
+        key = f'{kind}|{urllib.parse.quote_plus(media_url)}'
+        doc_ref = db.collection('media_file_stats').document(key)
+        doc = doc_ref.get()
+        if doc.exists:
+            data = doc.to_dict()
+            return data.get('file_type'), data.get('file_size'), data.get('file_digest'), data.get('attributes', {})
+        return None
+
+    @staticmethod
+    def put_cached_media_file_stat(kind, media_url, file_type, file_size, file_digest, attributes=None):
+        key = f'{kind}|{urllib.parse.quote_plus(media_url)}'
+        doc_ref = db.collection('media_file_stats').document(key)
+        doc_ref.set({
+            'file_type': file_type,
+            'file_size': file_size,
+            'file_digest': file_digest,
+            'attributes': attributes or {}
+        })
