@@ -2,144 +2,26 @@
 
 import os
 
-#SERVER_NAME = os.getenv('SERVER_NAME', '')
+from utility import deep_merge, load_settings_yaml
+
+
 DEPLOY_ENV = os.getenv('XSBOT_DEPLOY_ENV', '')
 
-OPTIONS = {
-    'api_token': u'<<YOUR API TOKEN>>',
-    'admins': [],
-    'reset_keyword': u'強制リセット',
-    'timezone': 'Asia/Tokyo',
-    'scenario_version': 2,
-}
 
-PLUGINS = {
-    'line': {
-        'line_abort_duration': 27,
-        'line_abort_duration_dont_break': True,
-        'alt_text': u'LINEアプリで確認してください。',
-        'sender_icon_urls': {
-        }
-    },
-    # 'line.quick_reply': {
-    #     'command': [u'＞', u'>'],
-    #     'default_reply': u'続きを読む=>',
-    #     'retry_message': u'システム:\n【以下の返答を選んでください】',
-    #     'ignore_pattern': ur'^リセット$|^「リセット」$|^\*共通/リセット$|^##line.liff.',
-    # },
-    # 'line.more': {
-    #     'command': [u'▽'],
-    #     'image_url': 'https://example.com/more_button.png',
-    #     'message': u'「続きを読む」',
-    #     'action_pattern': ur'^「続きを読む」$',
-    #     'ignore_pattern': ur'^「',
-    #     'please_push_more_button_label': u'##please_push_more_button',
-    # },
-    # 'line.image_text': {
-    #     'more_message': u'「続きを読む」',
-    #     'more_image_url': 'https://example.com/more_button.png',
-    #     'frames': {
-    #         'default': {
-    #             'size_x': 2080,
-    #             'size_y': 2080,
-    #             'margin_x': 90,
-    #             'margin_y': 90,
-    #         }
-    #     },
-    # },
-    # 'liff': {},
-    # 'render_text': {},
-    'google_sheets': {},
-    # 'chatgpt': {
-    #     'api_key': '<<CHATGPT_API_KEY>>',
-    #     'model': 'gpt-3.5-turbo',
-    # },
-    # 'twilio': {
-    #     'twilio_sid': '<<TWILIO_SID>>',
-    #     'twilio_auth_token': '<<TWILIO_AUTH_TOKEN>>',
-    #     'dial_from': '<<TEL_FOR_DIAL>>',
-    #     'sms_from': '<<TEL_FOR_SMS_SEND>>',
-    # },
-    # 'pusher': {
-    #     'app_id': '<<PUSHER_APP_ID>>',
-    #     'key': '<<PUSHER_APP_KEY>>',
-    #     'secret': '<<PUSHER_APP_SECRET>>',
-    #     'cluster': '<<PUSHER_APP_CLUSTER>>',
-    # }
-    # 'timestamp': {
-    #     'timezone': 'Asia/Tokyo'
-    # },
-}
+def load_settings():
+    settings = load_settings_yaml('settings.yaml')
+    default_settings = settings.get('*', {})
+    env_settings = settings.get(DEPLOY_ENV, {})
+    return deep_merge(default_settings, env_settings)
 
 
-if DEPLOY_ENV == 'PROD':
-    # リリース環境のサーバ設定
-    BOTS = {
-        'bot': {
-            'name': 'My Bot',
-            'description': '<div class="alert" style="font-weidht: bold; color: red; background: #cc88cc">これは本番環境です。更新時はご注意ください。</div>',
-            'interfaces': [{
-                'type': 'line',
-                'params': {
-                    'line_access_token': '<<LINE_ACCESS_TOKEN>>',
-                    'line_channel_secret': '<<LINE_CHANEL_SECRET>>',
-                }
-            }],
-            'scenario': {
-                'type': 'google_sheets',
-                'params': {
-                    # シナリオの Google Sheet ID (閲覧者に後述のサービスアカウントを招待すること)
-                    'sheet_id': "<<sheet_id>>",
-                    # Google Sheets API を呼び出すサービスアカウントのクレデンシャルファイル（JSON形式）
-                    'key_file_json': 'path_to_keyfile_sheets_prod.json',
-                }
-            }
-        },
-    }
-elif DEPLOY_ENV == 'DEV1':
-    # 開発環境のサーバ設定
-    BOTS = {
-        'bot': {
-            'name': 'My Bot',
-            'description': '<div class="alert" style="font-weidht: bold; color: white; background: #88cc88">これは開発環境です。</div>',
-            'interfaces': [{
-                'type': 'line',
-                'params': {
-                    'line_access_token': '<<LINE_ACCESS_TOKEN>>',
-                    'line_channel_secret': '<<LINE_CHANEL_SECRET>>',
-                }
-            }],
-            'scenario': {
-                'type': 'google_sheets',
-                'params': {
-                    # シナリオの Google Sheet ID (閲覧者に後述のサービスアカウントを招待すること)
-                    'sheet_id': "<<sheet_id>>",
-                    # Google Sheets API を呼び出すサービスアカウントのクレデンシャルファイル（JSON形式）
-                    'key_file_json': 'path_to_keyfile_sheets_dev.json',
-                }
-            }
-        },
-    }
-else:
-    # ローカルテストはこの設定を使う
-    BOTS = {
-        'bot': {
-            'name': 'My Bot',
-            'interfaces': [{
-                'type': 'line',
-                'params': {
-                    'line_access_token': '<<LINE_ACCESS_TOKEN>>',
-                    'line_channel_secret': '<<LINE_CHANEL_SECRET>>',
-                }
-            }],
-            'scenario': {
-                'type': 'google_sheets',
-                'params': {
-                    # シナリオの Google Sheet ID (閲覧者に後述のサービスアカウントを招待すること)
-                    'sheet_id': "<<sheet_id>>",
-                    # Google Sheets API を呼び出すサービスアカウントのクレデンシャルファイル（JSON形式）
-                    'key_file_json': 'path_to_keyfile_sheets_test.json',
-                }
-            }
-        },
-    }
+# 設定の読み込み
+settings = load_settings()
+
+# 各種設定を直接参照
+GCP_SETTINGS = settings['gcp']
+AUTH_SETTINGS = settings['auth']
+OPTIONS = settings.get('options', {})
+PLUGINS = settings.get('plugins', {})
+BOTS = settings['bots']
+CONSTANTS = settings.get('constants', {})

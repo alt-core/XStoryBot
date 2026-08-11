@@ -1,0 +1,53 @@
+# Python生成物
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+*.egg
+.coverage
+.coverage.*
+.cache
+.pytest_cache/
+
+# 開発環境とテスト
+.git/
+.gitignore
+.gcloudignore
+.vscode/
+.idea/
+*.iml
+test.sh
+tests/
+lib/
+
+# 環境変数と認証情報
+.env
+.env.*
+.netrc
+_netrc
+settings.yaml
+*service-account*.json
+*service_account*.json
+*firebase-adminsdk*.json
+keyfile*.json
+credentials*.json
+client_secret*.json
+*.pem
+*.key
+*.p12
+.python-version
+venv/
+ENV/
+
+# 文書とデプロイツール
+*.md
+docs/
+tools/
+deploy.sh
+
+# デプロイ用設定
+*_base.yaml
+app_*.yaml
+builder_*.yaml
