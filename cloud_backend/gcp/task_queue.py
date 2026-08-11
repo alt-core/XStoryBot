@@ -11,7 +11,7 @@ from google.oauth2 import service_account
 from google.protobuf import timestamp_pb2
 
 import auth
-from cloud_backend.contracts import TaskQueue
+from cloud_backend.contracts import TaskQueue, TaskQueueError
 from cloud_backend.gcp.credential_source import GcpCredentialSource
 
 
@@ -29,6 +29,18 @@ class GcpTaskQueue(TaskQueue):
             credential_source or GcpCredentialSource())
         self._token_supplier = token_supplier or auth.get_api_token
 
+    @staticmethod
+    def _raise_queue_error(error):
+        if type(error).__module__.startswith('google.'):
+            raise TaskQueueError(str(error)) from error
+        raise error
+
+    def _call(self, operation):
+        try:
+            return operation()
+        except Exception as error:
+            self._raise_queue_error(error)
+
     def initialize(self, gcp_settings):
         # 再初期化時に以前の設定で作成したクライアントを再利用しない。
         self._client = None
@@ -41,18 +53,19 @@ class GcpTaskQueue(TaskQueue):
             'group-message-queue': gcp_settings['services']['app']['base_url'],
         }
 
-        credential_data = self._credential_source.get_google_service_account(
-            gcp_settings.get('credentials_path'), allow_default=True)
-        if credential_data.use_default:
-            self._credentials = None
-        elif credential_data.inline_json is not None:
-            self._credentials = (
-                service_account.Credentials.from_service_account_info(
-                    json.loads(credential_data.inline_json)))
-        else:
-            self._credentials = (
-                service_account.Credentials.from_service_account_file(
-                    credential_data.file_path))
+        def load_credentials():
+            credential_data = (
+                self._credential_source.get_google_service_account(
+                    gcp_settings.get('credentials_path'), allow_default=True))
+            if credential_data.use_default:
+                return None
+            if credential_data.inline_json is not None:
+                return service_account.Credentials.from_service_account_info(
+                    json.loads(credential_data.inline_json))
+            return service_account.Credentials.from_service_account_file(
+                credential_data.file_path)
+
+        self._credentials = self._call(load_credentials)
         self._initialized = True
 
     def get_client(self):
@@ -60,11 +73,13 @@ class GcpTaskQueue(TaskQueue):
             raise ValueError(
                 'Task client not initialized. Call initialize() first.')
         if self._client is None:
-            if self._credentials is None:
-                self._client = tasks_v2.CloudTasksClient()
-            else:
-                self._client = tasks_v2.CloudTasksClient(
+            def create_client():
+                if self._credentials is None:
+                    return tasks_v2.CloudTasksClient()
+                return tasks_v2.CloudTasksClient(
                     credentials=self._credentials)
+
+            self._client = self._call(create_client)
         return self._client
 
     def create_task(self, queue_name, url, params, delay_seconds=None):
@@ -99,12 +114,12 @@ class GcpTaskQueue(TaskQueue):
             timestamp.FromDatetime(scheduled_at)
             task.schedule_time = timestamp
 
-        response = client.create_task(
+        response = self._call(lambda: client.create_task(
             tasks_v2.CreateTaskRequest(
                 parent=client.queue_path(
                     self._project_id, self._location, queue_name),
                 task=task,
             )
-        )
+        ))
         logging.info(f'Created task: {response.name}, task_id: {task_id}')
         return task_id

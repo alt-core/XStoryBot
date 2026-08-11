@@ -237,6 +237,71 @@ class GcpStateStoreAtomicOperationTest(unittest.TestCase):
         self.assertEqual(
             task['created_at'].tzinfo, datetime.timezone.utc)
 
+    def test_task更新callbackへ標準datetimeを渡す(self):
+        class FirestoreDatetime(datetime.datetime):
+            pass
+
+        collection = Mock()
+        document = Mock()
+        transaction = Mock()
+        self.client.collection.return_value = collection
+        collection.document.return_value = document
+        self.client.transaction.return_value = transaction
+        document.get.return_value = SimpleNamespace(
+            exists=True,
+            to_dict=lambda: {
+                'created_at': FirestoreDatetime(
+                    2026, 8, 12, 3, 0,
+                    tzinfo=datetime.timezone.utc),
+                'status': 'pending',
+            },
+        )
+        received = {}
+
+        def update_builder(current):
+            received.update(current)
+            return {'status': 'running'}
+
+        updated = self.store.update_group_message_task(
+            'task-1', update_builder)
+
+        self.assertTrue(updated)
+        self.assertIs(type(received['created_at']), datetime.datetime)
+        self.assertEqual(
+            received['created_at'].tzinfo, datetime.timezone.utc)
+        transaction.update.assert_called_once()
+
+    def test_void相当のwriteはprovider固有結果を返さない(self):
+        collection = Mock()
+        document = Mock()
+        shard_collection = Mock()
+        batch = Mock()
+        provider_result = object()
+        self.client.collection.return_value = collection
+        collection.document.return_value = document
+        document.collection.return_value = shard_collection
+        shard_collection.stream.return_value = []
+        self.client.batch.return_value = batch
+        document.set.return_value = provider_result
+        document.delete.return_value = provider_result
+        batch.commit.return_value = [provider_result]
+
+        results = (
+            self.store.save_global_bot_variables('bot', 'scenario-uri'),
+            self.store.delete_player_status('bot:line:user-1'),
+            self.store.clear_group_members('group-1'),
+            self.store.put_image_file_stat('image-key', {'value': '1'}),
+            self.store.put_media_file_stat('media-key', {'value': '1'}),
+            self.store.put_image_text_stat('text-key', {'value': '1'}),
+            self.store.clear_next_label('bot:line:user-1'),
+            self.store.set_build_cache('cache-key', b'value'),
+            self.store.delete_build_cache('cache-key'),
+            self.store.create_group_message_task(
+                'task-1', {'status': 'pending'}),
+        )
+
+        self.assertTrue(all(result is None for result in results))
+
 
 class FacadeBoundaryTest(unittest.TestCase):
     def test_modelsはprovider非依存facadeのまま新規Playerを保存する(self):
@@ -289,12 +354,16 @@ class FacadeBoundaryTest(unittest.TestCase):
         for path in (
                 PROJECT_ROOT / 'models.py',
                 PROJECT_ROOT / 'build_cache.py',
+                PROJECT_ROOT / 'group_message_task_db.py',
+                PROJECT_ROOT / 'scenario.py',
+                PROJECT_ROOT / 'task_client.py',
                 PROJECT_ROOT / 'plugin/line/more.py',
                 PROJECT_ROOT / 'plugin/line/image_text.py'):
             with self.subTest(path=path):
                 source = path.read_text()
                 self.assertNotIn('from google.', source)
                 self.assertNotIn('import google.', source)
+                self.assertNotIn('settings.GCP_SETTINGS', source)
 
 
 if __name__ == '__main__':

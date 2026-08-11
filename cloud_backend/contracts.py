@@ -218,6 +218,10 @@ class TaskQueue(ABC):
     """即時・遅延タスクを登録する境界。"""
 
     @abstractmethod
+    def initialize(self, backend_settings):
+        raise NotImplementedError
+
+    @abstractmethod
     def create_task(self, queue_name, url, params, delay_seconds=None):
         raise NotImplementedError
 

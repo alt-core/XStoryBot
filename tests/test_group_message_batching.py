@@ -367,6 +367,14 @@ class GroupMessageTaskDBTest(unittest.TestCase):
         self.object_store = self.module._test_object_store
         self.group_members_db = self.module._test_group_members_db
 
+    def test_旧gcp_settings_keywordでも初期化できる(self):
+        self.db.initialize(
+            gcp_settings={'storage_bucket': 'test-bucket'},
+            options={},
+        )
+
+        self.assertEqual(self.db._batch_size, 2000)
+
     def test_flat設定と既定値を使う(self):
         self.db.initialize(
             {'storage_bucket': 'test-bucket'},

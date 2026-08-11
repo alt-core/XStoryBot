@@ -8,7 +8,7 @@ from unittest.mock import Mock, patch
 from urllib.parse import parse_qs
 import uuid
 
-from cloud_backend.contracts import CredentialData
+from cloud_backend.contracts import CredentialData, TaskQueueError
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -194,6 +194,35 @@ class TaskClientInitializationTest(unittest.TestCase):
         self.dependencies.tasks_v2.CloudTasksClient.assert_called_once_with(
             credentials=credentials)
 
+    def test_Googleの資格情報例外を共通例外へ変換する(self):
+        google_auth_error = type(
+            'DefaultCredentialsError',
+            (Exception,),
+            {'__module__': 'google.auth.exceptions'},
+        )
+        loader = (
+            self.dependencies.service_account.Credentials
+            .from_service_account_file)
+        loader.side_effect = google_auth_error('credentials unavailable')
+
+        with self.assertRaises(TaskQueueError):
+            self.queue.initialize(make_settings('/keys/example.json'))
+
+        self.assertFalse(self.queue._initialized)
+
+    def test_Googleのclient生成例外を共通例外へ変換する(self):
+        google_auth_error = type(
+            'DefaultCredentialsError',
+            (Exception,),
+            {'__module__': 'google.auth.exceptions'},
+        )
+        self.queue.initialize(make_settings())
+        self.dependencies.tasks_v2.CloudTasksClient.side_effect = (
+            google_auth_error('credentials unavailable'))
+
+        with self.assertRaises(TaskQueueError):
+            self.queue.get_client()
+
 
 class TaskCreationTest(unittest.TestCase):
     def setUp(self):
@@ -292,6 +321,19 @@ class TaskCreationTest(unittest.TestCase):
 
         self.assertIs(raised.exception, error)
 
+    def test_GoogleのTask登録例外を共通例外へ変換する(self):
+        google_error = type(
+            'ServiceUnavailable',
+            (Exception,),
+            {'__module__': 'google.api_core.exceptions'},
+        )
+        self.client.create_task.side_effect = google_error(
+            'task registration failed')
+
+        with self.assertRaises(TaskQueueError):
+            self.create_task(
+                'action-queue', '/api/action', {'value': '1'})
+
     def test_parameterとcredentialをlogへ出さない(self):
         loader = (
             self.dependencies.service_account.Credentials
@@ -331,9 +373,8 @@ class TaskClientFacadeTest(unittest.TestCase):
         module, _ = load_task_client_facade(Mock())
 
         with self.assertRaisesRegex(ValueError, 'not initialized'):
-            module.get_client()
-        with self.assertRaisesRegex(ValueError, 'not initialized'):
             module.create_task('action-queue', '/action', {})
+        self.assertFalse(hasattr(module, 'get_client'))
 
     def test_署名と戻り値をadapterへ委譲する(self):
         queue = Mock()

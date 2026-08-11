@@ -118,11 +118,9 @@ class GcpStateStore(StateStore):
             value = normalized.get(key)
             if isinstance(value, datetime.datetime):
                 if value.tzinfo is None:
-                    normalized[key] = value.replace(
-                        tzinfo=datetime.timezone.utc)
-                else:
-                    normalized[key] = datetime.datetime.fromtimestamp(
-                        value.timestamp(), tz=datetime.timezone.utc)
+                    value = value.replace(tzinfo=datetime.timezone.utc)
+                normalized[key] = datetime.datetime.fromtimestamp(
+                    value.timestamp(), tz=datetime.timezone.utc)
         return normalized
 
     def get_global_bot_variables(self, bot_name):
@@ -133,10 +131,12 @@ class GcpStateStore(StateStore):
         return self._call(operation)
 
     def save_global_bot_variables(self, bot_name, scenario_uri):
-        return self._call(lambda: self.client.collection(
-            'global_bot_variables').document(bot_name).set({
+        def operation():
+            self.client.collection(
+                'global_bot_variables').document(bot_name).set({
                 'scenario_uri': scenario_uri,
-            }))
+            })
+        return self._call(operation)
 
     def load_player_status(self, status_id):
         def operation():
@@ -175,8 +175,10 @@ class GcpStateStore(StateStore):
         return self._call(operation)
 
     def delete_player_status(self, status_id):
-        return self._call(lambda: self.client.collection(
-            'player_status').document(status_id).delete())
+        def operation():
+            self.client.collection(
+                'player_status').document(status_id).delete()
+        return self._call(operation)
 
     def _group_shards(self, group_id):
         return self.client.collection(
@@ -234,7 +236,7 @@ class GcpStateStore(StateStore):
             batch = self.client.batch()
             for document in shard_collection.stream():
                 batch.delete(document.reference)
-            return batch.commit()
+            batch.commit()
         return self._call(operation)
 
     def get_all_groups(self):
@@ -253,7 +255,7 @@ class GcpStateStore(StateStore):
         return document.to_dict() if document.exists else None
 
     def _put_stat(self, collection_name, key, data):
-        return self.client.collection(
+        self.client.collection(
             collection_name).document(key).set(dict(data))
 
     def get_image_file_stat(self, key):
@@ -348,11 +350,13 @@ class GcpStateStore(StateStore):
         return self._call(operation, conflict=True)
 
     def clear_next_label(self, status_id):
-        return self._call(lambda: self.client.collection(
-            'player_next_labels').document(status_id).set({
+        def operation():
+            self.client.collection(
+                'player_next_labels').document(status_id).set({
                 'next_label': None,
                 'trigger_message': None,
-            }))
+            })
+        return self._call(operation)
 
     def get_build_cache(self, key):
         def operation():
@@ -365,12 +369,15 @@ class GcpStateStore(StateStore):
         data = {'value': value}
         if expire_at is not None:
             data['expireAt'] = expire_at
-        return self._call(lambda: self.client.collection(
-            'build_cache').document(key).set(data))
+        def operation():
+            self.client.collection('build_cache').document(key).set(data)
+        return self._call(operation)
 
     def delete_build_cache(self, key):
-        return self._call(lambda: self.client.collection(
-            'build_cache').document(key).delete())
+        def operation():
+            self.client.collection(
+                'build_cache').document(key).delete()
+        return self._call(operation)
 
     def clear_build_cache(self):
         def operation():
@@ -385,8 +392,10 @@ class GcpStateStore(StateStore):
             'created_at', self._firestore.SERVER_TIMESTAMP)
         task_data.setdefault(
             'updated_at', self._firestore.SERVER_TIMESTAMP)
-        return self._call(lambda: self.client.collection(
-            'group_message_tasks').document(task_id).set(task_data))
+        def operation():
+            self.client.collection(
+                'group_message_tasks').document(task_id).set(task_data)
+        return self._call(operation)
 
     def get_group_message_task(self, task_id):
         def operation():
@@ -409,7 +418,9 @@ class GcpStateStore(StateStore):
                     transaction=current_transaction)
                 if not document.exists:
                     return False
-                update_data = dict(update_builder(document.to_dict()))
+                current_data = self._normalize_task_datetimes(
+                    document.to_dict())
+                update_data = dict(update_builder(current_data))
                 update_data.setdefault(
                     'updated_at', self._firestore.SERVER_TIMESTAMP)
                 current_transaction.update(document_ref, update_data)

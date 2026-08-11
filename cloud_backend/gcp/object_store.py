@@ -26,13 +26,16 @@ class GcpObjectStore(ObjectStore):
 
         self._bucket_name = gcp_settings['storage_bucket']
         if client is None:
-            credentials = service_account.Credentials.from_service_account_file(
-                gcp_settings['credentials_path']
-            )
-            client = storage.Client(
-                project=gcp_settings['project_id'],
-                credentials=credentials,
-            )
+            try:
+                credentials = (
+                    service_account.Credentials.from_service_account_file(
+                        gcp_settings['credentials_path']))
+                client = storage.Client(
+                    project=gcp_settings['project_id'],
+                    credentials=credentials,
+                )
+            except Exception as error:
+                self._raise_store_error(error)
         self._client = client
         self._private_client_factory = (
             private_client_factory or storage.Client)
@@ -41,7 +44,11 @@ class GcpObjectStore(ObjectStore):
     def _raise_store_error(error):
         if isinstance(error, exceptions.NotFound):
             raise ObjectNotFoundError(str(error)) from error
-        raise ObjectStoreError(str(error)) from error
+        if (
+                isinstance(error, exceptions.GoogleCloudError)
+                or type(error).__module__.startswith('google.')):
+            raise ObjectStoreError(str(error)) from error
+        raise error
 
     def _bucket(self):
         return self._client.bucket(self._bucket_name)
@@ -63,7 +70,7 @@ class GcpObjectStore(ObjectStore):
             # GCP版の既存シナリオ参照との互換性を維持する。
             blob.make_public()
             return f'https://storage.googleapis.com/{bucket.name}/{key}'
-        except exceptions.GoogleCloudError as error:
+        except Exception as error:
             self._raise_store_error(error)
 
     def load_scenario(self, reference):
@@ -84,7 +91,7 @@ class GcpObjectStore(ObjectStore):
             bucket = self._client.bucket(bucket_name)
             blob = bucket.blob(key)
             return blob.download_as_bytes()
-        except exceptions.GoogleCloudError as error:
+        except Exception as error:
             self._raise_store_error(error)
 
     def store_public(self, key, data, content_type):
@@ -93,7 +100,7 @@ class GcpObjectStore(ObjectStore):
             blob.upload_from_string(data, content_type=content_type)
             blob.make_public()
             return self.public_url(key)
-        except exceptions.GoogleCloudError as error:
+        except Exception as error:
             self._raise_store_error(error)
 
     def public_url(self, key):
@@ -107,11 +114,11 @@ class GcpObjectStore(ObjectStore):
             else:
                 blob.upload_from_string(data, content_type=content_type)
             return f'gs://{self._bucket_name}/{key}'
-        except exceptions.GoogleCloudError as error:
+        except Exception as error:
             self._raise_store_error(error)
 
     def load_private(self, key):
         try:
             return self._private_bucket().blob(key).download_as_bytes()
-        except exceptions.GoogleCloudError as error:
+        except Exception as error:
             self._raise_store_error(error)

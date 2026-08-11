@@ -80,6 +80,22 @@ class GcpObjectStoreTest(unittest.TestCase):
             'gs://trusted-bucket/group_tasks/task/members.json',
         )
 
+    def test_明示credentialのGoogle認証例外を共通例外へ変換する(self):
+        google_auth_error = type(
+            'DefaultCredentialsError',
+            (Exception,),
+            {'__module__': 'google.auth.exceptions'},
+        )
+        with (
+            patch.object(
+                object_store_module.service_account.Credentials,
+                'from_service_account_file',
+                side_effect=google_auth_error('credentials unavailable'),
+            ),
+            self.assertRaises(ObjectStoreError),
+        ):
+            GcpObjectStore(GCP_SETTINGS)
+
     def test_provider内ではScenarioとgroupが同じObjectStoreを共有する(self):
         object_store = Mock()
         original = gcp_backend._object_store
@@ -250,6 +266,37 @@ class GcpObjectStoreTest(unittest.TestCase):
         blob.download_as_bytes.side_effect = exceptions.GoogleCloudError('failed')
         with self.assertRaises(ObjectStoreError):
             self.store.load_private('group_tasks/task/members.json')
+
+    def test_ADCのGoogle認証例外を共通例外へ変換する(self):
+        google_auth_error = type(
+            'DefaultCredentialsError',
+            (Exception,),
+            {'__module__': 'google.auth.exceptions'},
+        )
+        private_client_factory = Mock(
+            side_effect=google_auth_error('credentials unavailable'))
+        store = GcpObjectStore(
+            GCP_SETTINGS,
+            client=self.public_client,
+            private_client_factory=private_client_factory,
+        )
+
+        with self.assertRaises(ObjectStoreError):
+            store.load_private('group_tasks/task/members.json')
+
+    def test_アプリケーション例外は型を変えない(self):
+        error = RuntimeError('application error')
+        private_client_factory = Mock(side_effect=error)
+        store = GcpObjectStore(
+            GCP_SETTINGS,
+            client=self.public_client,
+            private_client_factory=private_client_factory,
+        )
+
+        with self.assertRaises(RuntimeError) as raised:
+            store.load_private('group_tasks/task/members.json')
+
+        self.assertIs(raised.exception, error)
 
     def test_upload失敗時はmake_publicしない(self):
         blob = Mock()

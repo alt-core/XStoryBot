@@ -31,7 +31,7 @@ class GroupMessageTaskDB:
     _default_max_rate = 500  # デフォルト値
 
     @staticmethod
-    def initialize(backend_settings, options):
+    def initialize(gcp_settings, options):
         GroupMessageTaskDB._options = options
         GroupMessageTaskDB._state_store = get_state_store()
         GroupMessageTaskDB._object_store = create_object_store()
