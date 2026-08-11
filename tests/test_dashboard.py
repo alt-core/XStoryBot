@@ -74,6 +74,9 @@ def load_dashboard(initialize_side_effect=None):
             'builder': {'base_url': 'http://builder.example.test'},
         },
     }
+    settings.AUTH_SETTINGS = {
+        'firebase_credentials_path': '/keys/firebase.json',
+    }
     settings.SERVICE_SETTINGS = settings.GCP_SETTINGS['services']
 
     auth_middleware = types.ModuleType('auth_middleware')

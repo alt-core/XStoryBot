@@ -1,26 +1,44 @@
 import re
 import time
+import json
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 import logging
 
+from cloud_backend import create_credential_source
 import hub
 import utility
 import settings
 from utility import deep_merge, to_hankaku
 
 _google_services = {}
+_credential_source = None
 
 SCOPES = ['https://www.googleapis.com/auth/spreadsheets.readonly']
+
+def _get_credential_source():
+    global _credential_source
+    if _credential_source is None:
+        _credential_source = create_credential_source()
+    return _credential_source
 
 def _get_google_service(key_file_name):
     if key_file_name not in _google_services:
         # 認証情報の作成
-        credentials = service_account.Credentials.from_service_account_file(
-            key_file_name,
-            scopes=SCOPES
-        )
+        credential_data = (
+            _get_credential_source().get_google_service_account(
+                key_file_name))
+        if credential_data.inline_json is not None:
+            credentials = (
+                service_account.Credentials.from_service_account_info(
+                    json.loads(credential_data.inline_json),
+                    scopes=SCOPES))
+        else:
+            credentials = (
+                service_account.Credentials.from_service_account_file(
+                    credential_data.file_path,
+                    scopes=SCOPES))
         _google_services[key_file_name] = build('sheets', 'v4', credentials=credentials)
 
     return _google_services[key_file_name]

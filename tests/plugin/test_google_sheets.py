@@ -26,6 +26,7 @@ def deep_merge(left, right):
 def load_google_sheets_module():
     """Google APIを呼ばずに対象モジュールを読み込む。"""
     credential_calls = []
+    credential_info_calls = []
     build_calls = []
 
     class Credentials:
@@ -33,6 +34,12 @@ def load_google_sheets_module():
         def from_service_account_file(cls, key_file_name, scopes):
             credential = object()
             credential_calls.append((key_file_name, scopes, credential))
+            return credential
+
+        @classmethod
+        def from_service_account_info(cls, info, scopes):
+            credential = object()
+            credential_info_calls.append((info, scopes, credential))
             return credential
 
     def build(*args, **kwargs):
@@ -60,11 +67,22 @@ def load_google_sheets_module():
     utility.merge_params = lambda base, extra: {**base, **extra}
     settings = types.ModuleType('settings')
     settings.DEPLOY_ENV = 'test'
+    credential_source = mock.Mock()
+    credential_source.get_google_service_account.side_effect = (
+        lambda reference: types.SimpleNamespace(
+            file_path=reference,
+            inline_json=None,
+            use_default=False,
+        ))
+    cloud_backend = types.ModuleType('cloud_backend')
+    cloud_backend.create_credential_source = mock.Mock(
+        return_value=credential_source)
 
     module_name = 'tests_target_google_sheets'
     spec = importlib.util.spec_from_file_location(module_name, TARGET)
     module = importlib.util.module_from_spec(spec)
     replacements = {
+        'cloud_backend': cloud_backend,
         'google': google,
         'google.oauth2': google_oauth2,
         'google.oauth2.service_account': service_account,
@@ -78,7 +96,13 @@ def load_google_sheets_module():
     }
     with mock.patch.dict(sys.modules, replacements):
         spec.loader.exec_module(module)
-    return module, credential_calls, build_calls
+    return (
+        module,
+        credential_calls,
+        credential_info_calls,
+        build_calls,
+        credential_source,
+    )
 
 
 class FakeRequest:
@@ -127,7 +151,13 @@ class FakeService:
 
 class GoogleSheetsPluginTest(unittest.TestCase):
     def setUp(self):
-        self.module, self.credential_calls, self.build_calls = load_google_sheets_module()
+        (
+            self.module,
+            self.credential_calls,
+            self.credential_info_calls,
+            self.build_calls,
+            self.credential_source,
+        ) = load_google_sheets_module()
 
     def test_service_uses_configured_key_file_and_is_cached(self):
         first = self.module._get_google_service('/keys/sheets.json')
@@ -143,6 +173,26 @@ class GoogleSheetsPluginTest(unittest.TestCase):
         self.assertEqual(args, ('sheets', 'v4'))
         self.assertIs(kwargs['credentials'], credential)
         self.assertIs(first, built_service)
+        self.credential_source.get_google_service_account.assert_called_once_with(
+            '/keys/sheets.json')
+
+    def test_inline_JSONから資格情報を生成する(self):
+        self.credential_source.get_google_service_account.return_value = (
+            types.SimpleNamespace(
+                file_path=None,
+                inline_json='{"project_id":"test-project"}',
+                use_default=False,
+            ))
+        self.credential_source.get_google_service_account.side_effect = None
+
+        service = self.module._get_google_service('/parameter/sheets-key')
+
+        self.assertEqual(len(self.credential_info_calls), 1)
+        info, scopes, credential = self.credential_info_calls[0]
+        self.assertEqual({'project_id': 'test-project'}, info)
+        self.assertEqual(self.module.SCOPES, scopes)
+        self.assertIs(self.build_calls[0][1]['credentials'], credential)
+        self.assertIs(service, self.build_calls[0][2])
 
     def test_batch_get_preserves_target_order_and_formula_text(self):
         service = FakeService(batch_results=[{

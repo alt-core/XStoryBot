@@ -7,6 +7,7 @@ from datetime import datetime
 
 import settings
 import auth_middleware
+from cloud_backend import create_credential_source
 import main
 import task_client
 from models import db
@@ -20,21 +21,14 @@ app = Bottle()
 
 
 auth_middleware.initialize()
+_credential_source = create_credential_source()
 
 
 def abort_json(code, msg):
     abort(code, utility.make_error_json(code, msg))
 
 def _firebase_config_json():
-    firebase_settings = settings.GCP_SETTINGS['firebase']
-    config = {
-        'apiKey': firebase_settings['api_key'],
-        'authDomain': firebase_settings['auth_domain'],
-        'projectId': settings.GCP_SETTINGS['project_id'],
-        'storageBucket': firebase_settings['storage_bucket'],
-        'messagingSenderId': firebase_settings['messaging_sender_id'],
-        'appId': firebase_settings['app_id'],
-    }
+    config = _credential_source.get_admin_auth_client_config()
     return json.dumps(config, ensure_ascii=False).replace('<', '\\u003c')
 
 

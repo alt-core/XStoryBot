@@ -1,10 +1,12 @@
 import logging
+import json
 from functools import wraps
 
 import firebase_admin
 from bottle import HTTPError, request
 from firebase_admin import auth, credentials
 
+from cloud_backend import create_credential_source
 import settings
 
 
@@ -16,7 +18,15 @@ _app = None
 def initialize():
     global _app
     if _app is None:
-        cred = credentials.Certificate(settings.AUTH_SETTINGS['firebase_credentials_path'])
+        credential_data = (
+            create_credential_source().get_admin_auth_credential())
+        if credential_data.use_default:
+            cred = credentials.ApplicationDefault()
+        elif credential_data.inline_json is not None:
+            cred = credentials.Certificate(
+                json.loads(credential_data.inline_json))
+        else:
+            cred = credentials.Certificate(credential_data.file_path)
         _app = firebase_admin.initialize_app(cred)
 
 

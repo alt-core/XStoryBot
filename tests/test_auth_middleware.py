@@ -36,14 +36,26 @@ def load_auth_middleware():
     firebase_auth.ExpiredIdTokenError = ExpiredIdTokenError
     firebase_auth.RevokedIdTokenError = RevokedIdTokenError
     firebase_credentials.Certificate = Mock(return_value=object())
+    firebase_credentials.ApplicationDefault = Mock(return_value=object())
     firebase_admin.auth = firebase_auth
     firebase_admin.credentials = firebase_credentials
     settings.AUTH_SETTINGS = {
         'firebase_credentials_path': '/tmp/test-firebase-key.json',
         'allowed_emails': ['admin@example.com'],
     }
+    credential_source = Mock()
+    credential_source.get_admin_auth_credential.return_value = (
+        types.SimpleNamespace(
+            file_path='/tmp/test-firebase-key.json',
+            inline_json=None,
+            use_default=False,
+        ))
+    cloud_backend = types.ModuleType('cloud_backend')
+    cloud_backend.create_credential_source = Mock(
+        return_value=credential_source)
 
     replacements = {
+        'cloud_backend': cloud_backend,
         'firebase_admin': firebase_admin,
         'firebase_admin.auth': firebase_auth,
         'firebase_admin.credentials': firebase_credentials,
@@ -70,13 +82,21 @@ def load_auth_middleware():
         else:
             sys.modules[module_name] = previous_module
 
-    return module, firebase_admin, firebase_auth, firebase_credentials, settings
+    return (
+        module,
+        firebase_admin,
+        firebase_auth,
+        firebase_credentials,
+        settings,
+        credential_source,
+    )
 
 
 class AuthMiddlewareTest(unittest.TestCase):
     def setUp(self):
         (self.module, self.firebase_admin, self.firebase_auth,
-         self.firebase_credentials, self.settings) = load_auth_middleware()
+         self.firebase_credentials, self.settings,
+         self.credential_source) = load_auth_middleware()
         self.request = types.SimpleNamespace(headers={})
         self.module.request = self.request
 
@@ -97,6 +117,7 @@ class AuthMiddlewareTest(unittest.TestCase):
 
         self.firebase_credentials.Certificate.assert_called_once_with(
             '/tmp/test-firebase-key.json')
+        self.credential_source.get_admin_auth_credential.assert_called_once_with()
         self.firebase_admin.initialize_app.assert_called_once_with(
             self.firebase_credentials.Certificate.return_value)
         self.assertIs(self.module._app,
@@ -108,6 +129,21 @@ class AuthMiddlewareTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'invalid key'):
             self.module.initialize()
         self.firebase_admin.initialize_app.assert_not_called()
+
+    def test_inline_JSONをFirebase証明書へ渡す(self):
+        self.credential_source.get_admin_auth_credential.return_value = (
+            types.SimpleNamespace(
+                file_path=None,
+                inline_json='{"project_id":"test-project"}',
+                use_default=False,
+            ))
+
+        self.module.initialize()
+
+        self.firebase_credentials.Certificate.assert_called_once_with(
+            {'project_id': 'test-project'})
+        self.firebase_admin.initialize_app.assert_called_once_with(
+            self.firebase_credentials.Certificate.return_value)
 
     def test_empty_allowlist_fails_when_decorator_is_applied(self):
         self.settings.AUTH_SETTINGS['allowed_emails'] = []

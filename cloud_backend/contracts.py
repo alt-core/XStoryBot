@@ -230,5 +230,9 @@ class CredentialSource(ABC):
         raise NotImplementedError
 
     @abstractmethod
+    def get_admin_auth_client_config(self):
+        raise NotImplementedError
+
+    @abstractmethod
     def get_google_service_account(self, reference=None, allow_default=False):
         raise NotImplementedError
