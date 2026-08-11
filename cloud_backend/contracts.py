@@ -207,6 +207,7 @@ class ObjectStore(ABC):
 
     @abstractmethod
     def store_private(self, key, data, content_type=None):
+        """保存先を表すopaqueな文字列を返す。呼出し側は形式を解析しない。"""
         raise NotImplementedError
 
     @abstractmethod

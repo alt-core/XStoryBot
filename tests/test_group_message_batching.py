@@ -67,8 +67,7 @@ def load_group_message_task_db():
     """cloud境界とmodelsをスタブ化し、DB層の純粋な処理を読み込む。"""
     state_store = Mock()
     object_store = Mock()
-    object_store.store_private.return_value = (
-        'gs://test-bucket/group_tasks/task/members.json')
+    object_store.store_private.return_value = 'opaque-object-reference'
 
     models_module = types.ModuleType('models')
     models_module.GroupMembersDB = Mock()
@@ -488,7 +487,7 @@ class GroupMessageTaskDBTest(unittest.TestCase):
             patch.object(
                 self.db,
                 '_store_member_list',
-                return_value='gs://test-bucket/retry/members.json',
+                return_value='opaque-retry-reference',
             ) as store_members,
         ):
             retry_task_id = self.db.retry_failed_members(
@@ -512,12 +511,12 @@ class GroupMessageTaskDBTest(unittest.TestCase):
         self.group_members_db.get_members.return_value = [
             'mock-line:user-1', 'mock-line:user-2']
         self.object_store.store_private.return_value = (
-            'gs://test-bucket/group_tasks/task/members.json')
+            'opaque-member-list-reference')
         calls = []
         self.object_store.store_private.side_effect = (
             lambda *args, **kwargs: (
                 calls.append(('object', args, kwargs)) or
-                'gs://test-bucket/group_tasks/task/members.json'))
+                'opaque-member-list-reference'))
         self.state_store.create_group_message_task.side_effect = (
             lambda *args, **kwargs: calls.append(('state', args, kwargs)))
 
@@ -545,7 +544,7 @@ class GroupMessageTaskDBTest(unittest.TestCase):
         self.assertEqual(task_data['total_members'], 2)
         self.assertEqual(
             task_data['member_list_url'],
-            'gs://test-bucket/group_tasks/task/members.json')
+            'opaque-member-list-reference')
 
     def test_空groupはObjectStoreとStateStoreを呼ばない(self):
         self.group_members_db.get_members.return_value = []
