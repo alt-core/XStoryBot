@@ -294,6 +294,43 @@ class WebApiTest(unittest.TestCase):
         self.assertEqual(sleep.call_args_list,
                          [call(0.1), call(0.1), call(0.1)])
 
+    def test_group_skips_unknown_interface_at_edges_and_nested_group(self):
+        self.settings.OPTIONS = {'group_interval': 0}
+
+        for members in (
+            [FakeUser('unknown', 'skip'), FakeUser('plaintext', 'first')],
+            [FakeUser('plaintext', 'first'), FakeUser('unknown', 'skip')],
+        ):
+            with self.subTest(members=[str(member) for member in members]):
+                self.users.get_group_members.return_value = members
+                result = []
+                self.module._do_action_iter(
+                    result, self.bot, FakeUser('group', 'group-1'),
+                    'hello', {}
+                )
+                self.assertEqual(''.join(result), 'first\n')
+
+        def get_group_members(group_id):
+            if group_id == 'group-1':
+                return [
+                    FakeUser('plaintext', 'first'),
+                    FakeUser('group', 'nested'),
+                    FakeUser('plaintext', 'second'),
+                ]
+            if group_id == 'nested':
+                return [
+                    FakeUser('unknown', 'skip'),
+                    FakeUser('plaintext', 'nested-member'),
+                ]
+            return []
+
+        self.users.get_group_members.side_effect = get_group_members
+        result = []
+        self.module._do_action_iter(
+            result, self.bot, FakeUser('group', 'group-1'), 'hello', {}
+        )
+        self.assertEqual(''.join(result), 'first\nnested-member\nsecond\n')
+
     def test_direct_unknown_interface_returns_not_found(self):
         response = self.client.post(
             '/api/v1/bots/bot/action',
