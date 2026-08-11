@@ -7,15 +7,14 @@ import pickle
 import random
 import requests
 import json
-from google.cloud import storage
-from google.oauth2 import service_account
 
-import settings
 import utility
 import convert_image
 from models import ImageFileStatDB, MediaFileStatDB
 import hub
 import commands
+from cloud_backend import create_object_store
+from cloud_backend.contracts import InvalidObjectReferenceError
 from condition_expr import ConditionExpression
 from expression import Expression
 import expression
@@ -44,14 +43,8 @@ CONDITION_OPTION_REGEXP_LOWER_CASE = 2
 
 CALL_ARGS_MAX = 15 # @call で渡せる引数の最大数
 
-# Cloud Storageクライアントの初期化
-credentials = service_account.Credentials.from_service_account_file(
-    settings.GCP_SETTINGS['credentials_path']
-)
-storage_client = storage.Client(
-    project=settings.GCP_SETTINGS['project_id'],
-    credentials=credentials
-)
+# ObjectStoreの初期化は、従来と同じくscenarioのimport時に行う。
+object_store = create_object_store()
 
 
 class ScenarioSyntaxError(Exception):
@@ -293,41 +286,22 @@ class Scenario:
 
     @classmethod
     def load_from_uri(cls, uri):
-        m = re.match(r'^https://storage.googleapis.com/([^/]+)/(.+)$', uri)
-        if m:
-            bucket_name = m.group(1)
-            blob_name = m.group(2)
-            if bucket_name != settings.GCP_SETTINGS['storage_bucket']:
-                raise ScenarioSyntaxError('設定済みのCloud Storage bucketではありません')
-            try:
-                logging.info(f'load scenario file: {uri}')
-                bucket = storage_client.bucket(bucket_name)
-                blob = bucket.blob(blob_name)
-                data = blob.download_as_bytes()
-                self = pickle.loads(data)
-                return self
-            except Exception as e:
-                raise ScenarioSyntaxError(f'シナリオのロードに失敗しました: {uri}, {str(e)}')
-        else:
-            raise ScenarioSyntaxError('CloudStorage のファイルではありません')
+        try:
+            data = object_store.load_scenario(uri)
+            self = pickle.loads(data)
+            return self
+        except InvalidObjectReferenceError as e:
+            raise ScenarioSyntaxError(str(e))
+        except Exception as e:
+            raise ScenarioSyntaxError(f'シナリオのロードに失敗しました: {uri}, {str(e)}')
 
     def save_to_storage(self):
         try:
             scenario_data = pickle.dumps(self)
-            bucket = storage_client.bucket(settings.GCP_SETTINGS['storage_bucket'])
             file_digest = hashlib.md5(scenario_data).hexdigest()
             blob_name = f'scenario/{file_digest}'
             logging.info(f'save scenario file: {blob_name}')
-
-            blob = bucket.blob(blob_name)
-            blob.upload_from_string(
-                scenario_data,
-                content_type='application/octet-stream'
-            )
-            blob.make_public()
-
-            uri = f'https://storage.googleapis.com/{bucket.name}/{blob_name}'
-            return uri
+            return object_store.store_scenario(blob_name, scenario_data)
         except Exception as e:
             raise ScenarioSyntaxError(f'シナリオの保存に失敗しました: {str(e)}')
 
@@ -338,7 +312,6 @@ class ScenarioBuilder:
         self.first_top_scene = None
         self.image_file_read_cache = {}
         self.image_file_write_cache = {}
-        self.bucket_name = settings.GCP_SETTINGS['storage_bucket']
         self.version = version
         expression.set_version(self.version)
 
@@ -1000,20 +973,20 @@ class ScenarioBuilder:
 
     def _make_imagemap_filepath(self, file_digest):
         file_format, digest = file_digest.split('_', 1)
-        filepath = f'/{self.bucket_name}/imagemap/{digest}.{convert_image.get_ext_from_format(file_format)}'
+        filepath = f'imagemap/{digest}.{convert_image.get_ext_from_format(file_format)}'
         return filepath
 
     def _make_image_filepath(self, file_digest, resize_to):
         file_format, digest = file_digest.split('_', 1)
-        filepath = f'/{self.bucket_name}/image/{digest}_{resize_to}.{convert_image.get_ext_from_format(file_format)}'
+        filepath = f'image/{digest}_{resize_to}.{convert_image.get_ext_from_format(file_format)}'
         return filepath
 
     def _make_video_filepath(self, file_digest):
-        filepath = f'/{self.bucket_name}/video/{file_digest}.mp4'
+        filepath = f'video/{file_digest}.mp4'
         return filepath
 
     def _make_url_from_filepath(self, filepath):
-        return f'https://storage.googleapis.com{filepath}'
+        return object_store.public_url(filepath)
 
     def build_image_for_imagemap_command(self, image_url):
         return self.build_image(image_url, 'imagemap')
@@ -1072,27 +1045,16 @@ class ScenarioBuilder:
 
         try:
             logging.info(f'save video file: {filepath}')
-            # Cloud Storage のパスから bucket_name と blob_name を抽出
-            m = re.match(r'^/([^/]+)/(.+)$', filepath)
-            if not m:
-                raise ValueError(f'Invalid filepath format: {filepath}')
-
-            bucket_name = m.group(1)
-            blob_name = m.group(2)
-
-            bucket = storage_client.bucket(bucket_name)
-            blob = bucket.blob(blob_name)
-            blob.upload_from_string(
+            result = object_store.store_public(
+                filepath,
                 data,
-                content_type='video/mp4'
+                content_type='video/mp4',
             )
-            blob.make_public()
 
         except Exception as e:
             logging.error(f'ファイルの書き込みに失敗しました: {str(e)}')
             return None
 
-        result = self._make_url_from_filepath(filepath)
         self.image_file_write_cache[filepath] = result
         return result
 
@@ -1183,27 +1145,17 @@ class ScenarioBuilder:
 
         try:
             logging.info(f'save image file: {filepath}')
-            # Cloud Storage のパスから bucket_name と blob_name を抽出
-            m = re.match(r'^/([^/]+)/(.+)$', filepath)
-            if not m:
-                raise ValueError(f'Invalid filepath format: {filepath}')
-
-            bucket_name = m.group(1)
-            blob_name = m.group(2)
-
-            bucket = storage_client.bucket(bucket_name)
-            blob = bucket.blob(blob_name)
-            blob.upload_from_string(
+            image_url = object_store.store_public(
+                filepath,
                 image_data,
-                content_type=convert_image.get_content_type_from_format(image_format)
+                content_type=convert_image.get_content_type_from_format(image_format),
             )
-            blob.make_public()
 
         except Exception as e:
             logging.error(f'ファイルの書き込みに失敗しました: {str(e)}')
             return None, None
 
-        result = (self._make_url_from_filepath(filepath), size)
+        result = (image_url, size)
         self.image_file_write_cache[filepath] = result
         return result
 
