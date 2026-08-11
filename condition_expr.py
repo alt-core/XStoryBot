@@ -2,6 +2,7 @@
 import re
 import string
 from unicodedata import normalize
+import logging
 
 from arpeggio import ParserPython, PTNodeVisitor, visit_parse_tree, Optional, ZeroOrMore, OneOrMore, EOF
 from arpeggio import RegExMatch as _
@@ -9,27 +10,27 @@ from arpeggio import RegExMatch as _
 from syntax_tree import SyntaxNode, SyntaxTreeEvaluator
 
 
-
 DEBUG = False
 
-def token_and():  return _(ur"[&＆]")
-def token_or():  return _(ur"[|｜]")
-def token_lparen():  return _(ur"[(（]")
-def token_rparen():  return _(ur"[])）]")
-def regex_match(): return _(ur'/(\\/|[^/])*/[iLN]*')
-def string_match(): return _(ur'(\\.|[^&＆\|｜\)）])*')
+def token_and():  return _(r"[&＆]")
+def token_or():  return _(r"[|｜]")
+def token_lparen():  return _(r"[(（]")
+def token_rparen():  return _(r"[])）]")
+def regex_match(): return _(r'/(\\/|[^/])*/[iLNX]*')
+def string_match(): return _(r'(\\.|[^&＆\|｜\)）])*')
 def sub_expression(): return token_lparen, expression, token_rparen
 def factor():     return [sub_expression, regex_match, string_match]
 def term():       return OneOrMore(factor, sep=token_and)
 def expression(): return ZeroOrMore(term, sep=token_or)
 def top():        return expression, EOF
 
-regex_match_regex = re.compile(ur'/((?:(?:\/)|[^/])*)/([iLN]*)?')
-unescape_sub_regex = re.compile(ur'\\(.)')
+regex_match_regex = re.compile(r'/((?:(?:\/)|[^/])*)/([iLNX]*)?')
+unescape_sub_regex = re.compile(r'\\(.)')
 OPTION_REGEXP_NORMALIZE = 1
 OPTION_REGEXP_LOWER_CASE = 2
+OPTION_REGEXP_EXACT_MATCH = 3
 
-expression_parser = ParserPython(top, ws=u'\t\n\r 　', debug=DEBUG)
+expression_parser = ParserPython(top, ws='\t\n\r 　', debug=DEBUG)
 
 class ExpressionConverter(PTNodeVisitor):
     def node(self, node, children):
@@ -38,9 +39,9 @@ class ExpressionConverter(PTNodeVisitor):
         value = node.value if is_terminal else children_list
         if DEBUG:
             if is_terminal:
-                print(u'Leaf<{}>({})'.format(node.rule_name, value))
+                print('Leaf<{}>({})'.format(node.rule_name, value))
             else:
-                print(u'Node<{}>{}'.format(node.rule_name, value))
+                print('Node<{}>{}'.format(node.rule_name, value))
         return SyntaxNode(node.rule_name, is_terminal, value)
 
     def suppress(self, node, children):
@@ -72,14 +73,16 @@ class ExpressionConverter(PTNodeVisitor):
         m = regex_match_regex.match(node.value)
         option_str = m.group(2)
         regex_string = m.group(1)
-        regex_option = 0
+        regex_option = re.DOTALL
         condition_option = []
-        if option_str and u'i' in option_str:
-            regex_option = re.IGNORECASE
-        if option_str and u'L' in option_str:
+        if option_str and 'i' in option_str:
+            regex_option |= re.IGNORECASE
+        if option_str and 'L' in option_str:
             condition_option.append(OPTION_REGEXP_LOWER_CASE)
-        if option_str and u'N' in option_str:
+        if option_str and 'N' in option_str:
             condition_option.append(OPTION_REGEXP_NORMALIZE)
+        if option_str and 'X' in option_str:
+            condition_option.append(OPTION_REGEXP_EXACT_MATCH)
         regex = re.compile(regex_string, regex_option)
         node.value = (regex, condition_option)
         return self.node(node, children)
@@ -94,18 +97,30 @@ class ConditionExpression(object):
         self = cls()
         expr = expression_parser.parse(s)
         self.expr = visit_parse_tree(expr, ExpressionConverter())
+        self._s = s
         return self
 
-    def eval(self, env, matches=[]):
-        return ExpressionEvaluator(env, matches).eval(self.expr)
+    # def eval(self, env, matches=[]):
+    #     try:
+    #         return ExpressionEvaluator(env, matches).eval(self.expr)
+    #     except Exception as e:
+    #         logging.error(f'Error in condition expression: {self._s}\n{e}')
+    #         return None
 
     def check(self, action):
         action_normalized = normalize('NFKC', action).lower()
-        result, matched = ConditionExpressionEvaluator(action, action_normalized).eval(self.expr)
+        try:
+            result, matched = ConditionExpressionEvaluator(action, action_normalized).eval(self.expr)
+        except Exception as e:
+            logging.error(f'Error in condition expression: {self._s}\n{e}')
+            return None
         if result:
             return matched
         else:
             return None
+
+    def __repr__(self):
+        return f'"{self._s}"'
 
 
 class ConditionExpressionEvaluator(SyntaxTreeEvaluator):
@@ -158,9 +173,15 @@ class ConditionExpressionEvaluator(SyntaxTreeEvaluator):
             target_string = normalize('NFKC', target_string)
         if OPTION_REGEXP_LOWER_CASE in options:
             target_string = target_string.lower()
-        m = regex.search(target_string)
-        if m:
-            return (True, (m.group(0),) + m.groups())
+        if OPTION_REGEXP_EXACT_MATCH in options:
+            m = regex.match(target_string)
+            if m and m.group(0) == target_string:
+                return (True, (m.group(0),) + m.groups())
+            else:
+                return (False, ('',))
         else:
-            return (False, ('',))
-
+            m = regex.search(target_string)
+            if m:
+                return (True, (m.group(0),) + m.groups())
+            else:
+                return (False, ('',))
