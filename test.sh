@@ -5,6 +5,10 @@ export XSBOT_DEPLOY_ENV=test
 
 python3 -m unittest \
     tests.test_settings_configuration \
+    tests.test_cloud_backend_factory \
+    tests.test_credential_source \
+    tests.test_state_store_boundary \
+    tests.test_gcp_object_store \
     tests.test_auth \
     tests.test_expression \
     tests.test_runtime_isolation \
