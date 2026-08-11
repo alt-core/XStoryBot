@@ -93,7 +93,7 @@ def api_build_async(bot_name):
 
     # DEPLOY_ENV が local の場合は task queue に投げず、直接リクエストを送る
     if settings.DEPLOY_ENV == 'local':
-        full_url = f"{settings.GCP_SETTINGS['services']['builder']['base_url']}{url}"
+        full_url = f"{settings.SERVICE_SETTINGS['builder']['base_url']}{url}"
         builder_response = requests.post(
             full_url,
             params=options,

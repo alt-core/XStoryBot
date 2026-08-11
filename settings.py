@@ -2,6 +2,7 @@
 
 import os
 
+from cloud_backend import configure as configure_cloud_backend
 from utility import deep_merge, load_settings_yaml
 
 
@@ -20,8 +21,14 @@ settings = load_settings()
 
 # 各種設定を直接参照
 GCP_SETTINGS = settings['gcp']
+CLOUD_SETTINGS = settings.get('cloud', {'provider': 'gcp'})
+SERVICE_SETTINGS = settings.get('services', GCP_SETTINGS.get('services', {}))
 AUTH_SETTINGS = settings['auth']
 OPTIONS = settings.get('options', {})
 PLUGINS = settings.get('plugins', {})
 BOTS = settings['bots']
 CONSTANTS = settings.get('constants', {})
+
+
+# 設定を読む時点で、このプロセスが使うクラウドを一度だけ確定する。
+configure_cloud_backend(CLOUD_SETTINGS)

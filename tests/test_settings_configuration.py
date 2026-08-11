@@ -55,6 +55,7 @@ class SettingsTemplateTest(unittest.TestCase):
         self.assertEqual(500, default['options']['group_max_rate'])
         self.assertTrue(default['plugins']['chatgpt']['log_conversation'])
         self.assertEqual('bot', default['bots']['bot']['state_namespace'])
+        self.assertEqual('gcp', default['cloud']['provider'])
 
     def test_template_uses_explicit_service_settings(self):
         default = self.load_template()['*']
@@ -132,6 +133,10 @@ class SettingsModuleTest(unittest.TestCase):
         self.assertEqual('My Bot (開発環境)', module.BOTS['bot']['name'])
         self.assertEqual(3, module.OPTIONS['scenario_version'])
         self.assertEqual('test-storage-bucket', module.GCP_SETTINGS['storage_bucket'])
+        self.assertEqual('gcp', module.CLOUD_SETTINGS['provider'])
+        self.assertEqual(
+            'https://app.example.invalid',
+            module.SERVICE_SETTINGS['app']['base_url'])
 
 
 class IgnoreConfigurationTest(unittest.TestCase):

@@ -26,7 +26,7 @@ def _get_bot_and_interface(bot_name):
 
 def _external_request_url():
     """Twilioへ登録した外部URLを、署名検証用に復元する。"""
-    base_url = settings.GCP_SETTINGS['services']['app']['base_url'].rstrip('/')
+    base_url = settings.SERVICE_SETTINGS['app']['base_url'].rstrip('/')
     raw_uri = request.environ.get('RAW_URI') or request.environ.get('REQUEST_URI')
     if raw_uri and raw_uri.startswith('/'):
         return f'{base_url}{raw_uri}'

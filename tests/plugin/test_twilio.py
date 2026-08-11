@@ -28,6 +28,7 @@ def load_twilio_webapi():
     settings.GCP_SETTINGS = {
         'services': {'app': {'base_url': APP_BASE_URL}},
     }
+    settings.SERVICE_SETTINGS = settings.GCP_SETTINGS['services']
 
     module_name = 'tests_target_twilio_webapi'
     spec = importlib.util.spec_from_file_location(
@@ -106,6 +107,7 @@ def load_twilio_default_commands():
     settings.GCP_SETTINGS = {
         'services': {'app': {'base_url': f'{APP_BASE_URL}/'}},
     }
+    settings.SERVICE_SETTINGS = settings.GCP_SETTINGS['services']
     hub = types.ModuleType('hub')
     hub.register_handler = mock.Mock()
     commands = types.ModuleType('commands')

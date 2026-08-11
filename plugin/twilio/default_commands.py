@@ -40,7 +40,7 @@ class TwilioDefaultCommandsPlugin_Runtime(object):
 
         elif msg == '@dial' or msg == '@電話':
             action_dial_content = options[0]
-            base_url = settings.GCP_SETTINGS['services']['app']['base_url'].rstrip('/')
+            base_url = settings.SERVICE_SETTINGS['app']['base_url'].rstrip('/')
             url_dial_content = (
                 f'{base_url}/twilio/dial_content/{interface.bot_name}/'
                 f'{quote(action_dial_content, safe="")}'

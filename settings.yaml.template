@@ -1,5 +1,9 @@
 # デフォルト設定（全環境共通）
 "*":
+  # クラウドバックエンド設定
+  cloud:
+    provider: gcp
+
   # 認証設定
   auth:
     allowed_emails:

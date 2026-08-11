@@ -74,6 +74,7 @@ def load_dashboard(initialize_side_effect=None):
             'builder': {'base_url': 'http://builder.example.test'},
         },
     }
+    settings.SERVICE_SETTINGS = settings.GCP_SETTINGS['services']
 
     auth_middleware = types.ModuleType('auth_middleware')
     auth_middleware.initialize = Mock(side_effect=initialize_side_effect)

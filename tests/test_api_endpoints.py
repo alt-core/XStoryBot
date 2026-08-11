@@ -440,6 +440,7 @@ class AppBuilderTest(unittest.TestCase):
                 'app': {'base_url': 'https://app.example.invalid'},
             },
         }
+        self.settings.SERVICE_SETTINGS = self.settings.GCP_SETTINGS['services']
         self.settings.DEPLOY_ENV = 'test'
         self.bot.build_scenario.return_value = True, None
 

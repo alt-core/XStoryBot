@@ -20,7 +20,9 @@ def abort_json(code, msg):
 
 def set_json_response_headers():
     response.set_header('Content-Type', 'text/plain; charset=utf-8')
-    response.set_header('Access-Control-Allow-Origin', settings.GCP_SETTINGS['services']['app']['base_url'])
+    response.set_header(
+        'Access-Control-Allow-Origin',
+        settings.SERVICE_SETTINGS['app']['base_url'])
     response.set_header('Access-Control-Allow-Headers', 'Authorization,Content-Type,X-API-Token')
     response.set_header('Access-Control-Allow-Methods', 'POST, GET, OPTIONS')
 
