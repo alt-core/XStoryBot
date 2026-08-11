@@ -1,14 +1,14 @@
 # coding: utf-8
 
 import logging
-import urllib
+from urllib.parse import quote
 
 import settings
 import hub
 import commands
 
-SMS_CMDS = (u'@sms', u'@SMS')
-DIAL_CMDS = (u'@dial', u'@電話')
+SMS_CMDS = ('@sms', '@SMS')
+DIAL_CMDS = ('@dial', '@電話')
 
 
 class TwilioDefaultCommandsPlugin_Builder(commands.Default_Builder):
@@ -38,10 +38,13 @@ class TwilioDefaultCommandsPlugin_Runtime(object):
                 body=message
             )
 
-        elif msg == u'@dial' or msg == u'@電話':
+        elif msg == '@dial' or msg == '@電話':
             action_dial_content = options[0]
-            url_dial_content = 'https://' + settings.SERVER_NAME + '/twilio/dial_content/' + interface.bot_name + \
-                               '/' + urllib.quote(action_dial_content.encode('utf-8'), '')
+            base_url = settings.GCP_SETTINGS['services']['app']['base_url'].rstrip('/')
+            url_dial_content = (
+                f'{base_url}/twilio/dial_content/{interface.bot_name}/'
+                f'{quote(action_dial_content, safe="")}'
+            )
             logging.info('TwiML url: ' + url_dial_content)
             if len(options) == 1:
                 twilio_client = interface.get_twilio_client()
@@ -54,8 +57,10 @@ class TwilioDefaultCommandsPlugin_Runtime(object):
             else:
                 # 通話の完了通知が必要
                 action_completed = options[1]
-                url_completed = 'https://' + settings.SERVER_NAME + '/twilio/dial_completed_callback/' + interface.bot_name + \
-                                '/' + urllib.quote(action_completed.encode('utf-8'), '')
+                url_completed = (
+                    f'{base_url}/twilio/dial_completed_callback/{interface.bot_name}/'
+                    f'{quote(action_completed, safe="")}'
+                )
                 twilio_client = interface.get_twilio_client()
                 twilio_client.calls.create(
                     to=context.from_tel,
