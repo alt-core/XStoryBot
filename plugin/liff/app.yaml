@@ -1,3 +1,0 @@
-handlers:
-- url: /liff/.*
-  script: plugin.liff.webapi.app
