@@ -11,6 +11,7 @@ from cloud_backend.contracts import (
 from cloud_backend import gcp as gcp_backend
 from cloud_backend.gcp import object_store as object_store_module
 from cloud_backend.gcp.object_store import GcpObjectStore
+from tests.cloud_backend.object_store_contract import ObjectStoreContractMixin
 
 
 GCP_SETTINGS = {
@@ -18,6 +19,57 @@ GCP_SETTINGS = {
     'project_id': 'test-project',
     'storage_bucket': 'trusted-bucket',
 }
+
+
+class _MemoryGcsBlob:
+    def __init__(self, objects, bucket_name, key):
+        self._objects = objects
+        self._identity = (bucket_name, key)
+
+    def upload_from_string(self, data, content_type=None):
+        del content_type
+        if isinstance(data, str):
+            data = data.encode('utf-8')
+        self._objects[self._identity] = bytes(data)
+
+    def download_as_bytes(self):
+        if self._identity not in self._objects:
+            raise exceptions.NotFound('missing')
+        return self._objects[self._identity]
+
+    def make_public(self):
+        pass
+
+
+class _MemoryGcsBucket:
+    def __init__(self, objects, name):
+        self._objects = objects
+        self.name = name
+
+    def blob(self, key):
+        return _MemoryGcsBlob(self._objects, self.name, key)
+
+
+class _MemoryGcsClient:
+    def __init__(self, objects):
+        self._objects = objects
+
+    def bucket(self, name):
+        return _MemoryGcsBucket(self._objects, name)
+
+
+class GcpObjectStoreContractTest(ObjectStoreContractMixin, unittest.TestCase):
+    def create_contract_store(self):
+        objects = {}
+        client = _MemoryGcsClient(objects)
+        return GcpObjectStore(
+            GCP_SETTINGS,
+            client=client,
+            private_client_factory=lambda: client,
+        )
+
+    def foreign_scenario_reference(self, key):
+        return f'https://storage.googleapis.com/foreign-bucket/{key}'
 
 
 class GcpObjectStoreTest(unittest.TestCase):

@@ -49,6 +49,19 @@
       builder:
         base_url: !env XSBOT_BUILDER_BASE_URL
 
+  # AWS設定
+  aws:
+    region: !env AWS_REGION
+    object_store:
+      private_bucket: !env XSBOT_AWS_PRIVATE_BUCKET
+      media_bucket: !env XSBOT_AWS_MEDIA_BUCKET
+      public_media_base_url: !env XSBOT_AWS_PUBLIC_MEDIA_BASE_URL
+    services:
+      app:
+        base_url: !env XSBOT_APP_BASE_URL
+      builder:
+        base_url: !env XSBOT_BUILDER_BASE_URL
+
   # オプション設定
   options:
     api_token: !env XSBOT_API_TOKEN

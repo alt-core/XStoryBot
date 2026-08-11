@@ -19,7 +19,10 @@ def load_settings():
 # 設定の読み込み
 settings = load_settings()
 
-CLOUD_SETTINGS = settings.get('cloud', {'provider': 'gcp'})
+CLOUD_SETTINGS = dict(settings.get('cloud', {'provider': 'gcp'}))
+_provider_from_environment = os.getenv('XSBOT_CLOUD_PROVIDER')
+if _provider_from_environment:
+    CLOUD_SETTINGS['provider'] = _provider_from_environment
 _cloud_provider = CLOUD_SETTINGS.get('provider', 'gcp')
 
 # GCP選択時は従来どおりgcp設定を必須とし、他provider選択時だけ省略を許す。

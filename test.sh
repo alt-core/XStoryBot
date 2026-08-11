@@ -9,6 +9,7 @@ python3 -m unittest \
     tests.test_credential_source \
     tests.test_state_store_boundary \
     tests.test_gcp_object_store \
+    tests.test_aws_object_store \
     tests.test_auth \
     tests.test_expression \
     tests.test_runtime_isolation \

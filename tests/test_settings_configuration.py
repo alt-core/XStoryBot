@@ -29,6 +29,11 @@ class SettingsTemplateTest(unittest.TestCase):
             'XSBOT_STORAGE_BUCKET': 'test-storage-bucket',
             'XSBOT_APP_BASE_URL': 'https://app.example.invalid',
             'XSBOT_BUILDER_BASE_URL': 'https://builder.example.invalid',
+            'AWS_REGION': 'test-region-1',
+            'XSBOT_AWS_PRIVATE_BUCKET': 'test-private-bucket',
+            'XSBOT_AWS_MEDIA_BUCKET': 'test-media-bucket',
+            'XSBOT_AWS_PUBLIC_MEDIA_BASE_URL': (
+                'https://distribution.example.invalid'),
             'LINE_CHANNEL_SECRET': 'value',
             'LINE_ACCESS_TOKEN': 'value',
             'SHEETS_ID': 'test-sheet-id',
@@ -70,6 +75,15 @@ class SettingsTemplateTest(unittest.TestCase):
         self.assertEqual(
             'https://builder.example.invalid',
             default['gcp']['services']['builder']['base_url'],
+        )
+        self.assertEqual('test-region-1', default['aws']['region'])
+        self.assertEqual(
+            'test-private-bucket',
+            default['aws']['object_store']['private_bucket'],
+        )
+        self.assertEqual(
+            'https://distribution.example.invalid',
+            default['aws']['object_store']['public_media_base_url'],
         )
         self.assertEqual(
             '/secrets/service-account.json',
@@ -147,7 +161,7 @@ class SettingsModuleTest(unittest.TestCase):
         cloud_backend.configure = Mock(return_value='aws')
         config = {
             '*': {
-                'cloud': {'provider': 'aws'},
+                'cloud': {'provider': 'gcp'},
                 'aws': {
                     'services': {
                         'app': {
@@ -170,9 +184,13 @@ class SettingsModuleTest(unittest.TestCase):
                 spec = importlib.util.spec_from_file_location(
                     module_name, module_path)
                 module = importlib.util.module_from_spec(spec)
-                with patch.dict(
+                with (
+                    patch.dict(os.environ, {'XSBOT_CLOUD_PROVIDER': 'aws'}),
+                    patch.dict(
                         sys.modules,
-                        {module_name: module, 'cloud_backend': cloud_backend}):
+                        {module_name: module, 'cloud_backend': cloud_backend},
+                    ),
+                ):
                     spec.loader.exec_module(module)
             finally:
                 os.chdir(previous_dir)
@@ -236,6 +254,7 @@ class DependencyConfigurationTest(unittest.TestCase):
         self.assertIn('requests==2.31.0', requirements)
         self.assertIn('Pillow~=12.3.0', requirements)
         self.assertIn('gunicorn~=23.0.0', requirements)
+        self.assertIn('boto3~=1.43.53', requirements)
         self.assertFalse(
             any(line.startswith('google-cloud-memcache') for line in requirements)
         )
