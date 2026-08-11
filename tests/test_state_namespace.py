@@ -83,6 +83,7 @@ def load_main_module():
     settings = types.ModuleType('settings')
     settings.AUTH_SETTINGS = {'api_token': 'value'}
     settings.GCP_SETTINGS = {'project_id': 'test-project'}
+    settings.BACKEND_SETTINGS = settings.GCP_SETTINGS
     settings.OPTIONS = {}
     settings.PLUGINS = {}
     settings.BOTS = {

@@ -134,6 +134,7 @@ class SettingsModuleTest(unittest.TestCase):
         self.assertEqual(3, module.OPTIONS['scenario_version'])
         self.assertEqual('test-storage-bucket', module.GCP_SETTINGS['storage_bucket'])
         self.assertEqual('gcp', module.CLOUD_SETTINGS['provider'])
+        self.assertIs(module.GCP_SETTINGS, module.BACKEND_SETTINGS)
         self.assertEqual(
             'https://app.example.invalid',
             module.SERVICE_SETTINGS['app']['base_url'])

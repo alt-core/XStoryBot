@@ -22,7 +22,9 @@ settings = load_settings()
 # 各種設定を直接参照
 GCP_SETTINGS = settings['gcp']
 CLOUD_SETTINGS = settings.get('cloud', {'provider': 'gcp'})
-SERVICE_SETTINGS = settings.get('services', GCP_SETTINGS.get('services', {}))
+BACKEND_SETTINGS = settings.get(CLOUD_SETTINGS.get('provider', 'gcp'), {})
+SERVICE_SETTINGS = settings.get(
+    'services', BACKEND_SETTINGS.get('services', {}))
 AUTH_SETTINGS = settings['auth']
 OPTIONS = settings.get('options', {})
 PLUGINS = settings.get('plugins', {})

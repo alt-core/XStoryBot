@@ -32,10 +32,10 @@ if DEPLOY_ENV != 'test' and DEPLOY_ENV != 'local':
 
     sys.excepthook = exception_handler
 
+import settings
 import auth
 import common_commands
 import plugin
-import settings
 import hub
 import commands
 import task_client
@@ -92,8 +92,8 @@ def initialize_bot_dict():
 
 
 def initialize():
-    task_client.initialize(settings.GCP_SETTINGS)
-    GroupMessageTaskDB.initialize(gcp_settings=settings.GCP_SETTINGS, options=settings.OPTIONS)
+    task_client.initialize(settings.BACKEND_SETTINGS)
+    GroupMessageTaskDB.initialize(settings.BACKEND_SETTINGS, settings.OPTIONS)
 
     auth.setup(settings.AUTH_SETTINGS)
     hub.clear()

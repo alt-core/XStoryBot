@@ -26,6 +26,7 @@ def load_main(deploy_env):
     settings = types.ModuleType('settings')
     settings.AUTH_SETTINGS = {}
     settings.GCP_SETTINGS = {}
+    settings.BACKEND_SETTINGS = settings.GCP_SETTINGS
     settings.OPTIONS = {}
     settings.PLUGINS = {}
     settings.BOTS = {}
