@@ -129,11 +129,15 @@ class GroupMessageTaskManager:
 
         group_id = task['group_id']
 
-        temp_members = users.get_group_members(group_id)
-        if temp_members is None:
-            return {'error': 'グループが見つかりません'}, 404
+        if task.get('is_retry'):
+            members = GroupMessageTaskDB.get_members_from_storage(task_id)
+        else:
+            temp_members = users.get_group_members(group_id)
+            if temp_members is None:
+                return {'error': 'グループが見つかりません'}, 404
 
-        members = users.get_group_members(task['group_id'])
+            members = users.get_group_members(task['group_id'])
+
         if not members:
             self._complete_empty_task(task_id, task)
             return {
@@ -149,12 +153,17 @@ class GroupMessageTaskManager:
         start_idx = batch_index * batch_size
         end_idx = min(start_idx + batch_size, total_count)
         current_batch_members = members[start_idx:end_idx]
-        member_ids = [member.serialize() for member in current_batch_members]
+        if task.get('is_retry'):
+            current_batch_member_ids = current_batch_members
+        else:
+            current_batch_member_ids = [
+                member.serialize() for member in current_batch_members
+            ]
 
         batch_task_id = f"{task_id}_batch_{batch_index}"
 
         success_count, error_count, successful_members, error_logs = self._process_batch_members(
-            batch_task_id, member_ids, task, max_workers, max_rate
+            batch_task_id, current_batch_member_ids, task, max_workers, max_rate
         )
 
         return self._handle_batch_completion(

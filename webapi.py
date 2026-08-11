@@ -24,8 +24,8 @@ def set_json_response_headers():
 
 def _get_auth_token():
     # ヘッダーから認証トークンを取得（優先）
-    token = request.headers.get('X-API-Token', '')
-    if not token:
+    token = request.headers.get('X-API-Token')
+    if token is None:
         # 後方互換性のためにパラメータからも取得
         token = request.params.getunicode('token', '').strip()
     return token

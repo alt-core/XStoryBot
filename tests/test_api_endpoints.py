@@ -216,6 +216,12 @@ class WebApiTest(unittest.TestCase):
             headers={'X-API-Token': 'invalid-token'},
             expect_errors=True,
         )
+        empty_header_response = self.client.post(
+            '/api/v1/bots/bot/action',
+            params=self.action_params(),
+            headers={'X-API-Token': ''},
+            expect_errors=True,
+        )
         header_response = self.client.post(
             '/api/v1/bots/bot/action',
             params=self.action_params(token='invalid-token'),
@@ -224,6 +230,7 @@ class WebApiTest(unittest.TestCase):
 
         self.assert_success_response(fallback_response)
         self.assertEqual(rejected_response.status_int, 401)
+        self.assertEqual(empty_header_response.status_int, 401)
         self.assert_success_response(header_response)
 
     def test_bot_lookup_precedes_token_validation(self):

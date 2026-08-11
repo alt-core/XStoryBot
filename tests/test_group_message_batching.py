@@ -22,6 +22,7 @@ def load_group_message_task_manager():
         STATUS_ABORTED = 'aborted'
 
         get_task = Mock()
+        get_members_from_storage = Mock()
         update_task_status = Mock()
         process_members_in_parallel = Mock()
         _append_failed_member_list = Mock()
@@ -161,6 +162,53 @@ class GroupBatchTestBase(unittest.TestCase):
 
 
 class GroupBatchBoundaryTest(GroupBatchTestBase):
+    def test_再送taskは保存した失敗者だけを処理する(self):
+        failed_member = 'mock-line:user-499'
+        self.task['is_retry'] = True
+        self._set_members(500)
+        self.db.get_members_from_storage.return_value = [failed_member]
+        processed = []
+
+        def process_members(**kwargs):
+            processed.extend(kwargs['member_ids'])
+            return len(kwargs['member_ids']), 0, kwargs['member_ids'], []
+
+        self.db.process_members_in_parallel.side_effect = process_members
+
+        result, status = self.manager.process_batch(
+            'message-retry', 0, 2000, max_workers=1, max_rate=100
+        )
+
+        self.assertEqual(status, 200)
+        self.assertEqual(result['success_count'], 1)
+        self.assertEqual(processed, [failed_member])
+        self.db.get_members_from_storage.assert_called_once_with(
+            'message-retry'
+        )
+        self.module.users.get_group_members.assert_not_called()
+
+    def test_通常taskは処理対象batchだけをserializeする(self):
+        members = []
+        for index in range(4):
+            member = Mock()
+            member.serialize.return_value = f'mock-line:user-{index}'
+            members.append(member)
+        self.module.users.get_group_members.return_value = members
+        self.db.process_members_in_parallel.return_value = (
+            2, 0, ['mock-line:user-2', 'mock-line:user-3'], []
+        )
+
+        result, status = self.manager.process_batch(
+            'message-1', 1, 2, max_workers=1, max_rate=100
+        )
+
+        self.assertEqual(status, 200)
+        self.assertEqual(result['success_count'], 2)
+        members[0].serialize.assert_not_called()
+        members[1].serialize.assert_not_called()
+        members[2].serialize.assert_called_once_with()
+        members[3].serialize.assert_called_once_with()
+
     def test_500人を250人ずつ2batchで重複なく処理する(self):
         members = self._set_members(500)
         processed = []
@@ -462,6 +510,7 @@ class GroupMessageTaskDBTest(unittest.TestCase):
         self.assertEqual(retry_data['total_members'], 1)
         self.assertEqual(retry_data['total_batches'], 1)
         self.assertEqual(retry_data['original_task_id'], 'message-1')
+        self.assertIs(retry_data['is_retry'], True)
 
 
 if __name__ == '__main__':
