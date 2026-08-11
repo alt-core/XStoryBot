@@ -6,7 +6,7 @@ import types
 import unittest
 from contextlib import contextmanager
 from types import SimpleNamespace
-from unittest.mock import Mock, patch
+from unittest.mock import Mock, call, patch
 
 from cloud_backend.contracts import (
     StateConflictError,
@@ -201,32 +201,59 @@ class GcpStateStoreAtomicOperationTest(unittest.TestCase):
             'members': ['line:user-1', 'line:user-2'],
         })
 
-    def test_next_labelの上書き値とcompare_and_clearを返す(self):
+    def test_next_labelの上書き後は現在値だけcompare_and_clearできる(self):
         collection = Mock()
         document = Mock()
         transaction = Mock()
+        current = {
+            'next_label': '##OLD',
+            'trigger_message': '旧入力',
+        }
         self.client.collection.return_value = collection
         collection.document.return_value = document
         self.client.transaction.return_value = transaction
-        document.get.return_value = SimpleNamespace(
-            exists=True,
-            to_dict=lambda: {
-                'next_label': '##OLD',
-                'trigger_message': '旧入力',
-            },
-        )
+
+        def snapshot(*args, **kwargs):
+            del args, kwargs
+            return SimpleNamespace(
+                exists=True,
+                to_dict=lambda: dict(current),
+            )
+
+        def update(_document, data):
+            current.update(data)
+
+        document.get.side_effect = snapshot
+        transaction.update.side_effect = update
 
         overwritten = self.store.set_next_label(
             'bot:line:user-1', '##NEW', '新入力')
-        cleared = self.store.compare_and_clear_next_label(
+        mismatch = self.store.compare_and_clear_next_label(
             'bot:line:user-1', '##OLD')
+        cleared = self.store.compare_and_clear_next_label(
+            'bot:line:user-1', '##NEW')
 
         self.assertEqual(overwritten, ('##OLD', '旧入力'))
-        self.assertEqual(cleared, ('##OLD', '旧入力'))
-        self.assertEqual(transaction.update.call_args_list[-1].args, (
-            document,
-            {'next_label': None, 'trigger_message': None},
-        ))
+        self.assertEqual(mismatch, (None, None))
+        self.assertEqual(cleared, ('##NEW', '新入力'))
+        self.assertEqual(
+            document.get.call_args_list,
+            [call(transaction=transaction)] * 3,
+        )
+        self.assertEqual(transaction.update.call_args_list, [
+            call(document, {
+                'next_label': '##NEW',
+                'trigger_message': '新入力',
+            }),
+            call(document, {
+                'next_label': None,
+                'trigger_message': None,
+            }),
+        ])
+        self.assertEqual(current, {
+            'next_label': None,
+            'trigger_message': None,
+        })
 
     def test_task日時は標準UTC_datetimeへ正規化する(self):
         collection = Mock()
