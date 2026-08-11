@@ -1,11 +1,13 @@
 import importlib.util
+import json
 import os
 from pathlib import Path
 import shutil
 import sys
 import tempfile
+import types
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from utility import deep_merge, load_settings_yaml
 
@@ -138,6 +140,52 @@ class SettingsModuleTest(unittest.TestCase):
         self.assertEqual(
             'https://app.example.invalid',
             module.SERVICE_SETTINGS['app']['base_url'])
+
+    def test_AWS選択時はGCP設定を必須にしない(self):
+        module_path = PROJECT_ROOT / 'settings.py'
+        cloud_backend = types.ModuleType('cloud_backend')
+        cloud_backend.configure = Mock(return_value='aws')
+        config = {
+            '*': {
+                'cloud': {'provider': 'aws'},
+                'aws': {
+                    'services': {
+                        'app': {
+                            'base_url': 'https://app.example.invalid',
+                        },
+                    },
+                },
+                'auth': {},
+                'bots': {},
+            },
+        }
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            Path(temp_dir, 'settings.yaml').write_text(
+                json.dumps(config), encoding='utf-8')
+            previous_dir = os.getcwd()
+            try:
+                os.chdir(temp_dir)
+                module_name = 'settings_aws_under_test'
+                spec = importlib.util.spec_from_file_location(
+                    module_name, module_path)
+                module = importlib.util.module_from_spec(spec)
+                with patch.dict(
+                        sys.modules,
+                        {module_name: module, 'cloud_backend': cloud_backend}):
+                    spec.loader.exec_module(module)
+            finally:
+                os.chdir(previous_dir)
+                sys.modules.pop('settings_aws_under_test', None)
+
+        self.assertEqual('aws', module.CLOUD_SETTINGS['provider'])
+        self.assertEqual({}, module.GCP_SETTINGS)
+        self.assertIs(module.BACKEND_SETTINGS, module.settings['aws'])
+        self.assertEqual(
+            'https://app.example.invalid',
+            module.SERVICE_SETTINGS['app']['base_url'])
+        cloud_backend.configure.assert_called_once_with(
+            {'provider': 'aws'})
 
 
 class IgnoreConfigurationTest(unittest.TestCase):

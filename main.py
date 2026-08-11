@@ -3,8 +3,14 @@
 import os
 import re
 
+import settings
+
+
 DEPLOY_ENV = os.getenv('XSBOT_DEPLOY_ENV', '')
-if DEPLOY_ENV != 'test' and DEPLOY_ENV != 'local':
+if (
+        getattr(settings, 'CLOUD_SETTINGS', {}).get('provider', 'gcp') == 'gcp'
+        and DEPLOY_ENV != 'test'
+        and DEPLOY_ENV != 'local'):
     # ログを Cloud Logging に送信するための初期化
     import google.cloud.logging
     client = google.cloud.logging.Client()
@@ -32,7 +38,6 @@ if DEPLOY_ENV != 'test' and DEPLOY_ENV != 'local':
 
     sys.excepthook = exception_handler
 
-import settings
 import auth
 import common_commands
 import plugin

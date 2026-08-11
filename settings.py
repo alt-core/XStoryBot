@@ -19,10 +19,15 @@ def load_settings():
 # 設定の読み込み
 settings = load_settings()
 
-# 各種設定を直接参照
-GCP_SETTINGS = settings['gcp']
 CLOUD_SETTINGS = settings.get('cloud', {'provider': 'gcp'})
-BACKEND_SETTINGS = settings.get(CLOUD_SETTINGS.get('provider', 'gcp'), {})
+_cloud_provider = CLOUD_SETTINGS.get('provider', 'gcp')
+
+# GCP選択時は従来どおりgcp設定を必須とし、他provider選択時だけ省略を許す。
+if _cloud_provider == 'gcp':
+    GCP_SETTINGS = settings['gcp']
+else:
+    GCP_SETTINGS = settings.get('gcp', {})
+BACKEND_SETTINGS = settings.get(_cloud_provider, {})
 SERVICE_SETTINGS = settings.get(
     'services', BACKEND_SETTINGS.get('services', {}))
 AUTH_SETTINGS = settings['auth']

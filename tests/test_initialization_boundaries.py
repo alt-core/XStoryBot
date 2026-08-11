@@ -12,7 +12,7 @@ from bottle import Bottle
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
-def load_main(deploy_env):
+def load_main(deploy_env, provider='gcp'):
     auth = types.ModuleType('auth')
     auth.setup = Mock()
 
@@ -27,6 +27,7 @@ def load_main(deploy_env):
     settings.AUTH_SETTINGS = {}
     settings.GCP_SETTINGS = {}
     settings.BACKEND_SETTINGS = settings.GCP_SETTINGS
+    settings.CLOUD_SETTINGS = {'provider': provider}
     settings.OPTIONS = {}
     settings.PLUGINS = {}
     settings.BOTS = {}
@@ -79,7 +80,7 @@ def load_main(deploy_env):
         'google.cloud.logging': cloud_logging,
     }
 
-    module_name = f'main_for_initialization_test_{deploy_env}'
+    module_name = f'main_for_initialization_test_{deploy_env}_{provider}'
     spec = importlib.util.spec_from_file_location(
         module_name, PROJECT_ROOT / 'main.py')
     module = importlib.util.module_from_spec(spec)
@@ -109,6 +110,12 @@ class CloudLoggingInitializationTest(unittest.TestCase):
 
         cloud_logging.Client.assert_called_once_with()
         logging_client.setup_logging.assert_called_once_with()
+
+    def test_AWS選択時はCloud_Loggingを初期化しない(self):
+        cloud_logging, logging_client = load_main('prod', provider='aws')
+
+        cloud_logging.Client.assert_not_called()
+        logging_client.setup_logging.assert_not_called()
 
 
 class OptionalPluginWebApiTest(unittest.TestCase):

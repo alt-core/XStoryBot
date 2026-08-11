@@ -1,6 +1,7 @@
 import sys
 import types
 import unittest
+from unittest.mock import patch
 
 from cloud_backend import factory
 
@@ -44,6 +45,18 @@ class CloudBackendFactoryTest(unittest.TestCase):
                 del sys.modules[module_name]
             else:
                 sys.modules[module_name] = original
+
+    def test_AWS選択時はGCPmoduleをimportしない(self):
+        fake_module = types.SimpleNamespace(
+            create_state_store=lambda: 'aws-state')
+        factory.configure({'provider': 'aws'})
+
+        with patch.object(
+                factory.importlib, 'import_module',
+                return_value=fake_module) as importer:
+            self.assertEqual('aws-state', factory.create_state_store())
+
+        importer.assert_called_once_with('cloud_backend.aws')
 
 
 if __name__ == '__main__':
