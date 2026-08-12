@@ -190,14 +190,29 @@ class AwsTemplateTest(unittest.TestCase):
 
         for queue_name in ('ActionQueue', 'GroupQueue'):
             queue = self.resources[queue_name]
-            self.assertEqual('Retain', queue['DeletionPolicy'])
-            self.assertEqual('Retain', queue['UpdateReplacePolicy'])
+            self.assertNotIn('DeletionPolicy', queue)
+            self.assertNotIn('UpdateReplacePolicy', queue)
             self.assertNotIn('FifoQueue', queue['Properties'])
             self.assertEqual(
                 {'GetAtt': 'DeadLetterQueue.Arn'},
                 queue['Properties']['RedrivePolicy'][
                     'deadLetterTargetArn'],
             )
+
+        dead_letter_queue = self.resources['DeadLetterQueue']
+        self.assertEqual('Retain', dead_letter_queue['DeletionPolicy'])
+        self.assertEqual('Retain', dead_letter_queue['UpdateReplacePolicy'])
+
+    def test_PrivateBucketの不存在を404として判定できる権限を持つ(self):
+        for role_name in ('ApiRole', 'WorkerRole', 'BuildTaskRole'):
+            statements = self.resources[role_name]['Properties'][
+                'Policies'][0]['PolicyDocument']['Statement']
+            statement = next(
+                item for item in statements
+                if item['Action'] == 's3:ListBucket')
+            self.assertEqual(
+                {'GetAtt': 'PrivateBucket.Arn'}, statement['Resource'])
+            self.assertNotIn('Condition', statement)
 
     def test_Fargateはpublic_subnet二つで秘密値名だけを受け取る(self):
         subnet_count = sum(

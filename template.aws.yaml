@@ -242,8 +242,6 @@ Resources:
 
   ActionQueue:
     Type: AWS::SQS::Queue
-    DeletionPolicy: Retain
-    UpdateReplacePolicy: Retain
     Properties:
       MessageRetentionPeriod: 345600
       VisibilityTimeout: 360
@@ -254,8 +252,6 @@ Resources:
 
   GroupQueue:
     Type: AWS::SQS::Queue
-    DeletionPolicy: Retain
-    UpdateReplacePolicy: Retain
     Properties:
       MessageRetentionPeriod: 345600
       VisibilityTimeout: 5400
@@ -363,12 +359,6 @@ Resources:
               - Effect: Allow
                 Action: s3:ListBucket
                 Resource: !GetAtt PrivateBucket.Arn
-                Condition:
-                  StringLike:
-                    s3:prefix:
-                      - scenario/*
-                      - group_tasks/*
-                      - build_cache/*
               - Effect: Allow
                 Action: sqs:SendMessage
                 Resource:
@@ -444,12 +434,6 @@ Resources:
               - Effect: Allow
                 Action: s3:ListBucket
                 Resource: !GetAtt PrivateBucket.Arn
-                Condition:
-                  StringLike:
-                    s3:prefix:
-                      - scenario/*
-                      - group_tasks/*
-                      - build_cache/*
               - Effect: Allow
                 Action:
                   - sqs:DeleteMessage
@@ -708,12 +692,6 @@ Resources:
               - Effect: Allow
                 Action: s3:ListBucket
                 Resource: !GetAtt PrivateBucket.Arn
-                Condition:
-                  StringLike:
-                    s3:prefix:
-                      - scenario/*
-                      - group_tasks/*
-                      - build_cache/*
               - Effect: Allow
                 Action: ssm:GetParameter
                 Resource:
