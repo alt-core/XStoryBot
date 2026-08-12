@@ -70,6 +70,7 @@ aws ecr get-login-password --region "$AWS_REGION" \
 # API、2つのworker、Fargateで共用する同一imageを1回だけbuild/pushする。
 docker buildx build \
     --platform linux/amd64 \
+    --provenance=false \
     --tag "$image_uri" \
     --push \
     "$script_directory"

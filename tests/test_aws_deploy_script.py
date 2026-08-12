@@ -29,6 +29,7 @@ class AwsDeployScriptTest(unittest.TestCase):
         self.assertNotIn('aws ecr create-repository', self.source)
         self.assertEqual(1, self.source.count('docker buildx build'))
         self.assertIn('--platform linux/amd64', self.source)
+        self.assertIn('--provenance=false', self.source)
         self.assertIn('--push', self.source)
         self.assertNotIn('\nsam build ', self.source)
 
