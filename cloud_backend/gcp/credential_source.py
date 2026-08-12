@@ -49,6 +49,16 @@ class GcpCredentialSource(CredentialSource):
         if isinstance(reference, str):
             if allow_default and not reference:
                 return CredentialData(use_default=True)
+            if reference.lstrip().startswith('{'):
+                try:
+                    decoded = json.loads(reference)
+                except ValueError as error:
+                    raise CredentialSourceError(
+                        'Googleサービスアカウント資格情報のJSONが不正です') from error
+                if not isinstance(decoded, Mapping):
+                    raise CredentialSourceError(
+                        'Googleサービスアカウント資格情報はJSON objectで指定してください')
+                return CredentialData(inline_json=reference)
             return CredentialData(file_path=reference)
         if reference is None:
             if allow_default:

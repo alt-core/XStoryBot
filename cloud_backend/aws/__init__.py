@@ -4,6 +4,7 @@
 _object_store = None
 _state_store = None
 _task_queue = None
+_credential_source = None
 
 
 def create_object_store():
@@ -15,10 +16,6 @@ def create_object_store():
         from cloud_backend.aws.object_store import AwsObjectStore
         _object_store = AwsObjectStore(settings.BACKEND_SETTINGS)
     return _object_store
-
-
-def _not_implemented(boundary_name):
-    raise ValueError(f'AWS {boundary_name}はまだ実装されていません')
 
 
 def create_state_store():
@@ -46,11 +43,19 @@ def create_task_queue():
 
 
 def create_credential_source():
-    return _not_implemented('CredentialSource')
+    """プロセス内で共有するAWS CredentialSourceを返す。"""
+    global _credential_source
+
+    if _credential_source is None:
+        import settings
+        from cloud_backend.aws.credential_source import AwsCredentialSource
+        _credential_source = AwsCredentialSource(settings.BACKEND_SETTINGS)
+    return _credential_source
 
 
 def _reset_for_test():
-    global _object_store, _state_store, _task_queue
+    global _object_store, _state_store, _task_queue, _credential_source
     _object_store = None
     _state_store = None
     _task_queue = None
+    _credential_source = None

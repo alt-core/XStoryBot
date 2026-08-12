@@ -51,6 +51,8 @@ class SettingsTemplateTest(unittest.TestCase):
             'XSBOT_AWS_SCHEDULER_ROLE_ARN': (
                 'arn:aws:iam::000000000000:role/test-scheduler-role'),
             'XSBOT_AWS_SCHEDULER_GROUP_NAME': 'test-scheduler-group',
+            'XSBOT_AWS_SHEETS_CREDENTIAL_PARAMETER': (
+                '/xstorybot/test/google-sheets-service-account'),
             'LINE_CHANNEL_SECRET': 'value',
             'LINE_ACCESS_TOKEN': 'value',
             'SHEETS_ID': 'test-sheet-id',
@@ -127,6 +129,11 @@ class SettingsTemplateTest(unittest.TestCase):
         self.assertEqual(
             'test-scheduler-group',
             default['aws']['task_queue']['scheduler']['group_name'],
+        )
+        self.assertEqual(
+            '/xstorybot/test/google-sheets-service-account',
+            default['aws']['credential_source'][
+                'google_service_account_parameter'],
         )
         self.assertEqual(
             '/secrets/service-account.json',

@@ -68,6 +68,20 @@ class GcpCredentialSourceTest(unittest.TestCase):
         self.assertEqual(
             {'project_id': 'test'}, json.loads(mapped.inline_json))
 
+        inline = source.get_google_service_account(
+            '  {"project_id":"inline-test"}')
+        self.assertEqual(
+            {'project_id': 'inline-test'}, json.loads(inline.inline_json))
+        self.assertIsNone(inline.file_path)
+
+    def test_壊れたinline_JSONを秘密値なしの共通例外で拒否する(self):
+        invalid = '{"private_key":"secret-value"'
+
+        with self.assertRaises(CredentialSourceError) as raised:
+            GcpCredentialSource().get_google_service_account(invalid)
+
+        self.assertNotIn('secret-value', str(raised.exception))
+
     def test_不明な参照型を拒否する(self):
         with self.assertRaises(CredentialSourceError):
             GcpCredentialSource().get_google_service_account(123)

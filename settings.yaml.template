@@ -52,6 +52,8 @@
   # AWS設定
   aws:
     region: !env AWS_REGION
+    credential_source:
+      google_service_account_parameter: !env XSBOT_AWS_SHEETS_CREDENTIAL_PARAMETER
     state_store:
       state_table: !env XSBOT_AWS_STATE_TABLE
       group_task_table: !env XSBOT_AWS_GROUP_TASK_TABLE
