@@ -1,9 +1,15 @@
 import json
+import types
 import unittest
-from unittest.mock import Mock, patch
+from unittest.mock import Mock, call, patch
 import uuid
 
 from cloud_backend.aws import task_handler
+from cloud_backend.aws.state_store import (
+    TASK_EXECUTION_BUSY,
+    TASK_EXECUTION_CLAIMED,
+    TASK_EXECUTION_COMPLETED,
+)
 
 
 ACTION_ARN = 'arn:aws:sqs:test-region-1:000000000000:action'
@@ -74,6 +80,9 @@ class AwsTaskHandlerTest(unittest.TestCase):
         self.manager = Mock()
         self.manager.handle_batch_process_request.return_value = (
             {'message': '処理完了'}, 200)
+        self.execution_store = Mock()
+        self.execution_store.try_claim_task_execution.return_value = (
+            TASK_EXECUTION_CLAIMED)
         self.dependencies = {
             'backend_settings': {
                 'task_queue': {
@@ -88,13 +97,17 @@ class AwsTaskHandlerTest(unittest.TestCase):
             'get_group_members': Mock(return_value=[]),
             'options': {},
             'manager_class': Mock(return_value=self.manager),
+            'execution_store': self.execution_store,
         }
 
     def invoke(self, records):
         with patch.object(
                 task_handler, '_load_dependencies',
                 return_value=self.dependencies):
-            return task_handler.lambda_handler({'Records': records}, None)
+            return task_handler.lambda_handler(
+                {'Records': records},
+                types.SimpleNamespace(aws_request_id='request-1'),
+            )
 
     def test_失敗recordだけを返して後続処理を続ける(self):
         first = make_envelope(action='first')
@@ -137,6 +150,140 @@ class AwsTaskHandlerTest(unittest.TestCase):
             'bot', bot_instance=self.bot)
         self.manager.handle_batch_process_request.assert_called_once_with(
             'message-1', 2)
+        self.assertEqual(
+            self.execution_store.try_claim_task_execution.call_args_list,
+            [
+                call(
+                    f'action:bot:{action["task_id"]}',
+                    'request-1:action',
+                    90,
+                ),
+                call(
+                    f'group:bot:{group["task_id"]}',
+                    'request-1:group',
+                    960,
+                ),
+            ],
+        )
+        self.assertEqual(
+            self.execution_store.complete_task_execution.call_args_list,
+            [
+                call(
+                    f'action:bot:{action["task_id"]}',
+                    'request-1:action',
+                ),
+                call(
+                    f'group:bot:{group["task_id"]}',
+                    'request-1:group',
+                ),
+            ],
+        )
+
+    def test_group再キューは新task_id単位で別実行として扱う(self):
+        first = make_envelope(
+            kind='group_batch',
+            queue_name='group-message-queue',
+            message_task_id='scheduled-message',
+            batch_index=0,
+        )
+        requeued = make_envelope(
+            kind='group_batch',
+            queue_name='group-message-queue',
+            message_task_id='scheduled-message',
+            batch_index=0,
+        )
+
+        response = self.invoke([
+            make_record('early', first, GROUP_ARN),
+            make_record('scheduled', requeued, GROUP_ARN),
+        ])
+
+        self.assertEqual(response, {'batchItemFailures': []})
+        self.assertEqual(
+            self.manager.handle_batch_process_request.call_args_list,
+            [
+                call('scheduled-message', 0),
+                call('scheduled-message', 0),
+            ],
+        )
+        self.assertEqual(
+            self.execution_store.try_claim_task_execution.call_args_list,
+            [
+                call(
+                    f'group:bot:{first["task_id"]}',
+                    'request-1:early',
+                    960,
+                ),
+                call(
+                    f'group:bot:{requeued["task_id"]}',
+                    'request-1:scheduled',
+                    960,
+                ),
+            ],
+        )
+
+    def test_groupの同じtask_idの再配送は完了済みなら処理しない(self):
+        envelope = make_envelope(
+            kind='group_batch',
+            queue_name='group-message-queue',
+            message_task_id='message-1',
+            batch_index=0,
+        )
+        self.execution_store.try_claim_task_execution.side_effect = [
+            TASK_EXECUTION_CLAIMED,
+            TASK_EXECUTION_COMPLETED,
+        ]
+
+        response = self.invoke([
+            make_record('first', envelope, GROUP_ARN),
+            make_record('redelivery', envelope, GROUP_ARN),
+        ])
+
+        self.assertEqual(response, {'batchItemFailures': []})
+        self.manager.handle_batch_process_request.assert_called_once_with(
+            'message-1', 0)
+        key = f'group:bot:{envelope["task_id"]}'
+        self.assertEqual(
+            self.execution_store.try_claim_task_execution.call_args_list,
+            [
+                call(key, 'request-1:first', 960),
+                call(key, 'request-1:redelivery', 960),
+            ],
+        )
+        self.execution_store.complete_task_execution.assert_called_once_with(
+            key, 'request-1:first')
+
+    def test_実行中は再試行し完了済みはackする(self):
+        busy = make_envelope(action='busy')
+        completed = make_envelope(action='completed')
+        self.execution_store.try_claim_task_execution.side_effect = [
+            TASK_EXECUTION_BUSY,
+            TASK_EXECUTION_COMPLETED,
+        ]
+
+        response = self.invoke([
+            make_record('busy', busy),
+            make_record('completed', completed),
+        ])
+
+        self.assertEqual(
+            response,
+            {'batchItemFailures': [{'itemIdentifier': 'busy'}]},
+        )
+        self.assertEqual(self.bot.handled, [])
+        self.execution_store.complete_task_execution.assert_not_called()
+
+    def test_業務処理失敗時は完了記録を付けない(self):
+        envelope = make_envelope(action='failure')
+        self.bot.handle_action = Mock(side_effect=RuntimeError('failure'))
+
+        response = self.invoke([make_record('message-1', envelope)])
+
+        self.assertEqual(
+            response,
+            {'batchItemFailures': [{'itemIdentifier': 'message-1'}]},
+        )
+        self.execution_store.complete_task_execution.assert_not_called()
 
     def test_envelopeと送信元を厳密に検証する(self):
         invalid_records = []
@@ -189,6 +336,7 @@ class AwsTaskHandlerTest(unittest.TestCase):
             ]},
         )
         self.assertEqual(self.bot.handled, [])
+        self.execution_store.try_claim_task_execution.assert_not_called()
 
     def test_failure_logへ本文や例外本文を出さない(self):
         secret = 'secret-action-value'

@@ -22,12 +22,18 @@ from cloud_backend.contracts import (
 )
 
 
+TASK_EXECUTION_CLAIMED = 'claimed'
+TASK_EXECUTION_BUSY = 'busy'
+TASK_EXECUTION_COMPLETED = 'completed'
+
+
 class AwsStateStore(StateStore):
     """三つのDynamoDBテーブルへ状態、配信Task、cacheを保存する。"""
 
     _GROUP_RETRY_LIMIT = 5
     _TASK_RETRY_LIMIT = 5
     _CACHE_PARTITIONS = 16
+    _TASK_EXECUTION_TTL_SECONDS = 15 * 24 * 60 * 60
     _CONDITIONAL_ERROR_CODES = {'ConditionalCheckFailedException'}
 
     def __init__(
@@ -869,6 +875,119 @@ class AwsStateStore(StateStore):
                     for item in items
                 ])
         return self._call(operation)
+
+    @staticmethod
+    def _validate_task_execution_text(value, description):
+        if not isinstance(value, str) or not value:
+            raise ValueError(f'{description}が不正です')
+
+    @staticmethod
+    def _task_execution_key(execution_key):
+        digest = AwsStateStore._hash(execution_key)
+        return {
+            'pk': f'TASK_EXECUTION#{digest[:2]}',
+            'sk': f'TASK#{digest}',
+        }
+
+    @classmethod
+    def _raise_task_execution_error(cls, error, conflict=False):
+        message = 'AWS非同期タスクの実行記録操作に失敗しました'
+        if conflict and cls._is_conditional_error(error):
+            raise StateConflictError(message) from error
+        if isinstance(error, (ClientError, BotoCoreError)):
+            raise StateStoreError(message) from error
+        if type(error).__module__.startswith(('boto3.', 'botocore.')):
+            raise StateStoreError(message) from error
+        raise error
+
+    def try_claim_task_execution(
+            self, execution_key, owner, lease_seconds):
+        """AWS worker用taskを取得し、claimed・busy・completedを返す。"""
+        self._validate_task_execution_text(execution_key, 'execution key')
+        self._validate_task_execution_text(owner, 'owner')
+        if (
+                isinstance(lease_seconds, bool)
+                or not isinstance(lease_seconds, int)
+                or lease_seconds <= 0):
+            raise ValueError('lease秒数が不正です')
+
+        now = int(self._now().timestamp())
+        key = self._task_execution_key(execution_key)
+        request = {
+            'TableName': self._cache_table,
+            'Item': self._item({
+                **key,
+                'status': TASK_EXECUTION_CLAIMED,
+                'owner': owner,
+                'lease_until': now + lease_seconds,
+                'expire_at': now + self._TASK_EXECUTION_TTL_SECONDS,
+            }),
+            'ConditionExpression': (
+                'attribute_not_exists(#pk) OR '
+                '(#status = :claimed AND #lease_until <= :now)'),
+            'ExpressionAttributeNames': {
+                '#pk': 'pk',
+                '#status': 'status',
+                '#lease_until': 'lease_until',
+            },
+            'ExpressionAttributeValues': {
+                ':claimed': self._attribute(TASK_EXECUTION_CLAIMED),
+                ':now': self._attribute(now),
+            },
+        }
+        try:
+            self._client().put_item(**request)
+            return TASK_EXECUTION_CLAIMED
+        except Exception as error:
+            if not self._is_conditional_error(error):
+                self._raise_task_execution_error(error)
+
+        try:
+            current = self._get_item(self._cache_table, key)
+        except Exception as error:
+            self._raise_task_execution_error(error)
+        if current is None:
+            # 条件失敗直後のTTL削除などでは安全側に倒し、次の再試行へ回す。
+            return TASK_EXECUTION_BUSY
+        if current.get('status') == TASK_EXECUTION_COMPLETED:
+            return TASK_EXECUTION_COMPLETED
+        if current.get('status') == TASK_EXECUTION_CLAIMED:
+            return TASK_EXECUTION_BUSY
+        raise StateStoreError(
+            'AWS非同期タスクの実行記録操作に失敗しました')
+
+    def complete_task_execution(self, execution_key, owner):
+        """同じownerが取得したAWS worker用taskだけを完了させる。"""
+        self._validate_task_execution_text(execution_key, 'execution key')
+        self._validate_task_execution_text(owner, 'owner')
+
+        now = int(self._now().timestamp())
+        key = self._task_execution_key(execution_key)
+        request = {
+            'TableName': self._cache_table,
+            'Item': self._item({
+                **key,
+                'status': TASK_EXECUTION_COMPLETED,
+                'owner': owner,
+                'completed_at': now,
+                'expire_at': now + self._TASK_EXECUTION_TTL_SECONDS,
+            }),
+            'ConditionExpression': '#status = :claimed AND #owner = :owner',
+            'ExpressionAttributeNames': {
+                '#status': 'status',
+                '#owner': 'owner',
+            },
+            'ExpressionAttributeValues': {
+                ':claimed': self._attribute(TASK_EXECUTION_CLAIMED),
+                ':owner': self._attribute(owner),
+            },
+        }
+        # lease切れだけではownerを失効させない。別workerが再取得した場合は
+        # ownerが置き換わるため、この条件付き更新が競合として失敗する。
+        try:
+            self._client().put_item(**request)
+        except Exception as error:
+            self._raise_task_execution_error(error, conflict=True)
 
     def _task_data(self, item):
         return self._decode_payload(item['payload'])

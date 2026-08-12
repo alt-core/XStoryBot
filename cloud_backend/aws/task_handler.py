@@ -6,6 +6,11 @@ import re
 import uuid
 
 from async_task_processor import process_action, process_group_batch
+from cloud_backend.aws.state_store import (
+    TASK_EXECUTION_BUSY,
+    TASK_EXECUTION_CLAIMED,
+    TASK_EXECUTION_COMPLETED,
+)
 
 
 _BOT_NAME_PATTERN = re.compile(r'^[-_a-zA-Z0-9]+$')
@@ -13,6 +18,12 @@ _QUEUE_KIND_MAP = {
     'action-queue': 'action',
     'group-message-queue': 'group_batch',
 }
+_ACTION_LEASE_SECONDS = 90
+_GROUP_LEASE_SECONDS = 960
+
+
+class _TaskExecutionBusy(Exception):
+    """同じ論理taskを別のworkerが実行中であることを表す。"""
 
 
 def _validate_task_id(value):
@@ -69,6 +80,7 @@ def _load_dependencies():
     import main
     import settings
     import users
+    from cloud_backend.aws import create_state_store
     from group_message_task_manager import GroupMessageTaskManager
 
     return {
@@ -78,10 +90,23 @@ def _load_dependencies():
         'get_group_members': users.get_group_members,
         'options': settings.OPTIONS,
         'manager_class': GroupMessageTaskManager,
+        'execution_store': create_state_store(),
     }
 
 
-def _process_record(record, dependencies):
+def _claim_or_skip(execution_store, execution_key, owner, lease_seconds):
+    result = execution_store.try_claim_task_execution(
+        execution_key, owner, lease_seconds)
+    if result == TASK_EXECUTION_COMPLETED:
+        return False
+    if result == TASK_EXECUTION_BUSY:
+        raise _TaskExecutionBusy()
+    if result != TASK_EXECUTION_CLAIMED:
+        raise ValueError('実行記録の取得結果が不正です')
+    return True
+
+
+def _process_record(record, dependencies, owner):
     envelope = _load_envelope(record, dependencies['backend_settings'])
     bot = dependencies['get_bot'](envelope['bot_name'])
     if bot is None:
@@ -94,6 +119,12 @@ def _process_record(record, dependencies):
         if not isinstance(serialized_user, str) or not isinstance(
                 encoded_action, str):
             raise ValueError('action parameterが不正です')
+        execution_key = (
+            f'action:{envelope["bot_name"]}:{envelope["task_id"]}')
+        if not _claim_or_skip(
+                dependencies['execution_store'], execution_key, owner,
+                _ACTION_LEASE_SECONDS):
+            return
         process_action(
             bot,
             serialized_user,
@@ -103,6 +134,8 @@ def _process_record(record, dependencies):
             dependencies['options'],
             log_values=False,
         )
+        dependencies['execution_store'].complete_task_execution(
+            execution_key, owner)
         return
 
     message_task_id = params.get('message_task_id', '')
@@ -117,18 +150,30 @@ def _process_record(record, dependencies):
         raise ValueError('group batch parameterが不正です') from error
     if batch_index < 0 or str(batch_index) != str(params.get('batch_index', 0)):
         raise ValueError('group batch parameterが不正です')
+    message_task_id = message_task_id.strip()
+    if not message_task_id:
+        raise ValueError('group batch parameterが不正です')
+    # 予約時刻より早く届いたバッチは新しいtask_idで再登録されるため、
+    # message_task_id単位で完了扱いにせず、同じSQSタスクの再配送だけを抑止する。
+    execution_key = (
+        f'group:{envelope["bot_name"]}:{envelope["task_id"]}')
+    if not _claim_or_skip(
+            dependencies['execution_store'], execution_key, owner,
+            _GROUP_LEASE_SECONDS):
+        return
     process_group_batch(
         envelope['bot_name'],
         bot,
-        message_task_id.strip(),
+        message_task_id,
         batch_index,
         dependencies['manager_class'],
     )
+    dependencies['execution_store'].complete_task_execution(
+        execution_key, owner)
 
 
 def lambda_handler(event, context):
     """SQS batchの各recordを処理し、失敗recordだけを再試行させる。"""
-    del context
     dependencies = _load_dependencies()
     failures = []
     records = event.get('Records', []) if isinstance(event, dict) else []
@@ -140,8 +185,12 @@ def lambda_handler(event, context):
             record, dict) else ''
         if not message_id:
             raise ValueError('SQS messageIdがありません')
+        request_id = getattr(context, 'aws_request_id', '')
+        if not request_id:
+            request_id = str(uuid.uuid4())
+        owner = f'{request_id}:{message_id}'
         try:
-            _process_record(record, dependencies)
+            _process_record(record, dependencies, owner)
         except Exception as error:
             logging.error(
                 'SQS task failed: message_id=%s, error_type=%s',
