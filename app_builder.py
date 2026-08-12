@@ -1,11 +1,11 @@
 # GAE や Cloud Run に指定するエントリーポイント (ビルドのバッチ処理用サーバー)
 
-import logging
 import os
 
 from bottle import Bottle, abort, debug, request, response
 
 import auth
+import build_service
 import main
 import settings
 import utility
@@ -64,15 +64,13 @@ def api_build(bot_name):
 
     task_id = request.params.getunicode('task_id', '').strip()
 
-    options = {}
-    options['skip_image'] = (request.params.getunicode('skip_image') == 'true')
-    options['force'] = (request.params.getunicode('force') == 'true')
-
-    version = main.get_options().get('scenario_version', 1)
-
-    logging.info(f"start building...: options: {options}, version: {version}")
-
-    ok, err = bot.build_scenario(task_id=task_id, options=options, version=version)
+    ok, err = build_service.build_runtime(
+        bot,
+        task_id=task_id,
+        skip_image=(request.params.getunicode('skip_image') == 'true'),
+        force=(request.params.getunicode('force') == 'true'),
+        version=main.get_options().get('scenario_version', 1),
+    )
 
     if ok:
         # リロードに成功した
