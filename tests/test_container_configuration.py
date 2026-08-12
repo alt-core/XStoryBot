@@ -10,11 +10,24 @@ class ContainerConfigurationTest(unittest.TestCase):
         dockerfile = (PROJECT_ROOT / 'Dockerfile').read_text(encoding='utf-8')
 
         self.assertIn('FROM python:3.11-slim', dockerfile)
+        adapter_lines = [
+            line.strip()
+            for line in dockerfile.splitlines()
+            if '/lambda-adapter /opt/extensions/lambda-adapter' in line
+        ]
+        self.assertEqual(adapter_lines, [
+            'COPY --from=public.ecr.aws/awsguru/aws-lambda-adapter:1.0.1 '
+            '/lambda-adapter /opt/extensions/lambda-adapter',
+        ])
         self.assertIn('USER xstorybot', dockerfile)
         self.assertIn('settings.yaml.template settings.yaml', dockerfile)
         self.assertIn('${XSBOT_APP_MODULE:-app:app}', dockerfile)
         self.assertIn('/healthz', dockerfile)
         self.assertIn('gunicorn', dockerfile)
+
+        public_app = (PROJECT_ROOT / 'app.py').read_text(encoding='utf-8')
+        self.assertNotIn("'/events'", public_app)
+        self.assertNotIn('"/events"', public_app)
 
     def test_legacy_gae_configuration_is_absent(self):
         paths = (

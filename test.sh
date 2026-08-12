@@ -29,6 +29,7 @@ python3 -m unittest \
     tests.test_aws_task_queue \
     tests.test_async_task_processor \
     tests.test_aws_task_handler \
+    tests.test_sqs_worker_app \
     tests.test_auth_middleware \
     tests.test_api_endpoints \
     tests.test_group_message_batching \
