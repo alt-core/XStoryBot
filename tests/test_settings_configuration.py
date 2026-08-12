@@ -38,6 +38,19 @@ class SettingsTemplateTest(unittest.TestCase):
             'XSBOT_AWS_GROUP_TASK_TABLE': 'test-group-task-table',
             'XSBOT_AWS_GROUP_TASK_INDEX': 'test-group-task-index',
             'XSBOT_AWS_CACHE_TABLE': 'test-cache-table',
+            'XSBOT_AWS_ACTION_QUEUE_URL': (
+                'https://sqs.test-region-1.amazonaws.com/'
+                '000000000000/test-action-queue'),
+            'XSBOT_AWS_ACTION_QUEUE_ARN': (
+                'arn:aws:sqs:test-region-1:000000000000:test-action-queue'),
+            'XSBOT_AWS_GROUP_MESSAGE_QUEUE_URL': (
+                'https://sqs.test-region-1.amazonaws.com/'
+                '000000000000/test-group-queue'),
+            'XSBOT_AWS_GROUP_MESSAGE_QUEUE_ARN': (
+                'arn:aws:sqs:test-region-1:000000000000:test-group-queue'),
+            'XSBOT_AWS_SCHEDULER_ROLE_ARN': (
+                'arn:aws:iam::000000000000:role/test-scheduler-role'),
+            'XSBOT_AWS_SCHEDULER_GROUP_NAME': 'test-scheduler-group',
             'LINE_CHANNEL_SECRET': 'value',
             'LINE_ACCESS_TOKEN': 'value',
             'SHEETS_ID': 'test-sheet-id',
@@ -100,6 +113,20 @@ class SettingsTemplateTest(unittest.TestCase):
         self.assertEqual(
             350 * 1024,
             default['aws']['state_store']['player_max_bytes'],
+        )
+        self.assertEqual(
+            'https://sqs.test-region-1.amazonaws.com/'
+            '000000000000/test-action-queue',
+            default['aws']['task_queue']['queues']['action-queue']['url'],
+        )
+        self.assertEqual(
+            'arn:aws:sqs:test-region-1:000000000000:test-group-queue',
+            default['aws']['task_queue']['queues'][
+                'group-message-queue']['arn'],
+        )
+        self.assertEqual(
+            'test-scheduler-group',
+            default['aws']['task_queue']['scheduler']['group_name'],
         )
         self.assertEqual(
             '/secrets/service-account.json',

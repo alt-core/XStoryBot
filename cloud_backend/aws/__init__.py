@@ -3,6 +3,7 @@
 
 _object_store = None
 _state_store = None
+_task_queue = None
 
 
 def create_object_store():
@@ -35,7 +36,13 @@ def create_state_store():
 
 
 def create_task_queue():
-    return _not_implemented('TaskQueue')
+    """プロセス内で共有するAWS TaskQueueを返す。"""
+    global _task_queue
+
+    if _task_queue is None:
+        from cloud_backend.aws.task_queue import AwsTaskQueue
+        _task_queue = AwsTaskQueue()
+    return _task_queue
 
 
 def create_credential_source():
@@ -43,6 +50,7 @@ def create_credential_source():
 
 
 def _reset_for_test():
-    global _object_store, _state_store
+    global _object_store, _state_store, _task_queue
     _object_store = None
     _state_store = None
+    _task_queue = None

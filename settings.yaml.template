@@ -62,6 +62,17 @@
       private_bucket: !env XSBOT_AWS_PRIVATE_BUCKET
       media_bucket: !env XSBOT_AWS_MEDIA_BUCKET
       public_media_base_url: !env XSBOT_AWS_PUBLIC_MEDIA_BASE_URL
+    task_queue:
+      queues:
+        action-queue:
+          url: !env XSBOT_AWS_ACTION_QUEUE_URL
+          arn: !env XSBOT_AWS_ACTION_QUEUE_ARN
+        group-message-queue:
+          url: !env XSBOT_AWS_GROUP_MESSAGE_QUEUE_URL
+          arn: !env XSBOT_AWS_GROUP_MESSAGE_QUEUE_ARN
+      scheduler:
+        role_arn: !env XSBOT_AWS_SCHEDULER_ROLE_ARN
+        group_name: !env XSBOT_AWS_SCHEDULER_GROUP_NAME
     services:
       app:
         base_url: !env XSBOT_APP_BASE_URL
