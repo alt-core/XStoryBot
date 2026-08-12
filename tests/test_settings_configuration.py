@@ -18,14 +18,11 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 class SettingsTemplateTest(unittest.TestCase):
     def setUp(self):
         self.environment = {
-            'ADMIN_EMAIL': 'admin@example.invalid',
             'XSBOT_API_TOKEN': 'value',
             'GOOGLE_CLOUD_PROJECT': 'test-project',
             'GOOGLE_CLOUD_PROJECT_NUMBER': '1234567890',
             'GOOGLE_CLOUD_LOCATION': 'asia-northeast1',
             'GOOGLE_APPLICATION_CREDENTIALS': '/secrets/service-account.json',
-            'GOOGLE_FIREBASE_APP_ID': 'value',
-            'GOOGLE_FIREBASE_API_KEY': 'value',
             'XSBOT_STORAGE_BUCKET': 'test-storage-bucket',
             'XSBOT_APP_BASE_URL': 'https://app.example.invalid',
             'XSBOT_BUILDER_BASE_URL': 'https://builder.example.invalid',
@@ -51,8 +48,19 @@ class SettingsTemplateTest(unittest.TestCase):
             'XSBOT_AWS_SCHEDULER_ROLE_ARN': (
                 'arn:aws:iam::000000000000:role/test-scheduler-role'),
             'XSBOT_AWS_SCHEDULER_GROUP_NAME': 'test-scheduler-group',
+            'XSBOT_AWS_SCHEDULER_DLQ_ARN': (
+                'arn:aws:sqs:test-region-1:000000000000:test-dlq'),
+            'XSBOT_AWS_BUILD_CLUSTER': 'test-cluster',
+            'XSBOT_AWS_BUILD_TASK_DEFINITION': 'test-builder:1',
+            'XSBOT_AWS_BUILD_CONTAINER_NAME': 'xstorybot',
+            'XSBOT_AWS_BUILD_SUBNET_ID_1': 'subnet-0123456789abcdef0',
+            'XSBOT_AWS_BUILD_SUBNET_ID_2': 'subnet-0123456789abcdef1',
+            'XSBOT_AWS_BUILD_SECURITY_GROUP_ID': (
+                'sg-0123456789abcdef0'),
             'XSBOT_AWS_SHEETS_CREDENTIAL_PARAMETER': (
                 '/xstorybot/test/google-sheets-service-account'),
+            'XSBOT_AWS_ADMIN_AUTH_PARAMETER': (
+                '/xstorybot/test/admin-auth'),
             'LINE_CHANNEL_SECRET': 'value',
             'LINE_ACCESS_TOKEN': 'value',
             'SHEETS_ID': 'test-sheet-id',
@@ -131,13 +139,42 @@ class SettingsTemplateTest(unittest.TestCase):
             default['aws']['task_queue']['scheduler']['group_name'],
         )
         self.assertEqual(
+            {
+                'role_arn': (
+                    'arn:aws:iam::000000000000:role/test-scheduler-role'),
+                'group_name': 'test-scheduler-group',
+                'dead_letter_arn': (
+                    'arn:aws:sqs:test-region-1:000000000000:test-dlq'),
+                'maximum_event_age_seconds': 3600,
+                'maximum_retry_attempts': 3,
+            },
+            default['aws']['task_queue']['scheduler'],
+        )
+        self.assertEqual(
+            {
+                'cluster': 'test-cluster',
+                'task_definition': 'test-builder:1',
+                'container_name': 'xstorybot',
+                'subnet_ids': [
+                    'subnet-0123456789abcdef0',
+                    'subnet-0123456789abcdef1',
+                ],
+                'security_group_ids': ['sg-0123456789abcdef0'],
+            },
+            default['aws']['task_queue']['build'],
+        )
+        self.assertEqual(
             '/xstorybot/test/google-sheets-service-account',
             default['aws']['credential_source'][
                 'google_service_account_parameter'],
         )
         self.assertEqual(
-            '/secrets/service-account.json',
-            default['auth']['firebase_credentials_path'],
+            '/xstorybot/test/admin-auth',
+            default['aws']['credential_source']['admin_auth_parameter'],
+        )
+        self.assertEqual(
+            'XSBOT_ADMIN_AUTH_JSON',
+            default['auth']['admin_auth_json_env'],
         )
         self.assertEqual(
             '/secrets/sheets-service-account.json',
@@ -209,6 +246,9 @@ class SettingsModuleTest(unittest.TestCase):
         module_path = PROJECT_ROOT / 'settings.py'
         cloud_backend = types.ModuleType('cloud_backend')
         cloud_backend.configure = Mock(return_value='aws')
+        runtime_secrets = types.ModuleType(
+            'cloud_backend.aws.runtime_secrets')
+        runtime_secrets.load_runtime_secrets = Mock()
         config = {
             '*': {
                 'cloud': {'provider': 'gcp'},
@@ -238,7 +278,12 @@ class SettingsModuleTest(unittest.TestCase):
                     patch.dict(os.environ, {'XSBOT_CLOUD_PROVIDER': 'aws'}),
                     patch.dict(
                         sys.modules,
-                        {module_name: module, 'cloud_backend': cloud_backend},
+                        {
+                            module_name: module,
+                            'cloud_backend': cloud_backend,
+                            'cloud_backend.aws.runtime_secrets': (
+                                runtime_secrets),
+                        },
                     ),
                 ):
                     spec.loader.exec_module(module)
@@ -254,9 +299,18 @@ class SettingsModuleTest(unittest.TestCase):
             module.SERVICE_SETTINGS['app']['base_url'])
         cloud_backend.configure.assert_called_once_with(
             {'provider': 'aws'})
+        runtime_secrets.load_runtime_secrets.assert_called_once_with()
 
 
 class IgnoreConfigurationTest(unittest.TestCase):
+    def test_管理者認証の例示署名鍵はそのまま使えない(self):
+        line = next(
+            item for item in (PROJECT_ROOT / '.env.template').read_text(
+                encoding='utf-8').splitlines()
+            if item.startswith('XSBOT_ADMIN_AUTH_JSON='))
+
+        self.assertIn('"session_secret":"replace-me"', line)
+
     def test_netrc_is_excluded_from_all_contexts(self):
         for filename in ('.gitignore', '.dockerignore', '.gcloudignore'):
             lines = (PROJECT_ROOT / filename).read_text(encoding='utf-8').splitlines()
@@ -305,6 +359,10 @@ class DependencyConfigurationTest(unittest.TestCase):
         self.assertIn('Pillow~=12.3.0', requirements)
         self.assertIn('gunicorn~=23.0.0', requirements)
         self.assertIn('boto3~=1.43.53', requirements)
+        self.assertIn('argon2-cffi~=25.1.0', requirements)
+        self.assertIn('itsdangerous~=2.2.0', requirements)
+        self.assertFalse(any(
+            line.startswith('firebase-admin') for line in requirements))
         self.assertFalse(
             any(line.startswith('google-cloud-memcache') for line in requirements)
         )

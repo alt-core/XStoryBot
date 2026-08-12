@@ -6,10 +6,8 @@
 
   # 認証設定
   auth:
-    allowed_emails:
-      - !env ADMIN_EMAIL
+    admin_auth_json_env: XSBOT_ADMIN_AUTH_JSON
     api_token: !env XSBOT_API_TOKEN
-    firebase_credentials_path: !env GOOGLE_APPLICATION_CREDENTIALS
 
   # GCP設定
   gcp:
@@ -18,17 +16,6 @@
     location: !env GOOGLE_CLOUD_LOCATION
     credentials_path: !env GOOGLE_APPLICATION_CREDENTIALS
     storage_bucket: !env XSBOT_STORAGE_BUCKET
-    # Firebase設定
-    firebase:
-      app_id: !env GOOGLE_FIREBASE_APP_ID
-      storage_bucket: !format
-        - "{0}.firebasestorage.app"
-        - !env GOOGLE_CLOUD_PROJECT
-      api_key: !env GOOGLE_FIREBASE_API_KEY
-      auth_domain: !format
-        - "{0}.firebaseapp.com"
-        - !env GOOGLE_CLOUD_PROJECT
-      messaging_sender_id: !env GOOGLE_CLOUD_PROJECT_NUMBER
     # Cloud Run設定
     cloud_run:
       service: !env GOOGLE_CLOUD_PROJECT
@@ -54,6 +41,7 @@
     region: !env AWS_REGION
     credential_source:
       google_service_account_parameter: !env XSBOT_AWS_SHEETS_CREDENTIAL_PARAMETER
+      admin_auth_parameter: !env XSBOT_AWS_ADMIN_AUTH_PARAMETER
     state_store:
       state_table: !env XSBOT_AWS_STATE_TABLE
       group_task_table: !env XSBOT_AWS_GROUP_TASK_TABLE
@@ -75,6 +63,18 @@
       scheduler:
         role_arn: !env XSBOT_AWS_SCHEDULER_ROLE_ARN
         group_name: !env XSBOT_AWS_SCHEDULER_GROUP_NAME
+        dead_letter_arn: !env XSBOT_AWS_SCHEDULER_DLQ_ARN
+        maximum_event_age_seconds: 3600
+        maximum_retry_attempts: 3
+      build:
+        cluster: !env XSBOT_AWS_BUILD_CLUSTER
+        task_definition: !env XSBOT_AWS_BUILD_TASK_DEFINITION
+        container_name: !env XSBOT_AWS_BUILD_CONTAINER_NAME
+        subnet_ids:
+          - !env XSBOT_AWS_BUILD_SUBNET_ID_1
+          - !env XSBOT_AWS_BUILD_SUBNET_ID_2
+        security_group_ids:
+          - !env XSBOT_AWS_BUILD_SECURITY_GROUP_ID
     services:
       app:
         base_url: !env XSBOT_APP_BASE_URL

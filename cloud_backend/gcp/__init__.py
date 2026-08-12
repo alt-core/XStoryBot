@@ -27,6 +27,4 @@ def create_task_queue():
 def create_credential_source():
     from cloud_backend.gcp.credential_source import GcpCredentialSource
     import settings
-    return GcpCredentialSource(
-        auth_settings=settings.AUTH_SETTINGS,
-        gcp_settings=settings.GCP_SETTINGS)
+    return GcpCredentialSource(auth_settings=settings.AUTH_SETTINGS)

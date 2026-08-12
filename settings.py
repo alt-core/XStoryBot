@@ -18,9 +18,19 @@ def load_settings():
 
 # 設定の読み込み
 settings = load_settings()
+_provider_from_environment = os.getenv('XSBOT_CLOUD_PROVIDER')
+_configured_provider = (
+    _provider_from_environment
+    or settings.get('cloud', {}).get('provider', 'gcp')
+)
+
+# AWSではSecureString展開後に!envを解決し直す。GCPは従来どおり一度だけ読む。
+if _configured_provider == 'aws':
+    from cloud_backend.aws.runtime_secrets import load_runtime_secrets
+    load_runtime_secrets()
+    settings = load_settings()
 
 CLOUD_SETTINGS = dict(settings.get('cloud', {'provider': 'gcp'}))
-_provider_from_environment = os.getenv('XSBOT_CLOUD_PROVIDER')
 if _provider_from_environment:
     CLOUD_SETTINGS['provider'] = _provider_from_environment
 _cloud_provider = CLOUD_SETTINGS.get('provider', 'gcp')

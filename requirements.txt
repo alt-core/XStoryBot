@@ -8,7 +8,8 @@ google-api-python-client~=2.160.0
 requests==2.31.0
 twilio~=9.4.4
 pusher~=3.3.3
-firebase-admin~=6.6.0
+argon2-cffi~=25.1.0
+itsdangerous~=2.2.0
 Pillow~=12.3.0
 Arpeggio~=2.0.2
 PyYAML~=6.0.2

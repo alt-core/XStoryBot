@@ -1,6 +1,7 @@
 """GCP環境で既存の資格情報参照を提供する。"""
 
 import json
+import os
 from collections.abc import Mapping
 
 from cloud_backend.contracts import (
@@ -11,34 +12,27 @@ from cloud_backend.contracts import (
 
 
 class GcpCredentialSource(CredentialSource):
-    """ファイル参照とADCの既存契約をそのまま表現する。"""
+    """環境変数と既存のGoogle資格情報参照を扱う。"""
 
-    def __init__(self, auth_settings=None, gcp_settings=None):
+    def __init__(self, auth_settings=None, gcp_settings=None, environ=None):
         self._auth_settings = auth_settings
         self._gcp_settings = gcp_settings
+        self._environ = os.environ if environ is None else environ
 
-    def get_admin_auth_credential(self):
+    def get_admin_auth_json(self):
         auth_settings = self._auth_settings
         if auth_settings is None:
             import settings
             auth_settings = settings.AUTH_SETTINGS
-        return self.get_google_service_account(
-            auth_settings['firebase_credentials_path'])
-
-    def get_admin_auth_client_config(self):
-        gcp_settings = self._gcp_settings
-        if gcp_settings is None:
-            import settings
-            gcp_settings = settings.GCP_SETTINGS
-        firebase_settings = gcp_settings['firebase']
-        return {
-            'apiKey': firebase_settings['api_key'],
-            'authDomain': firebase_settings['auth_domain'],
-            'projectId': gcp_settings['project_id'],
-            'storageBucket': firebase_settings['storage_bucket'],
-            'messagingSenderId': firebase_settings['messaging_sender_id'],
-            'appId': firebase_settings['app_id'],
-        }
+        environment_name = auth_settings.get(
+            'admin_auth_json_env', 'XSBOT_ADMIN_AUTH_JSON')
+        if not isinstance(environment_name, str) or not environment_name:
+            raise CredentialSourceError(
+                '管理者認証JSONの環境変数名を設定してください')
+        value = self._environ.get(environment_name, '')
+        if not value:
+            raise CredentialSourceError('管理者認証JSONが設定されていません')
+        return value
 
     def get_google_service_account(self, reference=None, allow_default=False):
         if isinstance(reference, CredentialData):
@@ -59,6 +53,9 @@ class GcpCredentialSource(CredentialSource):
                     raise CredentialSourceError(
                         'Googleサービスアカウント資格情報はJSON objectで指定してください')
                 return CredentialData(inline_json=reference)
+            if reference.lstrip().startswith('['):
+                raise CredentialSourceError(
+                    'Googleサービスアカウント資格情報はJSON objectで指定してください')
             return CredentialData(file_path=reference)
         if reference is None:
             if allow_default:

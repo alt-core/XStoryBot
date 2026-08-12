@@ -14,6 +14,7 @@ from cloud_backend.contracts import CredentialData, CredentialSourceError
 
 
 PARAMETER_NAME = '/xstorybot/test/google-sheets-service-account'
+ADMIN_PARAMETER_NAME = '/xstorybot/test/admin-auth'
 SERVICE_ACCOUNT_JSON = json.dumps({
     'type': 'service_account',
     'project_id': 'test-project',
@@ -22,6 +23,7 @@ AWS_SETTINGS = {
     'region': 'ap-northeast-1',
     'credential_source': {
         'google_service_account_parameter': PARAMETER_NAME,
+        'admin_auth_parameter': ADMIN_PARAMETER_NAME,
     },
 }
 
@@ -126,6 +128,9 @@ class AwsCredentialSourceTest(unittest.TestCase):
             {'credential_source': {
                 'google_service_account_parameter': 123,
             }},
+            {'credential_source': {
+                'admin_auth_parameter': 123,
+            }},
         )
 
         for aws_settings in invalid_settings:
@@ -220,16 +225,68 @@ class AwsCredentialSourceTest(unittest.TestCase):
             credential.inline_json)['project_id'])
         self.assertEqual(2, client.get_parameter.call_count)
 
-    def test_管理画面認証は先行実装へ混ぜない(self):
+    def test_管理者認証JSONをSecureStringから取得してcacheする(self):
         client = Mock()
+        client.get_parameter.return_value = {
+            'Parameter': {
+                'Type': 'SecureString',
+                'Value': '{"users":{"admin":"hash"}}',
+            },
+        }
         source = AwsCredentialSource(AWS_SETTINGS, client=client)
 
-        with self.assertRaises(CredentialSourceError):
-            source.get_admin_auth_credential()
-        with self.assertRaises(CredentialSourceError):
-            source.get_admin_auth_client_config()
+        first = source.get_admin_auth_json()
+        second = source.get_admin_auth_json()
 
-        client.get_parameter.assert_not_called()
+        self.assertEqual('{"users":{"admin":"hash"}}', first)
+        self.assertEqual(first, second)
+        client.get_parameter.assert_called_once_with(
+            Name=ADMIN_PARAMETER_NAME,
+            WithDecryption=True,
+        )
+
+    def test_管理者Parameter未指定時だけ環境変数へfallbackする(self):
+        source = AwsCredentialSource(
+            {'region': 'ap-northeast-1'},
+            environ={'TEST_ADMIN_AUTH': '{"users":{}}'},
+            auth_settings={'admin_auth_json_env': 'TEST_ADMIN_AUTH'},
+        )
+
+        self.assertEqual('{"users":{}}', source.get_admin_auth_json())
+
+    def test_管理者Parameter取得失敗時は環境変数へfallbackしない(self):
+        client = Mock()
+        client.get_parameter.side_effect = ClientError(
+            {'Error': {'Code': 'ParameterNotFound', 'Message': 'missing'}},
+            'GetParameter',
+        )
+        source = AwsCredentialSource(
+            AWS_SETTINGS,
+            client=client,
+            environ={'XSBOT_ADMIN_AUTH_JSON': '{"users":{}}'},
+            auth_settings={},
+        )
+
+        with self.assertRaises(CredentialSourceError):
+            source.get_admin_auth_json()
+
+    def test_管理者認証ParameterはSecureStringだけ受け入れる(self):
+        invalid_responses = (
+            None,
+            {'Parameter': {'Type': 'String', 'Value': 'secret-value'}},
+            {'Parameter': {'Type': 'SecureString', 'Value': ''}},
+        )
+        for result in invalid_responses:
+            with self.subTest(result=result):
+                client = Mock()
+                client.get_parameter.return_value = result
+                source = AwsCredentialSource(AWS_SETTINGS, client=client)
+
+                with self.assertRaises(CredentialSourceError) as raised:
+                    source.get_admin_auth_json()
+
+                self.assertNotIn('secret-value', str(raised.exception))
+
 
     def test_provider内ではCredentialSourceを共有する(self):
         credential_source = Mock()
@@ -240,7 +297,9 @@ class AwsCredentialSourceTest(unittest.TestCase):
                 patch.dict(
                     sys.modules,
                     {'settings': types.SimpleNamespace(
-                        BACKEND_SETTINGS=AWS_SETTINGS)},
+                        BACKEND_SETTINGS=AWS_SETTINGS,
+                        AUTH_SETTINGS={'admin_auth_json_env': 'TEST_ADMIN'},
+                    )},
                 ),
                 patch(
                     'cloud_backend.aws.credential_source.AwsCredentialSource',
@@ -254,7 +313,10 @@ class AwsCredentialSourceTest(unittest.TestCase):
 
         self.assertIs(first, credential_source)
         self.assertIs(second, credential_source)
-        constructor.assert_called_once_with(AWS_SETTINGS)
+        constructor.assert_called_once_with(
+            AWS_SETTINGS,
+            auth_settings={'admin_auth_json_env': 'TEST_ADMIN'},
+        )
 
 
 if __name__ == '__main__':

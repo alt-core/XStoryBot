@@ -6,37 +6,31 @@ from cloud_backend.gcp.credential_source import GcpCredentialSource
 
 
 class GcpCredentialSourceTest(unittest.TestCase):
-    def test_Firebase資格情報は専用設定から取得する(self):
-        source = GcpCredentialSource({
-            'firebase_credentials_path': '/keys/firebase.json',
-        })
+    def test_管理者認証JSONを指定環境変数から取得する(self):
+        source = GcpCredentialSource(
+            auth_settings={'admin_auth_json_env': 'TEST_ADMIN_AUTH'},
+            environ={'TEST_ADMIN_AUTH': '{"users":{}}'},
+        )
 
-        credential = source.get_admin_auth_credential()
+        self.assertEqual('{"users":{}}', source.get_admin_auth_json())
 
-        self.assertEqual('/keys/firebase.json', credential.file_path)
-        self.assertIsNone(credential.inline_json)
-        self.assertFalse(credential.use_default)
+    def test_管理者認証JSONの未設定を拒否する(self):
+        source = GcpCredentialSource(
+            auth_settings={'admin_auth_json_env': 'TEST_ADMIN_AUTH'},
+            environ={},
+        )
 
-    def test_Firebase_client設定を既存と同じ形で返す(self):
-        source = GcpCredentialSource(gcp_settings={
-            'project_id': 'test-project',
-            'firebase': {
-                'api_key': 'test-api-key',
-                'auth_domain': 'test-project.firebaseapp.com',
-                'storage_bucket': 'test-project.firebasestorage.app',
-                'messaging_sender_id': '1234567890',
-                'app_id': 'test-app-id',
-            },
-        })
+        with self.assertRaises(CredentialSourceError):
+            source.get_admin_auth_json()
 
-        self.assertEqual(source.get_admin_auth_client_config(), {
-            'apiKey': 'test-api-key',
-            'authDomain': 'test-project.firebaseapp.com',
-            'projectId': 'test-project',
-            'storageBucket': 'test-project.firebasestorage.app',
-            'messagingSenderId': '1234567890',
-            'appId': 'test-app-id',
-        })
+    def test_既定の管理者認証環境変数名を使う(self):
+        source = GcpCredentialSource(
+            auth_settings={},
+            environ={'XSBOT_ADMIN_AUTH_JSON': '{"users":{"admin":"hash"}}'},
+        )
+
+        self.assertEqual(
+            '{"users":{"admin":"hash"}}', source.get_admin_auth_json())
 
     def test_GCPとSheetsの異なるpathをそのまま保持する(self):
         source = GcpCredentialSource()
@@ -74,13 +68,14 @@ class GcpCredentialSourceTest(unittest.TestCase):
             {'project_id': 'inline-test'}, json.loads(inline.inline_json))
         self.assertIsNone(inline.file_path)
 
-    def test_壊れたinline_JSONを秘密値なしの共通例外で拒否する(self):
-        invalid = '{"private_key":"secret-value"'
+    def test_不正なGoogle資格情報JSONを拒否する(self):
+        source = GcpCredentialSource()
 
-        with self.assertRaises(CredentialSourceError) as raised:
-            GcpCredentialSource().get_google_service_account(invalid)
-
-        self.assertNotIn('secret-value', str(raised.exception))
+        for invalid in ('{"private_key":"secret-value"', '["secret-value"]'):
+            with self.subTest(invalid=invalid):
+                with self.assertRaises(CredentialSourceError) as raised:
+                    source.get_google_service_account(invalid)
+                self.assertNotIn('secret-value', str(raised.exception))
 
     def test_不明な参照型を拒否する(self):
         with self.assertRaises(CredentialSourceError):

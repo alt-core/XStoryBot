@@ -49,8 +49,17 @@
 <div id="auth-dialog" class="show">
     <div id="auth-box">
         <h2>ログインが必要です</h2>
-        <p>ダッシュボードにアクセスするには、Googleアカウントでログインしてください。</p>
-        <button id="login-button" class="btn btn-primary">Googleでログイン</button>
+        <form id="login-form">
+            <div class="form-group text-left">
+                <label for="login-username">ユーザー名</label>
+                <input id="login-username" name="username" type="text" class="form-control" autocomplete="username" required>
+            </div>
+            <div class="form-group text-left">
+                <label for="login-password">パスワード</label>
+                <input id="login-password" name="password" type="password" class="form-control" autocomplete="current-password" required>
+            </div>
+            <button type="submit" id="login-button" class="btn btn-primary">ログイン</button>
+        </form>
         <p id="auth-error" class="text-danger mt-3" role="alert"></p>
     </div>
 </div>
@@ -357,21 +366,14 @@
     <p>&copy; alt-core 2018</p>
 </footer>
 
-<!-- Firebase SDK -->
-<script src="https://www.gstatic.com/firebasejs/11.3.0/firebase-app-compat.js"></script>
-<script src="https://www.gstatic.com/firebasejs/11.3.0/firebase-auth-compat.js"></script>
-
 <script src="https://code.jquery.com/jquery-3.7.1.min.js" integrity="sha256-/JqT3SQfawRcv/BIHPThkBvs0OEvtFFmqPF/lYI/Cxo=" crossorigin="anonymous"></script>
 <script src="https://cdn.jsdelivr.net/npm/popper.js@1.16.1/dist/umd/popper.min.js" integrity="sha384-9/reFTGAW83EW2RDu2S0VKaIzap3H66lZH81PoYlFhbGU+6BZp6G7niu735Sk7lN" crossorigin="anonymous"></script>
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@4.6.2/dist/js/bootstrap.min.js" integrity="sha384-+sLIOodYLS7CIrQpBjl+C7nPvqq+FbNUBDunl/OZv93DB7Ln/533i8e/mZXLi/P+" crossorigin="anonymous"></script>
 
 <script type="text/javascript">
-    // Firebase設定
-    const firebaseConfig = {{!firebase_config_json}};
     const initialBotName = {{!initial_bot_name_json}};
-    firebase.initializeApp(firebaseConfig);
 
-    let idToken = null;
+    let csrfToken = null;
     let pollingInterval = null;
     let lastBuildTaskId = null;
     let botName = null;
@@ -437,10 +439,7 @@
         const response = await $.ajax({
             url: '/dashboard/api/groups',
             type: 'GET',
-            dataType: 'json',
-            headers: {
-                'Authorization': 'Bearer ' + idToken
-            }
+            dataType: 'json'
         });
         renderGroups(response.groups || []);
     }
@@ -449,10 +448,7 @@
         const response = await $.ajax({
             url: '/dashboard/api/config',
             type: 'GET',
-            dataType: 'json',
-            headers: {
-                'Authorization': 'Bearer ' + idToken
-            }
+            dataType: 'json'
         });
         const bots = response.data.bots || [];
         if (bots.length === 0) {
@@ -469,6 +465,7 @@
         renderBotNavigation(bots);
         $('#bot-description').html(selectedBot.description || '');
         $('#user-email').text(response.data.user_email || '');
+        csrfToken = response.data.csrf_token || null;
 
         try {
             await loadGroups();
@@ -480,65 +477,52 @@
         loadMemberCounts();
     }
 
-    // 認証状態の監視
-    firebase.auth().onAuthStateChanged(async function(user) {
-        if (!user) {
-            idToken = null;
-            $('#auth-dialog').addClass('show');
-            $('.main-content').removeClass('show');
-            return;
-        }
-
+    async function initializeDashboard() {
         try {
-            idToken = await user.getIdToken(true);
             await loadDashboardConfig();
             $('#auth-error').text('');
             $('#auth-dialog').removeClass('show');
             $('.main-content').addClass('show');
         } catch (error) {
-            console.error('Dashboard initialization failed:', error);
-            $('#auth-error').text(error.message || 'ダッシュボードの初期化に失敗しました');
-            await firebase.auth().signOut();
+            csrfToken = null;
+            $('#auth-dialog').addClass('show');
+            $('.main-content').removeClass('show');
         }
-    });
+    }
 
-    // ログインボタン
-    $('#login-button').click(async function() {
+    $('#login-form').submit(async function(event) {
+        event.preventDefault();
         $('#auth-error').text('');
         try {
-            const provider = new firebase.auth.GoogleAuthProvider();
-            await firebase.auth().signInWithPopup(provider);
-        } catch (error) {
-            $('#auth-error').text(error.message || 'ログインに失敗しました');
-        }
-    });
-
-    // ログアウトリンク
-    $('#logout-link').click(function() {
-        firebase.auth().signOut();
-    });
-
-    // APIリクエスト前にトークンを更新する関数
-    function ensureValidToken(callback) {
-        const currentUser = firebase.auth().currentUser;
-        if (!currentUser) {
-            console.error('No user is signed in');
-            alert('認証されていません。ログインしてください。');
-            return;
-        }
-
-        console.log('Refreshing token before API call');
-        currentUser.getIdToken(true)
-            .then(refreshedToken => {
-                console.log('Token refreshed successfully');
-                idToken = refreshedToken;
-                callback(refreshedToken);
-            })
-            .catch(error => {
-                console.error('Error refreshing token:', error);
-                alert('認証トークンの更新に失敗しました: ' + error.message);
+            await $.ajax({
+                url: '/dashboard/login',
+                type: 'POST',
+                dataType: 'json',
+                data: {
+                    username: $('#login-username').val(),
+                    password: $('#login-password').val()
+                }
             });
-    }
+            $('#login-password').val('');
+            await initializeDashboard();
+        } catch (error) {
+            $('#auth-error').text('ユーザー名またはパスワードが正しくありません');
+        }
+    });
+
+    $('#logout-link').click(async function(event) {
+        event.preventDefault();
+        if (csrfToken) {
+            await $.ajax({
+                url: '/dashboard/logout',
+                type: 'POST',
+                headers: {'X-CSRF-Token': csrfToken}
+            });
+        }
+        csrfToken = null;
+        $('.main-content').removeClass('show');
+        $('#auth-dialog').addClass('show');
+    });
 
     // グループメンバーカウントの取得
     function loadMemberCounts() {
@@ -553,9 +537,6 @@
             url: `/dashboard/api/group_members/${groupId}`,
             type: 'GET',
             dataType: 'json',
-            headers: {
-                'Authorization': 'Bearer ' + idToken
-            },
             success: function(data) {
                 if (data.code === 200 && data.data) {
                     $(`#member-count-${groupId}`).html(`<span class="badge badge-primary">${data.data.count}名</span>`);
@@ -571,32 +552,20 @@
 
     // APIリクエスト関数
     function request_build(endpoint, options) {
-        if (!idToken) {
+        if (!csrfToken) {
             alert('認証が必要です');
             return;
         }
         var textarea = $("#build_result")
         textarea.val('反映作業を開始します...');
 
-        var currentUser = firebase.auth().currentUser;
-        if (!currentUser) {
-            alert('ユーザー情報が取得できません');
-            return;
-        }
-
-        // idToken を強制更新してからリクエストを送信
-        currentUser.getIdToken(true).then(function(refreshedToken) {
-            idToken = refreshedToken;
-            $.ajax({
-                crossDomain: true,
-                url: endpoint,
-                type: 'POST',
-                dataType: 'json',
-                headers: {
-                    'Authorization': 'Bearer ' + idToken
-                },
-                data: options
-            })
+        $.ajax({
+            url: endpoint,
+            type: 'POST',
+            dataType: 'json',
+            headers: {'X-CSRF-Token': csrfToken},
+            data: options
+        })
             .done(function(resp) {
                 console.log(resp);
                 if (resp.message === 'Queued') {
@@ -611,10 +580,7 @@
                         $.ajax({
                             url: '/dashboard/last_build_result/' + botName,
                             type: 'GET',
-                            dataType: 'json',
-                            headers: {
-                                'Authorization': 'Bearer ' + idToken
-                            }
+                            dataType: 'json'
                         }).done(function(result) {
                             console.log(result);
                             if (result.task_id === task_id) {
@@ -662,10 +628,6 @@
                     }
                     textarea.val('反映作業の開始に失敗しました\n' + errorMessage);
                 }
-            });
-        }).catch(function(error) {
-            console.error('トークンの更新に失敗しました', error);
-            alert('認証エラーが発生しました');
         });
     }
 
@@ -701,17 +663,14 @@
     }
 
     function updateTaskList() {
-        if (!idToken) {
-            console.error('Cannot update task list: No idToken available');
+        if (!csrfToken) {
+            console.error('Cannot update task list: No session available');
             return;
         }
 
         $.ajax({
             url: `/dashboard/api/bots/${botName}/group_tasks`,
             type: 'GET',
-            headers: {
-                'Authorization': 'Bearer ' + idToken
-            },
             data: {
                 limit: 200
             }
@@ -818,10 +777,7 @@
     function showTaskDetail(taskId) {
         $.ajax({
             url: `/dashboard/api/group_tasks/${taskId}`,
-            type: 'GET',
-            headers: {
-                'Authorization': 'Bearer ' + idToken
-            }
+            type: 'GET'
         }).done(function(resp) {
             const task = resp.data.task;
 
@@ -905,9 +861,7 @@
         $.ajax({
             url: `/dashboard/api/group_tasks/${taskId}/abort`,
             type: 'POST',
-            headers: {
-                'Authorization': 'Bearer ' + idToken
-            }
+            headers: {'X-CSRF-Token': csrfToken}
         }).done(function(resp) {
             alert(`タスク ${taskId} を中止しました`);
             updateTaskList();
@@ -926,9 +880,7 @@
         $.ajax({
             url: `/dashboard/api/group_tasks/${taskId}/retry_failed`,
             type: 'POST',
-            headers: {
-                'Authorization': 'Bearer ' + idToken
-            }
+            headers: {'X-CSRF-Token': csrfToken}
         }).done(function(resp) {
             alert(`失敗したメンバーへの再送信タスクを作成しました。新しいタスクID: ${resp.data.new_task_id}`);
             updateTaskList();
@@ -949,12 +901,9 @@
             if ($('#task-detail-modal').is(':visible')) {
                 const taskId = $('#detail-task-id').text();
                 if (taskId) {
-                    $.ajax({
-                        url: `/dashboard/api/group_tasks/${taskId}`,
-                        type: 'GET',
-                        headers: {
-                            'Authorization': 'Bearer ' + idToken
-                        }
+                        $.ajax({
+                            url: `/dashboard/api/group_tasks/${taskId}`,
+                            type: 'GET'
                     }).done(function(resp) {
                         const task = resp.data.task;
 
@@ -1028,6 +977,8 @@
     }
 
     $(function(){
+        initializeDashboard();
+
         function buildEndpoint() {
             return `/dashboard/build_async/${botName}`;
         }
@@ -1081,7 +1032,7 @@
                     members: membersStr
                 }),
                 headers: {
-                    'Authorization': 'Bearer ' + idToken
+                    'X-CSRF-Token': csrfToken
                 },
                 success: function(data) {
                     if (data.code === 200) {
@@ -1122,9 +1073,6 @@
             url: '/dashboard/api/group_members/' + groupId,
             type: 'GET',
             dataType: 'json',
-            headers: {
-                    'Authorization': 'Bearer ' + idToken
-                },
                 success: function(data) {
                     if (data.code === 200 && data.data) {
                         const members = data.data.members;
@@ -1195,7 +1143,7 @@
                     contentType: 'application/json',
                     data: JSON.stringify(taskData),
                     headers: {
-                        'Authorization': 'Bearer ' + idToken
+                        'X-CSRF-Token': csrfToken
                     }
                 }).done(function(resp) {
                     alert(resp.message || `タスク ${resp.data.task_id} を作成しました`);
@@ -1251,7 +1199,7 @@
                         member_id: memberId
                     }),
                     headers: {
-                        'Authorization': 'Bearer ' + idToken
+                        'X-CSRF-Token': csrfToken
                     }
                 }).done(function(resp) {
                     if (resp.code === 200) {

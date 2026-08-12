@@ -51,6 +51,7 @@ def load_dashboard(initialize_side_effect=None):
     """外部サービスを初期化せずにdashboard moduleを読み込む。"""
     settings = types.ModuleType('settings')
     settings.DEPLOY_ENV = 'prod'
+    settings.CLOUD_SETTINGS = {'provider': 'gcp'}
     settings.BOTS = {
         'zeta': {
             'name': 'あいうBot',
@@ -63,40 +64,38 @@ def load_dashboard(initialize_side_effect=None):
     }
     settings.GCP_SETTINGS = {
         'project_id': 'public-test-project',
-        'firebase': {
-            'api_key': 'firebase-public-api-key',
-            'auth_domain': 'example.firebaseapp.com',
-            'storage_bucket': 'example.appspot.com',
-            'messaging_sender_id': '1234567890',
-            'app_id': 'firebase-app-id',
-        },
         'services': {
             'builder': {'base_url': 'http://builder.example.test'},
         },
     }
-    settings.AUTH_SETTINGS = {
-        'firebase_credentials_path': '/keys/firebase.json',
-    }
+    settings.AUTH_SETTINGS = {'admin_auth_json_env': 'TEST_ADMIN_AUTH'}
     settings.SERVICE_SETTINGS = settings.GCP_SETTINGS['services']
 
     auth_middleware = types.ModuleType('auth_middleware')
     auth_middleware.initialize = Mock(side_effect=initialize_side_effect)
 
-    def auth_required():
+    def auth_required(state_changing=False):
         def decorator(func):
             @wraps(func)
             def wrapper(*args, **kwargs):
                 from bottle import request
-                request.firebase_user = {
-                    'email': 'admin@example.com',
-                    'uid': 'admin-1',
+                request.dashboard_user = {
+                    'username': 'admin',
+                    'csrf_token': 'csrf-token',
                 }
                 return func(*args, **kwargs)
             wrapper.dashboard_auth_required = True
+            wrapper.dashboard_state_changing = state_changing
             return wrapper
         return decorator
 
     auth_middleware.auth_required = auth_required
+    auth_middleware.require_same_origin = Mock()
+    auth_middleware.verify_credentials = Mock(return_value=True)
+    auth_middleware.create_session = Mock(
+        return_value=('signed-session', 'csrf-token'))
+    auth_middleware.set_session_cookie = Mock()
+    auth_middleware.clear_session_cookie = Mock()
 
     main = types.ModuleType('main')
     main.get_bot = Mock(return_value=types.SimpleNamespace(name='Bot Runtime'))
@@ -236,9 +235,9 @@ class DashboardTest(unittest.TestCase):
     def setUp(self):
         self.module, self.dependencies = load_dashboard()
 
-    def test_firebase_initialization_failure_prevents_dashboard_import(self):
-        with self.assertRaisesRegex(FileNotFoundError, 'Firebase credential'):
-            load_dashboard(FileNotFoundError('Firebase credential is missing'))
+    def test_認証秘密値を読まずにdashboardをimportする(self):
+        self.dependencies.auth_middleware.initialize.assert_called_once_with()
+        self.dependencies.auth_middleware.verify_credentials.assert_not_called()
 
     def test_public_shell_does_not_embed_bot_group_or_private_values(self):
         self.dependencies.settings.BOTS = {
@@ -278,8 +277,9 @@ class DashboardTest(unittest.TestCase):
             payload['data']['bots'][0]['description'],
             '<em>本番環境</em>',
         )
-        self.assertEqual(payload['data']['user_email'], 'admin@example.com')
-        info.assert_called_once_with('Dashboard accessed by: admin@example.com')
+        self.assertEqual(payload['data']['user_email'], 'admin')
+        self.assertEqual(payload['data']['csrf_token'], 'csrf-token')
+        info.assert_called_once_with('Dashboard accessed by: admin')
 
     def test_every_management_api_is_authenticated_and_no_duplicate_routes(self):
         self.dependencies.auth_middleware.initialize.assert_called_once_with()
@@ -311,6 +311,58 @@ class DashboardTest(unittest.TestCase):
         rules = {route.rule for route in self.module.app.routes}
         self.assertFalse(any('/cancel_task/' in rule for rule in rules))
         self.assertFalse(any(rule.endswith('/execute') for rule in rules))
+
+    def test_状態変更APIだけCSRF検証付き認証にする(self):
+        expected_state_changing = {
+            '/dashboard/logout',
+            '/dashboard/build_async/<bot_name>',
+            '/dashboard/api/remove_member',
+            '/dashboard/api/add_members',
+            '/dashboard/api/create_group_message_task',
+            '/dashboard/api/group_tasks/<task_id>/abort',
+            '/dashboard/api/group_tasks/<task_id>/retry_failed',
+        }
+
+        actual = {
+            route.rule for route in self.module.app.routes
+            if getattr(route.callback, 'dashboard_state_changing', False)
+        }
+
+        self.assertEqual(expected_state_changing, actual)
+
+    def test_loginはOrigin確認後に署名Cookieを発行する(self):
+        status, headers, body = call_wsgi(
+            self.module.app,
+            'POST',
+            '/dashboard/login',
+            params={'username': 'admin', 'password': 'secret'},
+        )
+
+        self.assertEqual(200, status)
+        self.assertEqual('no-store', headers['Cache-Control'])
+        self.assertEqual('Success', json.loads(body)['result'])
+        self.dependencies.auth_middleware.require_same_origin.assert_called_once_with()
+        self.dependencies.auth_middleware.verify_credentials.assert_called_once_with(
+            'admin', 'secret')
+        self.dependencies.auth_middleware.create_session.assert_called_once_with(
+            'admin')
+        self.dependencies.auth_middleware.set_session_cookie.assert_called_once_with(
+            'signed-session')
+
+    def test_login失敗は同じmessageでCookieを発行しない(self):
+        self.dependencies.auth_middleware.verify_credentials.return_value = False
+
+        status, headers, body = call_wsgi(
+            self.module.app,
+            'POST',
+            '/dashboard/login',
+            params={'username': 'unknown', 'password': 'wrong'},
+        )
+
+        self.assertEqual(401, status)
+        self.assertEqual('no-store', headers['Cache-Control'])
+        self.assertIn('ユーザー名またはパスワードが正しくありません', body)
+        self.dependencies.auth_middleware.set_session_cookie.assert_not_called()
 
     def test_group_list_keeps_case_insensitive_id_order(self):
         status, _, body = call_wsgi(
@@ -385,6 +437,43 @@ class DashboardTest(unittest.TestCase):
             },
             headers={'X-API-Token': 'shared-api-token'},
         )
+
+    def test_AWSではFargateタスクを開始し既存のQueued応答を返す(self):
+        self.dependencies.settings.CLOUD_SETTINGS = {'provider': 'aws'}
+        task_id = '12345678-1234-4abc-8def-1234567890ab'
+        launcher = Mock()
+        launcher.launch.return_value = task_id
+
+        with (
+            patch.object(self.module.uuid, 'uuid4', return_value=task_id),
+            patch.object(
+                self.module,
+                '_create_aws_build_task_launcher',
+                return_value=launcher,
+            ),
+        ):
+            status, _, body = call_wsgi(
+                self.module.app,
+                'POST',
+                '/dashboard/build_async/zeta',
+                params={'skip_image': 'true', 'force': 'false'},
+            )
+
+        self.assertEqual(200, status)
+        self.assertEqual({
+            'code': 200,
+            'result': 'Success',
+            'message': 'Queued',
+            'task_id': task_id,
+        }, json.loads(body))
+        launcher.launch.assert_called_once_with(
+            task_id=task_id,
+            bot_name='zeta',
+            skip_image=True,
+            force=False,
+        )
+        self.dependencies.task_client.create_task.assert_not_called()
+        self.dependencies.requests.post.assert_not_called()
 
     def test_missing_last_build_result_is_200_failure_sentinel(self):
         status, headers, body = call_wsgi(
@@ -519,10 +608,16 @@ class DashboardTemplateTest(unittest.TestCase):
             "url: '/dashboard/last_build_result/' + botName,")
         polling_end = self.template.index(
             '}).done(function(result)', polling_start)
-        self.assertIn(
-            "'Authorization': 'Bearer ' + idToken",
-            self.template[polling_start:polling_end],
-        )
+        self.assertNotIn('X-CSRF-Token',
+                         self.template[polling_start:polling_end])
+
+    def test_template_uses_cookie_auth_and_csrf_for_mutations(self):
+        self.assertNotIn('firebase', self.template.lower())
+        self.assertNotIn('Authorization', self.template)
+        self.assertNotIn('idToken', self.template)
+        self.assertIn("url: '/dashboard/login'", self.template)
+        self.assertIn("url: '/dashboard/logout'", self.template)
+        self.assertIn("'X-CSRF-Token': csrfToken", self.template)
 
     def test_template_contains_no_server_rendered_bot_or_group_data(self):
         self.assertNotIn('bot_list', self.template)

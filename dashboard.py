@@ -3,11 +3,11 @@ from bottle import request, response, Bottle, abort, view, static_file, HTTPErro
 import logging
 import requests
 import json
+import uuid
 from datetime import datetime
 
 import settings
 import auth_middleware
-from cloud_backend import create_credential_source
 import main
 import task_client
 import utility
@@ -20,15 +20,15 @@ app = Bottle()
 
 
 auth_middleware.initialize()
-_credential_source = create_credential_source()
 
 
 def abort_json(code, msg):
     abort(code, utility.make_error_json(code, msg))
 
-def _firebase_config_json():
-    config = _credential_source.get_admin_auth_client_config()
-    return json.dumps(config, ensure_ascii=False).replace('<', '\\u003c')
+def _create_aws_build_task_launcher():
+    # GCP実行時にAWSのビルド実装を読み込まないよう遅延importする。
+    from cloud_backend.aws.build_task_launcher import AwsBuildTaskLauncher
+    return AwsBuildTaskLauncher(settings.BACKEND_SETTINGS)
 
 
 @app.get('/dashboard/')
@@ -38,8 +38,35 @@ def dashboard(bot_name=None):
     return {
         'initial_bot_name_json': json.dumps(
             bot_name or '', ensure_ascii=False).replace('<', '\\u003c'),
-        'firebase_config_json': _firebase_config_json(),
     }
+
+
+@app.post('/dashboard/login')
+def dashboard_login():
+    response.set_header('Cache-Control', 'no-store')
+    auth_middleware.require_same_origin()
+    username = request.forms.getunicode('username') or ''
+    password = request.forms.getunicode('password') or ''
+    if not auth_middleware.verify_credentials(username, password):
+        logging.warning('管理画面へのログインに失敗しました')
+        raise HTTPError(
+            401,
+            utility.make_error_json(
+                401, 'ユーザー名またはパスワードが正しくありません'),
+            Cache_Control='no-store',
+        )
+    session_value, _ = auth_middleware.create_session(username)
+    auth_middleware.set_session_cookie(session_value)
+    response.set_header('Content-Type', 'application/json; charset=utf-8')
+    return utility.make_ok_json('ログインしました')
+
+
+@app.post('/dashboard/logout')
+@auth_middleware.auth_required(state_changing=True)
+def dashboard_logout():
+    auth_middleware.clear_session_cookie()
+    response.set_header('Content-Type', 'application/json; charset=utf-8')
+    return utility.make_ok_json('ログアウトしました')
 
 
 @app.get('/dashboard/api/config')
@@ -54,11 +81,12 @@ def api_config():
         for bot_id, bot_settings in sorted(
             settings.BOTS.items(), key=lambda item: item[1]['name'])
     ]
-    user = request.firebase_user
-    logging.info(f"Dashboard accessed by: {user.get('email', '')}")
+    user = request.dashboard_user
+    logging.info(f"Dashboard accessed by: {user.get('username', '')}")
     return utility.make_ok_json('設定を取得しました', {
         'bots': bots,
-        'user_email': user.get('email', ''),
+        'user_email': user.get('username', ''),
+        'csrf_token': user.get('csrf_token', ''),
     })
 
 
@@ -68,7 +96,7 @@ def serve_static(filepath):
 
 @app.get('/dashboard/build_async/<bot_name>')
 @app.post('/dashboard/build_async/<bot_name>')
-@auth_middleware.auth_required()
+@auth_middleware.auth_required(state_changing=True)
 def api_build_async(bot_name):
     bot = main.get_bot(bot_name)
     if not bot:
@@ -93,20 +121,28 @@ def api_build_async(bot_name):
             headers={'X-API-Token': auth.get_api_token()}
         )
         return builder_response.text
+    elif settings.CLOUD_SETTINGS.get('provider', 'gcp') == 'aws':
+        task_id = str(uuid.uuid4())
+        task_id = _create_aws_build_task_launcher().launch(
+            task_id=task_id,
+            bot_name=bot_name,
+            skip_image=(options.get('skip_image') == 'true'),
+            force=(options.get('force') == 'true'),
+        )
     else:
         task_id = task_client.create_task(
             queue_name='build-queue',
             url=url,
             params=options
         )
-        logging.info(f"enqueue a build task: {task_id}, options: {options}")
 
-        return json.dumps({
-            'code': 200,
-            'result': 'Success',
-            'message': 'Queued',
-            'task_id': task_id
-        }, ensure_ascii=False)
+    logging.info(f"enqueue a build task: {task_id}, options: {options}")
+    return json.dumps({
+        'code': 200,
+        'result': 'Success',
+        'message': 'Queued',
+        'task_id': task_id
+    }, ensure_ascii=False)
 
 @app.get('/dashboard/last_build_result/<bot_name>')
 @auth_middleware.auth_required()
@@ -172,7 +208,7 @@ def api_get_group_members(group_id):
 
 
 @app.post('/dashboard/api/remove_member')
-@auth_middleware.auth_required()
+@auth_middleware.auth_required(state_changing=True)
 def api_remove_member():
     response.set_header('Content-Type', 'application/json; charset=utf-8')
 
@@ -212,7 +248,7 @@ def api_remove_member():
 
 
 @app.post('/dashboard/api/add_members')
-@auth_middleware.auth_required()
+@auth_middleware.auth_required(state_changing=True)
 def api_add_members():
     response.set_header('Content-Type', 'application/json; charset=utf-8')
 
@@ -271,7 +307,7 @@ def api_add_members():
         abort_json(500, f'Failed to add member: {str(e)}')
 
 @app.post('/dashboard/api/create_group_message_task')
-@auth_middleware.auth_required()
+@auth_middleware.auth_required(state_changing=True)
 def api_create_group_message_task():
     response.set_header('Content-Type', 'application/json; charset=utf-8')
 
@@ -450,7 +486,7 @@ def api_get_group_task(task_id):
 
 
 @app.post('/dashboard/api/group_tasks/<task_id>/abort')
-@auth_middleware.auth_required()
+@auth_middleware.auth_required(state_changing=True)
 def api_abort_group_task(task_id):
     response.set_header('Content-Type', 'application/json; charset=utf-8')
 
@@ -475,7 +511,7 @@ def api_abort_group_task(task_id):
 
 
 @app.post('/dashboard/api/group_tasks/<task_id>/retry_failed')
-@auth_middleware.auth_required()
+@auth_middleware.auth_required(state_changing=True)
 def api_retry_failed_group_task(task_id):
     response.set_header('Content-Type', 'application/json; charset=utf-8')
 

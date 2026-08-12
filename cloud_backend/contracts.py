@@ -231,11 +231,7 @@ class CredentialSource(ABC):
     """管理者認証とGoogle資格情報を取得する境界。"""
 
     @abstractmethod
-    def get_admin_auth_credential(self):
-        raise NotImplementedError
-
-    @abstractmethod
-    def get_admin_auth_client_config(self):
+    def get_admin_auth_json(self):
         raise NotImplementedError
 
     @abstractmethod

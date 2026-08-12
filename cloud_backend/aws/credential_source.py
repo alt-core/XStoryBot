@@ -1,6 +1,7 @@
 """AWS Systems Manager Parameter Storeから資格情報を取得する。"""
 
 import json
+import os
 from collections.abc import Mapping
 
 import boto3
@@ -14,9 +15,10 @@ from cloud_backend.contracts import (
 
 
 class AwsCredentialSource(CredentialSource):
-    """Google Sheets用SecureStringとローカル用参照を扱う。"""
+    """管理者認証とGoogle Sheets用SecureStringを扱う。"""
 
-    def __init__(self, aws_settings=None, client=None, client_factory=None):
+    def __init__(self, aws_settings=None, client=None, client_factory=None,
+                 environ=None, auth_settings=None):
         if aws_settings is None:
             import settings
             aws_settings = settings.BACKEND_SETTINGS
@@ -35,9 +37,19 @@ class AwsCredentialSource(CredentialSource):
 
         self._region = aws_settings.get('region') or None
         self._google_service_account_parameter = parameter_name
+        admin_parameter = credential_settings.get('admin_auth_parameter', '')
+        if admin_parameter is None:
+            admin_parameter = ''
+        if not isinstance(admin_parameter, str):
+            raise ValueError(
+                'AWS管理者認証JSONのParameter名は文字列で指定してください')
+        self._admin_auth_parameter = admin_parameter
+        self._auth_settings = auth_settings
+        self._environ = os.environ if environ is None else environ
         self._client_instance = client
         self._client_factory = client_factory or boto3.client
         self._parameter_cache = {}
+        self._secure_string_cache = {}
 
     @staticmethod
     def _raise_source_error(error):
@@ -102,6 +114,32 @@ class AwsCredentialSource(CredentialSource):
         self._parameter_cache[parameter_name] = credential
         return credential
 
+    def _load_secure_string(self, parameter_name, description):
+        cached = self._secure_string_cache.get(parameter_name)
+        if cached is not None:
+            return cached
+        try:
+            result = self._client().get_parameter(
+                Name=parameter_name,
+                WithDecryption=True,
+            )
+        except Exception as error:
+            self._raise_source_error(error)
+        if not isinstance(result, Mapping):
+            raise CredentialSourceError(
+                'AWS Parameter Storeの資格情報応答が不正です')
+        parameter = result.get('Parameter')
+        if not isinstance(parameter, Mapping):
+            raise CredentialSourceError(
+                'AWS Parameter Storeの資格情報応答が不正です')
+        if parameter.get('Type') != 'SecureString':
+            raise CredentialSourceError(f'{description}はSecureStringで指定してください')
+        value = parameter.get('Value')
+        if not isinstance(value, str) or not value:
+            raise CredentialSourceError(f'{description}が設定されていません')
+        self._secure_string_cache[parameter_name] = value
+        return value
+
     @classmethod
     def _normalize_reference(cls, reference, allow_default):
         if isinstance(reference, CredentialData):
@@ -123,11 +161,23 @@ class AwsCredentialSource(CredentialSource):
         raise CredentialSourceError(
             '資格情報の参照はファイルパス、JSON、またはCredentialDataで指定してください')
 
-    def get_admin_auth_credential(self):
-        raise CredentialSourceError('AWSの共通フォーム認証はまだ実装されていません')
-
-    def get_admin_auth_client_config(self):
-        raise CredentialSourceError('AWSの共通フォーム認証はまだ実装されていません')
+    def get_admin_auth_json(self):
+        if self._admin_auth_parameter:
+            return self._load_secure_string(
+                self._admin_auth_parameter, '管理者認証JSON')
+        auth_settings = self._auth_settings
+        if auth_settings is None:
+            import settings
+            auth_settings = settings.AUTH_SETTINGS
+        environment_name = auth_settings.get(
+            'admin_auth_json_env', 'XSBOT_ADMIN_AUTH_JSON')
+        if not isinstance(environment_name, str) or not environment_name:
+            raise CredentialSourceError(
+                '管理者認証JSONの環境変数名を設定してください')
+        value = self._environ.get(environment_name, '')
+        if not value:
+            raise CredentialSourceError('管理者認証JSONが設定されていません')
+        return value
 
     def get_google_service_account(self, reference=None, allow_default=False):
         if self._google_service_account_parameter:

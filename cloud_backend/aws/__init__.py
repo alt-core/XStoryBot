@@ -49,7 +49,10 @@ def create_credential_source():
     if _credential_source is None:
         import settings
         from cloud_backend.aws.credential_source import AwsCredentialSource
-        _credential_source = AwsCredentialSource(settings.BACKEND_SETTINGS)
+        _credential_source = AwsCredentialSource(
+            settings.BACKEND_SETTINGS,
+            auth_settings=settings.AUTH_SETTINGS,
+        )
     return _credential_source
 
 
