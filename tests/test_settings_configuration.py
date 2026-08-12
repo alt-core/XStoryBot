@@ -34,6 +34,10 @@ class SettingsTemplateTest(unittest.TestCase):
             'XSBOT_AWS_MEDIA_BUCKET': 'test-media-bucket',
             'XSBOT_AWS_PUBLIC_MEDIA_BASE_URL': (
                 'https://distribution.example.invalid'),
+            'XSBOT_AWS_STATE_TABLE': 'test-state-table',
+            'XSBOT_AWS_GROUP_TASK_TABLE': 'test-group-task-table',
+            'XSBOT_AWS_GROUP_TASK_INDEX': 'test-group-task-index',
+            'XSBOT_AWS_CACHE_TABLE': 'test-cache-table',
             'LINE_CHANNEL_SECRET': 'value',
             'LINE_ACCESS_TOKEN': 'value',
             'SHEETS_ID': 'test-sheet-id',
@@ -84,6 +88,18 @@ class SettingsTemplateTest(unittest.TestCase):
         self.assertEqual(
             'https://distribution.example.invalid',
             default['aws']['object_store']['public_media_base_url'],
+        )
+        self.assertEqual(
+            'test-state-table',
+            default['aws']['state_store']['state_table'],
+        )
+        self.assertEqual(
+            'test-group-task-index',
+            default['aws']['state_store']['group_task_index'],
+        )
+        self.assertEqual(
+            350 * 1024,
+            default['aws']['state_store']['player_max_bytes'],
         )
         self.assertEqual(
             '/secrets/service-account.json',

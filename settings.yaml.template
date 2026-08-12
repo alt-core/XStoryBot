@@ -52,6 +52,12 @@
   # AWS設定
   aws:
     region: !env AWS_REGION
+    state_store:
+      state_table: !env XSBOT_AWS_STATE_TABLE
+      group_task_table: !env XSBOT_AWS_GROUP_TASK_TABLE
+      group_task_index: !env XSBOT_AWS_GROUP_TASK_INDEX
+      cache_table: !env XSBOT_AWS_CACHE_TABLE
+      player_max_bytes: 358400
     object_store:
       private_bucket: !env XSBOT_AWS_PRIVATE_BUCKET
       media_bucket: !env XSBOT_AWS_MEDIA_BUCKET

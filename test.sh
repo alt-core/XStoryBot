@@ -8,6 +8,8 @@ python3 -m unittest \
     tests.test_cloud_backend_factory \
     tests.test_credential_source \
     tests.test_state_store_boundary \
+    tests.test_gcp_state_store_contract \
+    tests.test_aws_state_store \
     tests.test_gcp_object_store \
     tests.test_aws_object_store \
     tests.test_auth \

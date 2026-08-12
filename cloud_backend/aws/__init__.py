@@ -2,6 +2,7 @@
 
 
 _object_store = None
+_state_store = None
 
 
 def create_object_store():
@@ -20,7 +21,17 @@ def _not_implemented(boundary_name):
 
 
 def create_state_store():
-    return _not_implemented('StateStore')
+    """プロセス内で共有するAWS StateStoreを返す。"""
+    global _state_store
+
+    if _state_store is None:
+        import settings
+        from cloud_backend.aws.state_store import AwsStateStore
+        _state_store = AwsStateStore(
+            settings.BACKEND_SETTINGS,
+            object_store=create_object_store(),
+        )
+    return _state_store
 
 
 def create_task_queue():
@@ -32,5 +43,6 @@ def create_credential_source():
 
 
 def _reset_for_test():
-    global _object_store
+    global _object_store, _state_store
     _object_store = None
+    _state_store = None
