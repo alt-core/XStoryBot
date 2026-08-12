@@ -18,6 +18,7 @@ class AwsTaskQueue(TaskQueue):
 
     _MAX_SQS_DELAY_SECONDS = 900
     _BOT_NAME_PATTERN = re.compile(r'^[-_a-zA-Z0-9]+$')
+    _ERROR_MESSAGE = 'AWS非同期タスクの登録に失敗しました'
 
     def __init__(
             self, client_factory=None, clock=None, uuid_factory=None):
@@ -35,9 +36,9 @@ class AwsTaskQueue(TaskQueue):
     @staticmethod
     def _raise_queue_error(error):
         if isinstance(error, (BotoCoreError, ClientError)):
-            raise TaskQueueError(str(error)) from error
+            raise TaskQueueError(AwsTaskQueue._ERROR_MESSAGE) from error
         if type(error).__module__.startswith(('boto3.', 'botocore.')):
-            raise TaskQueueError(str(error)) from error
+            raise TaskQueueError(AwsTaskQueue._ERROR_MESSAGE) from error
         raise error
 
     def _call(self, operation):

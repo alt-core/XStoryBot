@@ -314,9 +314,15 @@ class AwsTaskQueueTest(unittest.TestCase):
         queue = self.make_queue(
             client_factory=lambda service_name, **options: sqs)
 
-        with stubber, self.assertRaises(TaskQueueError):
+        with stubber, self.assertRaises(TaskQueueError) as raised:
             queue.create_task(
                 'action-queue', '/api/v1/bots/bot/action', {'value': '1'})
+        self.assertEqual(
+            'AWS非同期タスクの登録に失敗しました',
+            str(raised.exception),
+        )
+        self.assertNotIn('ServiceUnavailable', str(raised.exception))
+        self.assertNotIn('unavailable', str(raised.exception))
 
         application_error = RuntimeError('application error')
         client = Mock()
