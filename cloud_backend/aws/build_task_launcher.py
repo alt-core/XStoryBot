@@ -194,4 +194,10 @@ class AwsBuildTaskLauncher:
                 or not isinstance(response.get('tasks'), list)
                 or len(response['tasks']) != 1):
             raise TaskQueueError(self._ERROR_MESSAGE)
+        task = response['tasks'][0]
+        if (
+                not isinstance(task, dict)
+                or not isinstance(task.get('taskArn'), str)
+                or not task['taskArn']):
+            raise TaskQueueError(self._ERROR_MESSAGE)
         return task_id

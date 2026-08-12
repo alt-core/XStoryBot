@@ -12,6 +12,9 @@ from build_job import create_parser
 
 
 TASK_ID = '12345678-1234-4abc-8def-1234567890ab'
+TASK_ARN = (
+    'arn:aws:ecs:ap-northeast-1:000000000000:'
+    'task/test-cluster/0123456789abcdef0')
 AWS_SETTINGS = {
     'region': 'ap-northeast-1',
     'task_queue': {
@@ -79,7 +82,8 @@ def expected_request(skip_image=True, force=True):
 class AwsBuildTaskLauncherTest(unittest.TestCase):
     def test_ECS_clientはlaunchまで生成しない(self):
         client = Mock()
-        client.run_task.return_value = {'tasks': [{}], 'failures': []}
+        client.run_task.return_value = {
+            'tasks': [{'taskArn': TASK_ARN}], 'failures': []}
         client_factory = Mock(return_value=client)
 
         launcher = AwsBuildTaskLauncher(
@@ -95,9 +99,7 @@ class AwsBuildTaskLauncherTest(unittest.TestCase):
         stubber = Stubber(client)
         stubber.add_response('run_task', {
             'tasks': [{
-                'taskArn': (
-                    'arn:aws:ecs:ap-northeast-1:000000000000:'
-                    'task/test-cluster/0123456789abcdef0'),
+                'taskArn': TASK_ARN,
             }],
             'failures': [],
         }, expected_request())
@@ -115,7 +117,8 @@ class AwsBuildTaskLauncherTest(unittest.TestCase):
 
     def test_falseのoptionはcommandへ追加しない(self):
         client = Mock()
-        client.run_task.return_value = {'tasks': [{}], 'failures': []}
+        client.run_task.return_value = {
+            'tasks': [{'taskArn': TASK_ARN}], 'failures': []}
         launcher = AwsBuildTaskLauncher(AWS_SETTINGS, client=client)
 
         launcher.launch(TASK_ID, 'test-bot')
@@ -127,7 +130,8 @@ class AwsBuildTaskLauncherTest(unittest.TestCase):
 
     def test_先頭ハイフンのBot名もCLIで正しく解析できる(self):
         client = Mock()
-        client.run_task.return_value = {'tasks': [{}], 'failures': []}
+        client.run_task.return_value = {
+            'tasks': [{'taskArn': TASK_ARN}], 'failures': []}
         launcher = AwsBuildTaskLauncher(AWS_SETTINGS, client=client)
 
         launcher.launch(TASK_ID, '-test-bot', force=True)
@@ -274,8 +278,9 @@ class AwsBuildTaskLauncherTest(unittest.TestCase):
             'AWSビルドタスクの開始に失敗しました', str(raised.exception))
         self.assertNotIn('secret', str(raised.exception))
 
-    def test_RunTaskが一件以外を返した場合は失敗にする(self):
-        for tasks in ([], [{}, {}], None):
+    def test_RunTaskが正常なtask一件以外を返した場合は失敗にする(self):
+        for tasks in (
+                [], [{}], [{'taskArn': ''}], [{}, {}], None):
             client = Mock()
             client.run_task.return_value = {
                 'tasks': tasks,
