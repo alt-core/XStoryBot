@@ -7,6 +7,7 @@ python3 -m unittest \
     tests.test_settings_configuration \
     tests.test_cloud_backend_factory \
     tests.test_credential_source \
+    tests.test_aws_credential_source \
     tests.test_state_store_boundary \
     tests.test_gcp_state_store_contract \
     tests.test_aws_state_store \
@@ -27,6 +28,8 @@ python3 -m unittest \
     tests.test_task_client \
     tests.test_task_queue_contract \
     tests.test_aws_task_queue \
+    tests.test_aws_build_task_launcher \
+    tests.test_build_service \
     tests.test_async_task_processor \
     tests.test_aws_task_handler \
     tests.test_sqs_worker_app \
