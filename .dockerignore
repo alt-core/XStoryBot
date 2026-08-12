@@ -46,6 +46,8 @@ ENV/
 docs/
 tools/
 deploy.sh
+deploy_aws.sh
+template.aws.yaml
 
 # デプロイ用設定
 *_base.yaml

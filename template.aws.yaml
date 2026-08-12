@@ -1,0 +1,840 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: XStoryBotの最小AWS実行基盤
+
+Parameters:
+  ImageUri:
+    Type: String
+    Description: API、worker、builderで共用するコンテナイメージURI
+  EnvironmentName:
+    Type: String
+    Default: prod
+    AllowedPattern: '^[a-zA-Z0-9-]+$'
+  SheetId:
+    Type: String
+    MinLength: 1
+    Description: settings.yaml.templateの単一Botが参照するGoogle Sheets ID
+  GoogleSheetsCredentialParameterName:
+    Type: AWS::SSM::Parameter::Name
+    Description: Google SheetsサービスアカウントJSONを保存したSecureString名
+    AllowedPattern: '^/[a-zA-Z0-9_.\-/]+$'
+  AdminAuthParameterName:
+    Type: AWS::SSM::Parameter::Name
+    Description: 管理者認証JSONを保存したSecureString名
+    AllowedPattern: '^/[a-zA-Z0-9_.\-/]+$'
+  RuntimeSecretsParameterName:
+    Type: AWS::SSM::Parameter::Name
+    Description: LINE等のruntime秘密値JSONを保存したSecureString名
+    AllowedPattern: '^/[a-zA-Z0-9_.\-/]+$'
+Globals:
+  Function:
+    Architectures:
+      - x86_64
+    Environment:
+      Variables:
+        XSBOT_CLOUD_PROVIDER: aws
+        XSBOT_DEPLOY_ENV: !Ref EnvironmentName
+        SHEETS_ID: !Ref SheetId
+        XSBOT_APP_BASE_URL: !Sub 'https://${HttpApi}.execute-api.${AWS::Region}.${AWS::URLSuffix}'
+        XSBOT_BUILDER_BASE_URL: !Sub 'https://${HttpApi}.execute-api.${AWS::Region}.${AWS::URLSuffix}'
+        XSBOT_AWS_PRIVATE_BUCKET: !Ref PrivateBucket
+        XSBOT_AWS_MEDIA_BUCKET: !Ref MediaBucket
+        XSBOT_AWS_PUBLIC_MEDIA_BASE_URL: !Sub 'https://${MediaDistribution.DomainName}'
+        XSBOT_AWS_STATE_TABLE: !Ref StateTable
+        XSBOT_AWS_GROUP_TASK_TABLE: !Ref GroupTaskTable
+        XSBOT_AWS_GROUP_TASK_INDEX: BotCreatedAtIndex
+        XSBOT_AWS_CACHE_TABLE: !Ref CacheTable
+        XSBOT_AWS_ACTION_QUEUE_URL: !Ref ActionQueue
+        XSBOT_AWS_ACTION_QUEUE_ARN: !GetAtt ActionQueue.Arn
+        XSBOT_AWS_GROUP_MESSAGE_QUEUE_URL: !Ref GroupQueue
+        XSBOT_AWS_GROUP_MESSAGE_QUEUE_ARN: !GetAtt GroupQueue.Arn
+        XSBOT_AWS_SCHEDULER_ROLE_ARN: !GetAtt SchedulerRole.Arn
+        XSBOT_AWS_SCHEDULER_GROUP_NAME: !Ref SchedulerGroup
+        XSBOT_AWS_SCHEDULER_DLQ_ARN: !GetAtt DeadLetterQueue.Arn
+        XSBOT_AWS_BUILD_CLUSTER: !Ref BuildCluster
+        XSBOT_AWS_BUILD_TASK_DEFINITION: !Ref BuildTaskDefinition
+        XSBOT_AWS_BUILD_CONTAINER_NAME: xstorybot
+        XSBOT_AWS_BUILD_SUBNET_ID_1: !Ref PublicSubnetA
+        XSBOT_AWS_BUILD_SUBNET_ID_2: !Ref PublicSubnetB
+        XSBOT_AWS_BUILD_SECURITY_GROUP_ID: !Ref BuildSecurityGroup
+        XSBOT_AWS_SHEETS_CREDENTIAL_PARAMETER: !Ref GoogleSheetsCredentialParameterName
+        XSBOT_AWS_ADMIN_AUTH_PARAMETER: !Ref AdminAuthParameterName
+        XSBOT_AWS_RUNTIME_SECRETS_PARAMETER: !Ref RuntimeSecretsParameterName
+
+Resources:
+  StateTable:
+    Type: AWS::DynamoDB::Table
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: pk
+          AttributeType: S
+        - AttributeName: sk
+          AttributeType: S
+      KeySchema:
+        - AttributeName: pk
+          KeyType: HASH
+        - AttributeName: sk
+          KeyType: RANGE
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+      DeletionProtectionEnabled: true
+
+  GroupTaskTable:
+    Type: AWS::DynamoDB::Table
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: task_id
+          AttributeType: S
+        - AttributeName: bot_name_index
+          AttributeType: S
+        - AttributeName: created_at_index
+          AttributeType: S
+      KeySchema:
+        - AttributeName: task_id
+          KeyType: HASH
+      GlobalSecondaryIndexes:
+        - IndexName: BotCreatedAtIndex
+          KeySchema:
+            - AttributeName: bot_name_index
+              KeyType: HASH
+            - AttributeName: created_at_index
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+      DeletionProtectionEnabled: true
+
+  CacheTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: pk
+          AttributeType: S
+        - AttributeName: sk
+          AttributeType: S
+      KeySchema:
+        - AttributeName: pk
+          KeyType: HASH
+        - AttributeName: sk
+          KeyType: RANGE
+      TimeToLiveSpecification:
+        AttributeName: expire_at
+        Enabled: true
+
+  PrivateBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      LifecycleConfiguration:
+        Rules:
+          - Id: AbortIncompleteMultipartUploads
+            Status: Enabled
+            AbortIncompleteMultipartUpload:
+              DaysAfterInitiation: 7
+
+  MediaBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      LifecycleConfiguration:
+        Rules:
+          - Id: AbortIncompleteMultipartUploads
+            Status: Enabled
+            AbortIncompleteMultipartUpload:
+              DaysAfterInitiation: 7
+
+  MediaOriginAccessControl:
+    Type: AWS::CloudFront::OriginAccessControl
+    Properties:
+      OriginAccessControlConfig:
+        Name: !Sub '${AWS::StackName}-media-oac'
+        Description: XStoryBot公開メディア用OAC
+        OriginAccessControlOriginType: s3
+        SigningBehavior: always
+        SigningProtocol: sigv4
+
+  MediaDistribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        HttpVersion: http2and3
+        Origins:
+          - Id: MediaBucketOrigin
+            DomainName: !GetAtt MediaBucket.RegionalDomainName
+            OriginAccessControlId: !GetAtt MediaOriginAccessControl.Id
+            S3OriginConfig:
+              OriginAccessIdentity: ''
+        DefaultCacheBehavior:
+          TargetOriginId: MediaBucketOrigin
+          ViewerProtocolPolicy: redirect-to-https
+          AllowedMethods:
+            - GET
+            - HEAD
+            - OPTIONS
+          CachedMethods:
+            - GET
+            - HEAD
+            - OPTIONS
+          Compress: true
+          CachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6
+        ViewerCertificate:
+          CloudFrontDefaultCertificate: true
+
+  MediaBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref MediaBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: AllowCloudFrontRead
+            Effect: Allow
+            Principal:
+              Service: cloudfront.amazonaws.com
+            Action: s3:GetObject
+            Resource: !Sub '${MediaBucket.Arn}/*'
+            Condition:
+              StringEquals:
+                AWS:SourceArn: !Sub 'arn:${AWS::Partition}:cloudfront::${AWS::AccountId}:distribution/${MediaDistribution}'
+
+  DeadLetterQueue:
+    Type: AWS::SQS::Queue
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      MessageRetentionPeriod: 1209600
+      SqsManagedSseEnabled: true
+
+  ActionQueue:
+    Type: AWS::SQS::Queue
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      MessageRetentionPeriod: 345600
+      VisibilityTimeout: 360
+      SqsManagedSseEnabled: true
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt DeadLetterQueue.Arn
+        maxReceiveCount: 5
+
+  GroupQueue:
+    Type: AWS::SQS::Queue
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      MessageRetentionPeriod: 345600
+      VisibilityTimeout: 5400
+      SqsManagedSseEnabled: true
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt DeadLetterQueue.Arn
+        maxReceiveCount: 5
+
+  SchedulerGroup:
+    Type: AWS::Scheduler::ScheduleGroup
+
+  SchedulerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: scheduler.amazonaws.com
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+                aws:SourceArn: !GetAtt SchedulerGroup.Arn
+      Policies:
+        - PolicyName: SendScheduledTasks
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: sqs:SendMessage
+                Resource:
+                  - !GetAtt ActionQueue.Arn
+                  - !GetAtt GroupQueue.Arn
+                  - !GetAtt DeadLetterQueue.Arn
+
+  ApiLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/${AWS::StackName}-api'
+      RetentionInDays: 30
+
+  ApiAccessLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/apigateway/${AWS::StackName}-http-api'
+      RetentionInDays: 30
+
+  ActionWorkerLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/${AWS::StackName}-action-worker'
+      RetentionInDays: 30
+
+  GroupWorkerLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/${AWS::StackName}-group-worker'
+      RetentionInDays: 30
+
+  BuildLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/ecs/${AWS::StackName}-builder'
+      RetentionInDays: 30
+
+  ApiRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - !Sub 'arn:${AWS::Partition}:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole'
+      Policies:
+        - PolicyName: ApiDataAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - dynamodb:BatchWriteItem
+                  - dynamodb:DeleteItem
+                  - dynamodb:GetItem
+                  - dynamodb:PutItem
+                  - dynamodb:Query
+                  - dynamodb:TransactWriteItems
+                Resource:
+                  - !GetAtt StateTable.Arn
+                  - !GetAtt GroupTaskTable.Arn
+                  - !Sub '${GroupTaskTable.Arn}/index/*'
+                  - !GetAtt CacheTable.Arn
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                Resource:
+                  - !Sub '${PrivateBucket.Arn}/*'
+                  - !Sub '${MediaBucket.Arn}/*'
+              - Effect: Allow
+                Action: s3:ListBucket
+                Resource: !GetAtt PrivateBucket.Arn
+                Condition:
+                  StringLike:
+                    s3:prefix:
+                      - scenario/*
+                      - group_tasks/*
+                      - build_cache/*
+              - Effect: Allow
+                Action: sqs:SendMessage
+                Resource:
+                  - !GetAtt ActionQueue.Arn
+                  - !GetAtt GroupQueue.Arn
+              - Effect: Allow
+                Action:
+                  - scheduler:CreateSchedule
+                Resource: !Sub 'arn:${AWS::Partition}:scheduler:${AWS::Region}:${AWS::AccountId}:schedule/${SchedulerGroup}/*'
+              - Effect: Allow
+                Action: iam:PassRole
+                Resource: !GetAtt SchedulerRole.Arn
+                Condition:
+                  StringEquals:
+                    iam:PassedToService: scheduler.amazonaws.com
+              - Effect: Allow
+                Action: ecs:RunTask
+                Resource: !Ref BuildTaskDefinition
+                Condition:
+                  ArnEquals:
+                    ecs:cluster: !GetAtt BuildCluster.Arn
+              - Effect: Allow
+                Action: iam:PassRole
+                Resource:
+                  - !GetAtt BuildTaskExecutionRole.Arn
+                  - !GetAtt BuildTaskRole.Arn
+                Condition:
+                  StringEquals:
+                    iam:PassedToService: ecs-tasks.amazonaws.com
+              - Effect: Allow
+                Action: ssm:GetParameter
+                Resource:
+                  - !Sub 'arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${AdminAuthParameterName}'
+                  - !Sub 'arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${RuntimeSecretsParameterName}'
+
+  WorkerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - !Sub 'arn:${AWS::Partition}:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole'
+      Policies:
+        - PolicyName: WorkerDataAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - dynamodb:BatchWriteItem
+                  - dynamodb:DeleteItem
+                  - dynamodb:GetItem
+                  - dynamodb:PutItem
+                  - dynamodb:Query
+                  - dynamodb:TransactWriteItems
+                Resource:
+                  - !GetAtt StateTable.Arn
+                  - !GetAtt GroupTaskTable.Arn
+                  - !Sub '${GroupTaskTable.Arn}/index/*'
+                  - !GetAtt CacheTable.Arn
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                Resource:
+                  - !Sub '${PrivateBucket.Arn}/*'
+                  - !Sub '${MediaBucket.Arn}/*'
+              - Effect: Allow
+                Action: s3:ListBucket
+                Resource: !GetAtt PrivateBucket.Arn
+                Condition:
+                  StringLike:
+                    s3:prefix:
+                      - scenario/*
+                      - group_tasks/*
+                      - build_cache/*
+              - Effect: Allow
+                Action:
+                  - sqs:DeleteMessage
+                  - sqs:GetQueueAttributes
+                  - sqs:ReceiveMessage
+                  - sqs:SendMessage
+                Resource:
+                  - !GetAtt ActionQueue.Arn
+                  - !GetAtt GroupQueue.Arn
+              - Effect: Allow
+                Action: scheduler:CreateSchedule
+                Resource: !Sub 'arn:${AWS::Partition}:scheduler:${AWS::Region}:${AWS::AccountId}:schedule/${SchedulerGroup}/*'
+              - Effect: Allow
+                Action: iam:PassRole
+                Resource: !GetAtt SchedulerRole.Arn
+                Condition:
+                  StringEquals:
+                    iam:PassedToService: scheduler.amazonaws.com
+              - Effect: Allow
+                Action: ssm:GetParameter
+                Resource: !Sub 'arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${RuntimeSecretsParameterName}'
+
+  HttpApi:
+    Type: AWS::ApiGatewayV2::Api
+    Properties:
+      Name: !Sub '${AWS::StackName}-http-api'
+      ProtocolType: HTTP
+
+  HttpApiIntegration:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref HttpApi
+      IntegrationType: AWS_PROXY
+      IntegrationUri: !Sub
+        - 'arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${FunctionArn}/invocations'
+        - FunctionArn: !GetAtt ApiFunction.Arn
+      IntegrationMethod: POST
+      PayloadFormatVersion: '2.0'
+      TimeoutInMillis: 30000
+
+  HttpApiDefaultRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref HttpApi
+      RouteKey: '$default'
+      Target: !Join
+        - /
+        - - integrations
+          - !Ref HttpApiIntegration
+
+  HttpApiStage:
+    Type: AWS::ApiGatewayV2::Stage
+    DependsOn: HttpApiDefaultRoute
+    Properties:
+      ApiId: !Ref HttpApi
+      StageName: '$default'
+      AutoDeploy: true
+      AccessLogSettings:
+        DestinationArn: !GetAtt ApiAccessLogGroup.Arn
+        Format: '{"requestId":"$context.requestId","status":"$context.status","routeKey":"$context.routeKey","responseLatency":"$context.responseLatency","integrationLatency":"$context.integrationLatency"}'
+
+  ApiFunction:
+    Type: AWS::Serverless::Function
+    DependsOn: ApiLogGroup
+    Properties:
+      PackageType: Image
+      FunctionName: !Sub '${AWS::StackName}-api'
+      ImageUri: !Ref ImageUri
+      MemorySize: 1024
+      Timeout: 30
+      Role: !GetAtt ApiRole.Arn
+      Environment:
+        Variables:
+          XSBOT_APP_MODULE: app:app
+          AWS_LWA_READINESS_CHECK_PATH: /healthz
+
+  HttpApiInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref ApiFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub 'arn:${AWS::Partition}:execute-api:${AWS::Region}:${AWS::AccountId}:${HttpApi}/*'
+
+  ActionWorkerFunction:
+    Type: AWS::Serverless::Function
+    DependsOn: ActionWorkerLogGroup
+    Properties:
+      PackageType: Image
+      FunctionName: !Sub '${AWS::StackName}-action-worker'
+      ImageUri: !Ref ImageUri
+      MemorySize: 1024
+      Timeout: 60
+      Role: !GetAtt WorkerRole.Arn
+      Environment:
+        Variables:
+          XSBOT_APP_MODULE: app_sqs_worker:app
+          AWS_LWA_READINESS_CHECK_PATH: /healthz
+          AWS_LWA_INVOKE_MODE: buffered
+          AWS_LWA_PASS_THROUGH_PATH: /events
+          AWS_LWA_ERROR_STATUS_CODES: 500-599
+      Events:
+        ActionMessages:
+          Type: SQS
+          Properties:
+            Queue: !GetAtt ActionQueue.Arn
+            BatchSize: 1
+            FunctionResponseTypes:
+              - ReportBatchItemFailures
+            ScalingConfig:
+              MaximumConcurrency: 10
+
+  GroupWorkerFunction:
+    Type: AWS::Serverless::Function
+    DependsOn: GroupWorkerLogGroup
+    Properties:
+      PackageType: Image
+      FunctionName: !Sub '${AWS::StackName}-group-worker'
+      ImageUri: !Ref ImageUri
+      MemorySize: 2048
+      Timeout: 900
+      Role: !GetAtt WorkerRole.Arn
+      Environment:
+        Variables:
+          XSBOT_APP_MODULE: app_sqs_worker:app
+          AWS_LWA_READINESS_CHECK_PATH: /healthz
+          AWS_LWA_INVOKE_MODE: buffered
+          AWS_LWA_PASS_THROUGH_PATH: /events
+          AWS_LWA_ERROR_STATUS_CODES: 500-599
+      Events:
+        GroupMessages:
+          Type: SQS
+          Properties:
+            Queue: !GetAtt GroupQueue.Arn
+            BatchSize: 1
+            FunctionResponseTypes:
+              - ReportBatchItemFailures
+            ScalingConfig:
+              MaximumConcurrency: 2
+
+  NetworkVpc:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.42.0.0/16
+      EnableDnsHostnames: true
+      EnableDnsSupport: true
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+
+  VpcGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref NetworkVpc
+      InternetGatewayId: !Ref InternetGateway
+
+  PublicSubnetA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref NetworkVpc
+      AvailabilityZone: !Select [0, !GetAZs '']
+      CidrBlock: 10.42.0.0/24
+      MapPublicIpOnLaunch: true
+
+  PublicSubnetB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref NetworkVpc
+      AvailabilityZone: !Select [1, !GetAZs '']
+      CidrBlock: 10.42.1.0/24
+      MapPublicIpOnLaunch: true
+
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref NetworkVpc
+
+  PublicDefaultRoute:
+    Type: AWS::EC2::Route
+    DependsOn: VpcGatewayAttachment
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  PublicSubnetARouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnetA
+      RouteTableId: !Ref PublicRouteTable
+
+  PublicSubnetBRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnetB
+      RouteTableId: !Ref PublicRouteTable
+
+  BuildSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Outbound only security group for Fargate builder
+      VpcId: !Ref NetworkVpc
+      SecurityGroupIngress: []
+      SecurityGroupEgress:
+        - IpProtocol: '-1'
+          CidrIp: 0.0.0.0/0
+
+  BuildCluster:
+    Type: AWS::ECS::Cluster
+
+  BuildTaskExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - !Sub 'arn:${AWS::Partition}:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy'
+
+  BuildTaskRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: BuildDataAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - dynamodb:BatchWriteItem
+                  - dynamodb:DeleteItem
+                  - dynamodb:GetItem
+                  - dynamodb:PutItem
+                  - dynamodb:Query
+                Resource:
+                  - !GetAtt StateTable.Arn
+                  - !GetAtt CacheTable.Arn
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                Resource:
+                  - !Sub '${PrivateBucket.Arn}/*'
+                  - !Sub '${MediaBucket.Arn}/*'
+              - Effect: Allow
+                Action: s3:ListBucket
+                Resource: !GetAtt PrivateBucket.Arn
+                Condition:
+                  StringLike:
+                    s3:prefix:
+                      - scenario/*
+                      - group_tasks/*
+                      - build_cache/*
+              - Effect: Allow
+                Action: ssm:GetParameter
+                Resource:
+                  - !Sub 'arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${GoogleSheetsCredentialParameterName}'
+                  - !Sub 'arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${RuntimeSecretsParameterName}'
+
+  BuildTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      RequiresCompatibilities:
+        - FARGATE
+      NetworkMode: awsvpc
+      RuntimePlatform:
+        OperatingSystemFamily: LINUX
+        CpuArchitecture: X86_64
+      Cpu: '1024'
+      Memory: '2048'
+      ExecutionRoleArn: !GetAtt BuildTaskExecutionRole.Arn
+      TaskRoleArn: !GetAtt BuildTaskRole.Arn
+      ContainerDefinitions:
+        - Name: xstorybot
+          Image: !Ref ImageUri
+          Essential: true
+          Environment:
+            - Name: AWS_REGION
+              Value: !Ref AWS::Region
+            - Name: XSBOT_CLOUD_PROVIDER
+              Value: aws
+            - Name: XSBOT_DEPLOY_ENV
+              Value: !Ref EnvironmentName
+            - Name: SHEETS_ID
+              Value: !Ref SheetId
+            - Name: XSBOT_APP_BASE_URL
+              Value: !Sub 'https://${HttpApi}.execute-api.${AWS::Region}.${AWS::URLSuffix}'
+            - Name: XSBOT_BUILDER_BASE_URL
+              Value: !Sub 'https://${HttpApi}.execute-api.${AWS::Region}.${AWS::URLSuffix}'
+            - Name: XSBOT_AWS_PRIVATE_BUCKET
+              Value: !Ref PrivateBucket
+            - Name: XSBOT_AWS_MEDIA_BUCKET
+              Value: !Ref MediaBucket
+            - Name: XSBOT_AWS_PUBLIC_MEDIA_BASE_URL
+              Value: !Sub 'https://${MediaDistribution.DomainName}'
+            - Name: XSBOT_AWS_STATE_TABLE
+              Value: !Ref StateTable
+            - Name: XSBOT_AWS_GROUP_TASK_TABLE
+              Value: !Ref GroupTaskTable
+            - Name: XSBOT_AWS_GROUP_TASK_INDEX
+              Value: BotCreatedAtIndex
+            - Name: XSBOT_AWS_CACHE_TABLE
+              Value: !Ref CacheTable
+            - Name: XSBOT_AWS_ACTION_QUEUE_URL
+              Value: !Ref ActionQueue
+            - Name: XSBOT_AWS_ACTION_QUEUE_ARN
+              Value: !GetAtt ActionQueue.Arn
+            - Name: XSBOT_AWS_GROUP_MESSAGE_QUEUE_URL
+              Value: !Ref GroupQueue
+            - Name: XSBOT_AWS_GROUP_MESSAGE_QUEUE_ARN
+              Value: !GetAtt GroupQueue.Arn
+            - Name: XSBOT_AWS_SCHEDULER_ROLE_ARN
+              Value: !GetAtt SchedulerRole.Arn
+            - Name: XSBOT_AWS_SCHEDULER_GROUP_NAME
+              Value: !Ref SchedulerGroup
+            - Name: XSBOT_AWS_SHEETS_CREDENTIAL_PARAMETER
+              Value: !Ref GoogleSheetsCredentialParameterName
+            - Name: XSBOT_AWS_RUNTIME_SECRETS_PARAMETER
+              Value: !Ref RuntimeSecretsParameterName
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref BuildLogGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: builder
+
+  DeadLetterAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmDescription: XStoryBotのDLQに未処理メッセージがあります
+      Namespace: AWS/SQS
+      MetricName: ApproximateNumberOfMessagesVisible
+      Dimensions:
+        - Name: QueueName
+          Value: !GetAtt DeadLetterQueue.QueueName
+      Statistic: Maximum
+      Period: 60
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+
+Outputs:
+  ApiUrl:
+    Description: API GatewayのHTTPS URL
+    Value: !Sub 'https://${HttpApi}.execute-api.${AWS::Region}.${AWS::URLSuffix}'
+  MediaUrl:
+    Description: 公開メディアのCloudFront URL
+    Value: !Sub 'https://${MediaDistribution.DomainName}'
+  PrivateBucketName:
+    Value: !Ref PrivateBucket
+  MediaBucketName:
+    Value: !Ref MediaBucket
+  StateTableName:
+    Value: !Ref StateTable
+  GroupTaskTableName:
+    Value: !Ref GroupTaskTable
+  CacheTableName:
+    Value: !Ref CacheTable
+  ActionQueueUrl:
+    Value: !Ref ActionQueue
+  GroupQueueUrl:
+    Value: !Ref GroupQueue
+  DeadLetterQueueUrl:
+    Value: !Ref DeadLetterQueue
+  SchedulerRoleArn:
+    Value: !GetAtt SchedulerRole.Arn
+  BuildClusterArn:
+    Value: !GetAtt BuildCluster.Arn
+  BuildTaskDefinitionArn:
+    Value: !Ref BuildTaskDefinition
+  BuildSubnetA:
+    Value: !Ref PublicSubnetA
+  BuildSubnetB:
+    Value: !Ref PublicSubnetB
+  BuildSecurityGroupId:
+    Value: !Ref BuildSecurityGroup

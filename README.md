@@ -8,7 +8,7 @@
 
 シナリオを Google Sheets 上で記述できるため、シナリオ作成者との作業分担が行いやすいという特徴もあります。
 
-現在の公開版は Python 3.11 で動作し、Cloud Run 向けに構成されています。
+現在の公開版は Python 3.11 で動作し、Cloud Run または AWS 向けに構成されています。
 
 ### プロジェクトの状態
 
@@ -22,7 +22,7 @@
 
 ![システム構成図](./docs/system_diagram.png)
 
-この構成図は旧GAE版を基にした概念図です。現行版では図中のGoogle App Engineに相当する実行基盤をCloud Runへ置き換えており、実装上の詳細は一部異なります。
+この構成図は旧GAE版を基にした概念図です。現行版のGCP構成ではCloud Run、AWS構成ではAPI Gateway、Lambda、Fargateなどが、図中のGoogle App Engineに相当する役割を担います。
 
 ## できること
 
@@ -67,7 +67,7 @@ plugin によって拡張可能な設計になっています。
     > git clone ...
     > python3 -m pip install -r requirements.txt
 
-デプロイ先として Cloud Run を利用します。利用するGCPプロジェクトを準備してください。
+Cloud Runへデプロイする場合は、利用するGCPプロジェクトを準備してください。
 
 以下、特殊な前準備が必要です。
 
@@ -99,6 +99,16 @@ api_token は、WebAPI などでの認証のために使われる情報です。
 
 設定後、`Dockerfile`からコンテナイメージをビルドし、Cloud Runへデプロイします。
 
+### AWSへデプロイする場合
+
+AWS CLI、AWS SAM CLI、DockerとAWS認証情報、既存のECR repositoryを準備してください。Google Sheets資格情報、管理者認証JSON、runtime秘密値JSONは、AWS管理KMSキーを使うParameter Storeの`SecureString`へ事前に登録します。
+
+管理者認証JSONは`python3 tools/generate_admin_auth.py`で生成できます。
+
+`AWS_REGION`、`XSBOT_AWS_STACK_NAME`、`XSBOT_AWS_ECR_REPOSITORY`、`XSBOT_AWS_ENVIRONMENT`、`XSBOT_AWS_SHEET_ID`、`XSBOT_AWS_SHEETS_CREDENTIAL_PARAMETER`、`XSBOT_AWS_ADMIN_AUTH_PARAMETER`、`XSBOT_AWS_RUNTIME_SECRETS_PARAMETER`を環境変数に設定し、`./deploy_aws.sh`を実行します。秘密値そのものはスクリプトへ渡しません。
+
+API、2つのworker、Fargateで同じECR imageを共用するため、スクリプトはDockerで一度だけ`linux/amd64` imageをbuild/pushし、`ImageUri`をSAMへ渡します。同一imageの再buildを避けるため`sam build`は実行しません。
+
 ## シナリオの作成
 
 Google Sheets 上でシナリオを作成します。
@@ -108,16 +118,16 @@ Google Sheets 上でシナリオを作成します。
 
 デプロイ先のホストの 〜/dashboard/ にブラウザでアクセスすると管理画面が開きます。
 
-ダッシュボードではFirebase AuthenticationによるGoogleアカウント認証が要求されます。アクセスを許可するメールアドレスを`settings.yaml`の`auth.allowed_emails`へ設定してください。
+ダッシュボードではユーザー名とパスワードによる認証が要求されます。管理者認証JSONは環境変数またはAWS Parameter Storeから設定してください。
 
-ダッシュボードにある「シナリオ修正の反映」のボタンを押すことで、Google Sheets からシナリオを読み込み、Google Cloud Storage 上に中間ファイルを生成します。
+ダッシュボードにある「シナリオ修正の反映」のボタンを押すことで、Google Sheets からシナリオを読み込み、選択したクラウドプロバイダーのオブジェクトストレージ上に中間ファイルを生成します。
 
-この時、シナリオで指定された画像等のリソースファイルも全て Google Cloud Storage 上にコピーされますので、安定したサービス提供が可能です。
+この時、シナリオで指定された画像等のリソースファイルも全て同じオブジェクトストレージ上にコピーされますので、安定したサービス提供が可能です。
 
 ## ログ
 
 @log コマンドで、ユーザがシーン中の特定の箇所に来た際にログを出力することが可能です。
-Cloud Run上のアプリケーションログはCloud Loggingに出力されます。BigQueryへ集計する場合は、Cloud LoggingからBigQueryへのシンクを設定してください。
+GCPではアプリケーションログがCloud Logging、AWSではCloudWatch Logsに出力されます。GCPでBigQueryへ集計する場合は、Cloud LoggingからBigQueryへのシンクを設定してください。
 
 Cloud LoggingからBigQueryへエクスポートされるテーブル名とスキーマは、シンク設定とログ形式によって異なります。実際に作成されたテーブルとフィールドを確認してクエリを作成し、ビューとして保存してください。旧GAE版の`appengine_googleapis_com_request_log_*`を前提としたクエリはCloud Runでは利用できません。
 
@@ -133,6 +143,6 @@ Cloud LoggingからBigQueryへエクスポートされるテーブル名とス�
 
 ## 注意事項
 
-Cloud Run、Firestore、Cloud Storage、Cloud Tasks、Cloud Logging、BigQueryは従量課金サービスです。
+Cloud Run、Firestore、Cloud Storage、Cloud Tasks、Cloud Logging、BigQueryに加え、AWSのLambda、API Gateway、DynamoDB、S3、CloudFront、SQS、EventBridge Scheduler、Fargate、CloudWatchは従量課金の対象です。
 
 不具合により、意図しない課金が発生したとしても、補償いたしかねますので、[アラート](https://cloud.google.com/billing/docs/how-to/budgets?hl=ja&ref_topic=6288636&visit_id=1-636539550464473783-319035179&rd=1)などをご活用ください。
