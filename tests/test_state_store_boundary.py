@@ -396,6 +396,7 @@ class FacadeBoundaryTest(unittest.TestCase):
                 PROJECT_ROOT / 'group_message_task_db.py',
                 PROJECT_ROOT / 'scenario.py',
                 PROJECT_ROOT / 'task_client.py',
+                PROJECT_ROOT / 'webapi.py',
                 PROJECT_ROOT / 'plugin/line/more.py',
                 PROJECT_ROOT / 'plugin/line/image_text.py'):
             with self.subTest(path=path):

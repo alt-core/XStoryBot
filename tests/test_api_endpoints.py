@@ -37,16 +37,28 @@ class TestApp:
         self.app = app
 
     def request(self, method, path, params=None, headers=None,
-                expect_errors=False):
+                expect_errors=False, json_body=None, raw_body=None,
+                raw_content_type=None):
         parsed = urlsplit(path)
         query = parsed.query
         body = b''
+        content_type = None
+        if sum(value is not None for value in (
+                params, json_body, raw_body)) > 1:
+            raise ValueError('params、json_body、raw_bodyは同時に指定できません')
         if params:
             encoded = urlencode(params, doseq=True)
             if method in ('GET', 'HEAD', 'OPTIONS'):
                 query = '&'.join(value for value in (query, encoded) if value)
             else:
                 body = encoded.encode('utf-8')
+                content_type = 'application/x-www-form-urlencoded'
+        elif json_body is not None:
+            body = json.dumps(json_body, ensure_ascii=False).encode('utf-8')
+            content_type = 'application/json'
+        elif raw_body is not None:
+            body = raw_body
+            content_type = raw_content_type
 
         environ = {}
         setup_testing_defaults(environ)
@@ -55,8 +67,8 @@ class TestApp:
         environ['QUERY_STRING'] = query
         environ['wsgi.input'] = io.BytesIO(body)
         environ['CONTENT_LENGTH'] = str(len(body))
-        if body:
-            environ['CONTENT_TYPE'] = 'application/x-www-form-urlencoded'
+        if content_type:
+            environ['CONTENT_TYPE'] = content_type
         for name, value in (headers or {}).items():
             key = name.upper().replace('-', '_')
             if key in ('CONTENT_TYPE', 'CONTENT_LENGTH'):
@@ -88,6 +100,16 @@ class TestApp:
 
     def post(self, path, params=None, headers=None, expect_errors=False):
         return self.request('POST', path, params, headers, expect_errors)
+
+    def post_json(self, path, body, headers=None, expect_errors=False):
+        return self.request(
+            'POST', path, headers=headers, expect_errors=expect_errors,
+            json_body=body)
+
+    def post_raw_json(self, path, body, headers=None, expect_errors=False):
+        return self.request(
+            'POST', path, headers=headers, expect_errors=expect_errors,
+            raw_body=body, raw_content_type='application/json')
 
     def options(self, path, params=None, headers=None, expect_errors=False):
         return self.request('OPTIONS', path, params, headers, expect_errors)
@@ -134,6 +156,9 @@ class FakeUser:
     def __str__(self):
         return f'{self.service_name}:{self.user_id}'
 
+    def serialize(self):
+        return str(self)
+
 
 class FakeInterface:
     def create_context(self, user, action, attrs):
@@ -168,6 +193,7 @@ class WebApiTest(unittest.TestCase):
         self.settings.OPTIONS = {}
         self.users.User = FakeUser
         self.users.get_group_members = Mock(return_value=[])
+        self.users.append_group_member = Mock()
 
         self.module = load_module(
             '_test_webapi',
@@ -368,6 +394,187 @@ class WebApiTest(unittest.TestCase):
             self.module._do_action_iter(
                 [], self.bot, FakeUser('group', 'group-1'), 'hello', {})
         sleep.assert_not_called()
+
+    def test_group_member_api_adds_json_members_and_returns_member_list(self):
+        response = self.client.post_json(
+            '/api/v1/groups/group-1/add_members',
+            {'members': 'plaintext:first\n plaintext:second'},
+            headers={'X-API-Token': 'valid-token'},
+        )
+
+        self.assertEqual(response.status_int, 200)
+        self.assertEqual(
+            response.headers['Content-Type'],
+            'application/json; charset=utf-8')
+        self.assertEqual(response.json['data'], {
+            'group_id': 'group-1',
+            'added_count': 2,
+            'failed_count': 0,
+            'failed_ids': [],
+        })
+        self.assertEqual(
+            [str(call.args[1])
+             for call in self.users.append_group_member.call_args_list],
+            ['plaintext:first', 'plaintext:second'])
+
+        self.users.get_group_members.return_value = [
+            FakeUser('plaintext', 'second'), FakeUser('plaintext', 'first')]
+        response = self.client.get(
+            '/api/v1/groups/group-1/members',
+            headers={'X-API-Token': 'valid-token'},
+        )
+        self.assertEqual(response.status_int, 200)
+        self.assertEqual(response.json['data'], {
+            'group_id': 'group-1',
+            'count': 2,
+            'members': ['plaintext:second', 'plaintext:first'],
+        })
+
+    def test_group_member_api_preserves_comma_and_empty_input_contract(self):
+        comma_response = self.client.post_json(
+            '/api/v1/groups/group-1/add_members',
+            {'members': 'plaintext:first, ,plaintext:second'},
+            headers={'X-API-Token': 'valid-token'},
+        )
+        empty_response = self.client.post_json(
+            '/api/v1/groups/group-1/add_members',
+            {}, headers={'X-API-Token': 'valid-token'},
+        )
+
+        self.assertEqual(comma_response.json['data']['added_count'], 2)
+        self.assertEqual(empty_response.json['data'], {
+            'group_id': 'group-1',
+            'added_count': 0,
+            'failed_count': 0,
+            'failed_ids': [],
+        })
+
+    def test_group_member_api_preserves_header_priority_and_parameter_fallback(self):
+        fallback = self.client.get(
+            '/api/v1/groups/group-1/members',
+            params={'token': 'valid-token'},
+        )
+        fallback_add = self.client.post_json(
+            '/api/v1/groups/group-1/add_members?token=valid-token',
+            {'members': 'plaintext:first'},
+        )
+        self.assertEqual(fallback.json['data']['members'], [])
+        self.users.get_group_members.reset_mock()
+        self.users.append_group_member.reset_mock()
+        empty_header = self.client.get(
+            '/api/v1/groups/group-1/members',
+            params={'token': 'valid-token'},
+            headers={'X-API-Token': ''},
+            expect_errors=True,
+        )
+        with patch.object(
+                self.module, '_parse_group_member_ids') as parse_members:
+            invalid_add = self.client.post_json(
+                '/api/v1/groups/group-1/add_members?token=valid-token',
+                {'members': 'plaintext:first'},
+                headers={'X-API-Token': ''},
+                expect_errors=True,
+            )
+
+        self.assertEqual(fallback.status_int, 200)
+        self.assertEqual(fallback_add.status_int, 200)
+        self.assertEqual(fallback_add.json['data']['added_count'], 1)
+        self.assertEqual(empty_header.status_int, 401)
+        self.assertEqual(empty_header.json, {
+            'code': 401,
+            'result': 'Error',
+            'message': 'invalid token',
+        })
+        self.assertEqual(invalid_add.status_int, 401)
+        parse_members.assert_not_called()
+        self.users.get_group_members.assert_not_called()
+        self.users.append_group_member.assert_not_called()
+
+    def test_group_member_api_methods_are_not_broadened(self):
+        add_get = self.client.get(
+            '/api/v1/groups/group-1/add_members', expect_errors=True)
+        members_post = self.client.post_json(
+            '/api/v1/groups/group-1/members', {}, expect_errors=True)
+
+        self.assertEqual(add_get.status_int, 405)
+        self.assertEqual(members_post.status_int, 405)
+        self.auth.check_token.assert_not_called()
+
+    def test_group_member_api_reports_partial_failure_without_exception_body(self):
+        secret_error = RuntimeError('内部の秘密値')
+        self.users.append_group_member.side_effect = [secret_error, None]
+
+        with patch.object(self.module.logging, 'error') as error_log:
+            response = self.client.post_json(
+                '/api/v1/groups/group-1/add_members',
+                {'members': 'plaintext:first\ninvalid\nplaintext:second'},
+                headers={'X-API-Token': 'valid-token'},
+            )
+
+        self.assertEqual(response.status_int, 200)
+        self.assertEqual(response.json['data'], {
+            'group_id': 'group-1',
+            'added_count': 1,
+            'failed_count': 2,
+            'failed_ids': ['plaintext:first', 'invalid'],
+        })
+        self.assertNotIn('内部の秘密値', response.text)
+        self.assertNotIn('内部の秘密値', str(error_log.call_args_list))
+        self.assertNotIn('plaintext:first', str(error_log.call_args_list))
+
+    def test_group_member_api_rejects_invalid_json_shapes(self):
+        for body in ([], {'members': None}, {'members': 1}):
+            with self.subTest(body=body):
+                response = self.client.post_json(
+                    '/api/v1/groups/group-1/add_members', body,
+                    headers={'X-API-Token': 'valid-token'},
+                    expect_errors=True,
+                )
+                self.assertEqual(response.status_int, 400)
+                self.assertEqual(
+                    response.headers['Content-Type'],
+                    'application/json; charset=utf-8')
+                self.assertEqual(response.json, {
+                    'code': 400,
+                    'result': 'Error',
+                    'message': 'invalid request format',
+                })
+        self.users.append_group_member.assert_not_called()
+
+        malformed = self.client.post_raw_json(
+            '/api/v1/groups/group-1/add_members', b'{',
+            headers={'X-API-Token': 'valid-token'},
+            expect_errors=True,
+        )
+        self.assertEqual(malformed.status_int, 400)
+        self.assertEqual(
+            malformed.headers['Content-Type'],
+            'application/json; charset=utf-8')
+        self.assertEqual(malformed.json, {
+            'code': 400,
+            'result': 'Error',
+            'message': 'invalid request format',
+        })
+
+    def test_group_member_list_failure_is_sanitized(self):
+        self.users.get_group_members.side_effect = RuntimeError('内部の秘密値')
+
+        with patch.object(self.module.logging, 'error') as error_log:
+            response = self.client.get(
+                '/api/v1/groups/group-secret/members',
+                headers={'X-API-Token': 'valid-token'},
+                expect_errors=True,
+            )
+
+        self.assertEqual(response.status_int, 500)
+        self.assertEqual(response.json, {
+            'code': 500,
+            'result': 'Error',
+            'message': 'failed to get group members',
+        })
+        self.assertNotIn('内部の秘密値', response.text)
+        self.assertNotIn('group-secret', str(error_log.call_args_list))
+        self.assertNotIn('内部の秘密値', str(error_log.call_args_list))
 
     def test_group_batch_requires_header_token_before_bot_lookup(self):
         response = self.client.post(

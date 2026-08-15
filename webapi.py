@@ -1,7 +1,7 @@
 import logging
 import time
 
-from bottle import Bottle, abort, request, response
+from bottle import Bottle, HTTPResponse, request, response
 
 import auth
 import async_task_processor
@@ -15,7 +15,11 @@ app = Bottle()
 
 
 def abort_json(code, msg, data=None):
-    abort(code, utility.make_error_json(code, msg, data))
+    raise HTTPResponse(
+        body=utility.make_error_json(code, msg, data),
+        status=code,
+        headers={'Content-Type': 'application/json; charset=utf-8'},
+    )
 
 
 def set_json_response_headers():
@@ -96,6 +100,96 @@ def start_handler():
 def stop_handler():
     response.set_header('Content-Type', 'text/plain; charset=utf-8')
     return 'Stop successful'
+
+
+def _parse_group_member_ids():
+    """グループ追加APIのJSON本文を既存契約どおり解釈する。"""
+    try:
+        data = request.json
+    except Exception as error:
+        if getattr(error, 'status_code', None) == 413:
+            raise
+        logging.warning('グループメンバー追加APIのJSON解析に失敗しました')
+        abort_json(400, 'invalid request format')
+
+    if not isinstance(data, dict):
+        abort_json(400, 'invalid request format')
+
+    members_str = data.get('members', '')
+    if not isinstance(members_str, str):
+        abort_json(400, 'invalid request format')
+
+    members_str = members_str.strip()
+    if not members_str:
+        return []
+    if '\n' in members_str:
+        return [member.strip() for member in members_str.split('\n')
+                if member.strip()]
+    return [member.strip() for member in members_str.split(',')
+            if member.strip()]
+
+
+@app.post('/api/v1/groups/<group_id>/add_members')
+def add_group_members(group_id):
+    response.set_header('Content-Type', 'application/json; charset=utf-8')
+
+    # 未認証要求では本文を解析しない。
+    if not auth.check_token(_get_auth_token()):
+        abort_json(401, 'invalid token')
+
+    member_ids = _parse_group_member_ids()
+    added_count = 0
+    failed_ids = []
+
+    for member_id in member_ids:
+        try:
+            user = users.User.deserialize(member_id)
+            if user is None:
+                failed_ids.append(member_id)
+                continue
+            users.append_group_member(group_id, user)
+            added_count += 1
+        except Exception as error:
+            logging.error(
+                'グループメンバーの追加に失敗しました: error_type=%s',
+                type(error).__name__)
+            failed_ids.append(member_id)
+
+    return utility.make_ok_json(
+        f'グループ {group_id} に {added_count} 人のメンバーを追加しました',
+        {
+            'group_id': group_id,
+            'added_count': added_count,
+            'failed_count': len(failed_ids),
+            'failed_ids': failed_ids,
+        },
+    )
+
+
+@app.get('/api/v1/groups/<group_id>/members')
+def get_group_members(group_id):
+    response.set_header('Content-Type', 'application/json; charset=utf-8')
+
+    if not auth.check_token(_get_auth_token()):
+        abort_json(401, 'invalid token')
+
+    try:
+        members = users.get_group_members(group_id)
+        member_ids = [member.serialize() for member in members]
+    except Exception as error:
+        logging.error(
+            'グループメンバーの取得に失敗しました: error_type=%s',
+            type(error).__name__)
+        abort_json(500, 'failed to get group members')
+
+    return utility.make_ok_json(
+        f'グループ {group_id} のメンバー情報を取得しました ({len(member_ids)} 件)',
+        {
+            'group_id': group_id,
+            'count': len(member_ids),
+            'members': member_ids,
+        },
+    )
 
 
 @app.route('/api/v1/bots/<bot_name>/process_group_batch', method=['OPTIONS'])
