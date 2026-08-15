@@ -46,6 +46,7 @@ class AwsDeployScriptTest(unittest.TestCase):
         self.assertIn('sam validate', self.source)
         self.assertIn('--lint', self.source)
         self.assertIn('sam deploy', self.source)
+        self.assertIn('--image-repository "$repository_uri"', self.source)
         self.assertLess(
             self.source.index('sam validate'),
             self.source.index('aws ecr describe-repositories'),

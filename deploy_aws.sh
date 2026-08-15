@@ -80,6 +80,7 @@ sam deploy \
     --template-file "$template_file" \
     --stack-name "$XSBOT_AWS_STACK_NAME" \
     --region "$AWS_REGION" \
+    --image-repository "$repository_uri" \
     --capabilities CAPABILITY_IAM \
     --confirm-changeset \
     --no-fail-on-empty-changeset \
