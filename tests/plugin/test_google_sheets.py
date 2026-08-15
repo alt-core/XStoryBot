@@ -221,6 +221,13 @@ class GoogleSheetsPluginTest(unittest.TestCase):
             'valueRenderOption': 'FORMULA',
         }])
 
+    def test_formula_evaluation_is_opt_in(self):
+        loader = self.module.GoogleSheetPlugin_Loader({
+            'key_file_json': '/keys/sheets.json',
+        })
+
+        self.assertFalse(loader.evaluate_formula)
+
     def test_formula_evaluation_keeps_image_formula_and_empty_result(self):
         service = FakeService(batch_results=[
             {

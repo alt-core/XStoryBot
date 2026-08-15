@@ -111,7 +111,7 @@
     line.quick_reply:
       command: ["＞", ">", "▽"]
       default_reply: "続きを読む=>「続きを読む」"
-      ignore_pattern: "^リセット$|^「リセット」$|^\\*共通/リセット$|^##line.liff."
+      ignore_pattern: "^リセット$|^「リセット」$|^\\*共通/リセット$|^##line\\.liff\\."
       please_select_quick_reply_label: "##please_select_quick_reply"
 
     line.more:

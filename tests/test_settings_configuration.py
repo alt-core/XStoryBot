@@ -2,6 +2,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import sys
 import tempfile
@@ -90,6 +91,11 @@ class SettingsTemplateTest(unittest.TestCase):
         self.assertTrue(default['plugins']['chatgpt']['log_conversation'])
         self.assertEqual('bot', default['bots']['bot']['state_namespace'])
         self.assertEqual('gcp', default['cloud']['provider'])
+
+        quick_reply_ignore = re.compile(
+            default['plugins']['line.quick_reply']['ignore_pattern'])
+        self.assertIsNotNone(quick_reply_ignore.search('##line.liff.action'))
+        self.assertIsNone(quick_reply_ignore.search('##lineXliffYaction'))
 
     def test_template_uses_explicit_service_settings(self):
         default = self.load_template()['*']
@@ -303,6 +309,11 @@ class SettingsModuleTest(unittest.TestCase):
 
 
 class IgnoreConfigurationTest(unittest.TestCase):
+    def test_env_template_lists_deployment_environment(self):
+        lines = (PROJECT_ROOT / '.env.template').read_text(
+            encoding='utf-8').splitlines()
+        self.assertIn('XSBOT_DEPLOY_ENV=dev', lines)
+
     def test_管理者認証の例示署名鍵はそのまま使えない(self):
         line = next(
             item for item in (PROJECT_ROOT / '.env.template').read_text(
