@@ -99,8 +99,6 @@ api_token は、WebAPI などでの認証のために使われる情報です。
 
 利用するpluginとBot interfaceは`settings.yaml`で設定します。
 
-LIFFを別Botとして運用する場合は、`bots`へLIFF用Botを追加し、必要に応じてGoogle Sheetsの`script_sheet`とLIFF interfaceの`action_prefix`を分けられます。既定のサンプルは1 Bot構成です。
-
 設定後、`Dockerfile`からコンテナイメージを一度ビルドし、同じイメージをCloud RunのAPI用サービスとビルダー用サービスへデプロイします。API用は既定の`app:app`を使い、ビルダー用だけ`XSBOT_APP_MODULE=app_builder:app`を設定します。それぞれのURLを`XSBOT_APP_BASE_URL`と`XSBOT_BUILDER_BASE_URL`へ指定し、Cloud Tasksには同じプロジェクト・リージョンで`build-queue`、`action-queue`、`group-message-queue`の3キューを作成します。現行のTaskQueueはOIDCトークンを付けないため、両サービスはCloud IAMで未認証HTTP呼び出しを許可し、保護が必要なrouteはWebhook署名、フォーム認証、または`X-API-Token`で保護します。
 
 現行GCP実装はシナリオとメディアをオブジェクトACLで公開します。そのため、保存先にはオブジェクト単位の公開を許す専用バケットが必要で、Uniform bucket-level accessとPublic Access Preventionは有効にできません。バケット全体を公開する必要はありません。
