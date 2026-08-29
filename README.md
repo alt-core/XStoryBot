@@ -64,7 +64,7 @@ plugin によって拡張可能な設計になっています。
 
 このリポジトリを clone した上で、Python 3.11 環境へ必要なパッケージをインストールします。
 
-    > git clone ...
+    > git clone https://github.com/alt-core/XStoryBot.git
     > python3 -m pip install -r requirements.txt
 
 Cloud Runへデプロイする場合は、利用するGCPプロジェクトを準備してください。
@@ -86,18 +86,18 @@ Cloud Runへデプロイする場合は、利用するGCPプロジェクトを�
   - Twilio の電話番号を取得し、必要な情報をメモ
   - Twilio の webhook に 〜/twilio/callback/＜botname＞ を設定
 
-続いて、設定ファイルと環境変数を準備します。
+続いて、設定ファイルと環境変数を準備します。ローカルで直接実行する場合は、次のようにローカル用の設定を作成します。
 
     > cp settings.yaml.template settings.yaml
 
-`settings.yaml`を必要に応じて編集し、`.env.template`に列挙された環境変数をCloud Run等の実行環境へ設定してください。`XSBOT_DEPLOY_ENV`には適用する環境別設定（例: `prod`、`stg`、`dev`、`test`、`local`）を指定します。
+`settings.yaml`を必要に応じて編集し、`.env.template`に列挙された環境変数を実行環境へ設定してください。Dockerイメージでは`settings.yaml`は取り込まず、`settings.yaml.template`をイメージ内の設定として使うため、コンテナ用のBot・plugin構成はこちらを編集します。`XSBOT_DEPLOY_ENV`には適用する環境別設定（例: `prod`、`stg`、`dev`、`test`、`local`）を指定します。
 
 GCPとGoogle Sheetsで使うサービスアカウントJSONはコンテナイメージへ含めず、Secret Managerから読み取り専用ファイルとしてマウントし、それぞれのコンテナ内パスを`GOOGLE_APPLICATION_CREDENTIALS`と`SHEETS_SERVICE_ACCOUNT`へ指定してください。同じサービスアカウントを使う場合は、両方に同じパスを指定できます。
 
 sheet_id は Google Sheets の編集時に URL に含まれるランダム英数字です。
 api_token は、WebAPI などでの認証のために使われる情報です。必ず独自の値を設定してください。
 
-利用するpluginとBot interfaceは`settings.yaml`で設定します。
+利用するpluginとBot interfaceは、ローカルでは`settings.yaml`、コンテナでは`settings.yaml.template`で設定します。
 
 設定後、`Dockerfile`からコンテナイメージを一度ビルドし、同じイメージをCloud RunのAPI用サービスとビルダー用サービスへデプロイします。API用は既定の`app:app`を使い、ビルダー用だけ`XSBOT_APP_MODULE=app_builder:app`を設定します。それぞれのURLを`XSBOT_APP_BASE_URL`と`XSBOT_BUILDER_BASE_URL`へ指定し、Cloud Tasksには同じプロジェクト・リージョンで`build-queue`、`action-queue`、`group-message-queue`の3キューを作成します。現行のTaskQueueはOIDCトークンを付けないため、両サービスはCloud IAMで未認証HTTP呼び出しを許可し、保護が必要なrouteはWebhook署名、フォーム認証、または`X-API-Token`で保護します。
 
