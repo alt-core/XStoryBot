@@ -108,10 +108,6 @@ def _claim_or_skip(execution_store, execution_key, owner, lease_seconds):
 
 def _process_record(record, dependencies, owner):
     envelope = _load_envelope(record, dependencies['backend_settings'])
-    bot = dependencies['get_bot'](envelope['bot_name'])
-    if bot is None:
-        raise ValueError('Botが見つかりません')
-
     params = envelope['params']
     if envelope['kind'] == 'action':
         serialized_user = params.get('user', '')
@@ -119,11 +115,27 @@ def _process_record(record, dependencies, owner):
         if not isinstance(serialized_user, str) or not isinstance(
                 encoded_action, str):
             raise ValueError('action parameterが不正です')
+        logging.info(
+            'SQS action task: task_id=%s, bot_name=%s, user=%s, '
+            'action=%s, owner=%s',
+            envelope['task_id'], envelope['bot_name'], serialized_user,
+            encoded_action, owner,
+        )
+
+    bot = dependencies['get_bot'](envelope['bot_name'])
+    if bot is None:
+        raise ValueError('Botが見つかりません')
+
+    if envelope['kind'] == 'action':
         execution_key = (
             f'action:{envelope["bot_name"]}:{envelope["task_id"]}')
         if not _claim_or_skip(
                 dependencies['execution_store'], execution_key, owner,
                 _ACTION_LEASE_SECONDS):
+            logging.info(
+                'SQS action task already completed: task_id=%s, owner=%s',
+                envelope['task_id'], owner,
+            )
             return
         process_action(
             bot,
@@ -132,10 +144,14 @@ def _process_record(record, dependencies, owner):
             dependencies['user_class'],
             dependencies['get_group_members'],
             dependencies['options'],
-            log_values=False,
+            log_values=True,
         )
         dependencies['execution_store'].complete_task_execution(
             execution_key, owner)
+        logging.info(
+            'SQS action task completed: task_id=%s, owner=%s',
+            envelope['task_id'], owner,
+        )
         return
 
     message_task_id = params.get('message_task_id', '')
@@ -192,9 +208,10 @@ def lambda_handler(event, context):
         try:
             _process_record(record, dependencies, owner)
         except Exception as error:
-            logging.error(
-                'SQS task failed: message_id=%s, error_type=%s',
-                message_id, type(error).__name__,
+            logging.exception(
+                'SQS task failed: owner=%s, message_id=%s, '
+                'error_type=%s, error=%s',
+                owner, message_id, type(error).__name__, error,
             )
             failures.append({'itemIdentifier': message_id})
 

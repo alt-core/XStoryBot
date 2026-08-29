@@ -28,6 +28,9 @@ class FakeUser:
         service_name, user_id = value.split(':', 1)
         return cls(service_name, user_id)
 
+    def __str__(self):
+        return f'{self.service_name}:{self.user_id}'
+
 
 class FakeInterface:
     def create_context(self, user, action, attrs):
@@ -177,6 +180,68 @@ class AwsTaskHandlerTest(unittest.TestCase):
                     'request-1:group',
                 ),
             ],
+        )
+
+    def test_action成功は詳細と完了をログに残す(self):
+        envelope = make_envelope(action='hello')
+        envelope['api_token'] = 'api-token-must-not-be-logged'
+
+        with patch.object(task_handler.logging, 'info') as info_log:
+            response = self.invoke([make_record('message-1', envelope)])
+
+        self.assertEqual(response, {'batchItemFailures': []})
+        info_log.assert_any_call(
+            'SQS action task: task_id=%s, bot_name=%s, user=%s, '
+            'action=%s, owner=%s',
+            envelope['task_id'], 'bot', 'plaintext:user-1', 'hello',
+            'request-1:message-1',
+        )
+        info_log.assert_any_call(
+            'SQS action task completed: task_id=%s, owner=%s',
+            envelope['task_id'], 'request-1:message-1',
+        )
+        self.assertNotIn(
+            envelope['api_token'],
+            ' '.join(
+                str(value)
+                for log_call in info_log.call_args_list
+                for value in log_call.args
+            ),
+        )
+
+    def test_action内のgroup警告は従来どおり詳細を残す(self):
+        envelope = make_envelope(
+            user='group:group-1',
+            action='group-action',
+        )
+        self.dependencies['get_group_members'].return_value = [
+            FakeUser('unknown', 'member-1'),
+        ]
+
+        with patch.object(
+                task_handler.logging, 'warning') as warning_log:
+            response = self.invoke([make_record('message-1', envelope)])
+
+        self.assertEqual(response, {'batchItemFailures': []})
+        warning_log.assert_called_once_with(
+            'interface not found: unknown:member-1 group-action')
+
+    def test_Bot未登録でも検証済みaction詳細をログに残す(self):
+        envelope = make_envelope(action='missing-bot-action')
+        self.dependencies['get_bot'].return_value = None
+
+        with patch.object(task_handler.logging, 'info') as info_log:
+            response = self.invoke([make_record('message-1', envelope)])
+
+        self.assertEqual(
+            response,
+            {'batchItemFailures': [{'itemIdentifier': 'message-1'}]},
+        )
+        info_log.assert_any_call(
+            'SQS action task: task_id=%s, bot_name=%s, user=%s, '
+            'action=%s, owner=%s',
+            envelope['task_id'], 'bot', 'plaintext:user-1',
+            'missing-bot-action', 'request-1:message-1',
         )
 
     def test_group再キューは新task_id単位で別実行として扱う(self):
@@ -338,37 +403,49 @@ class AwsTaskHandlerTest(unittest.TestCase):
         self.assertEqual(self.bot.handled, [])
         self.execution_store.try_claim_task_execution.assert_not_called()
 
-    def test_failure_logへ本文や例外本文を出さない(self):
-        secret = 'secret-action-value'
-        envelope = make_envelope(action=secret)
-        self.bot.handle_action = Mock(
-            side_effect=RuntimeError(f'failed with {secret}'))
+    def test_actionの詳細と例外を運用ログに残す(self):
+        action = 'action-value'
+        envelope = make_envelope(action=action)
+        failure = RuntimeError(f'failed with {action}')
+        self.bot.handle_action = Mock(side_effect=failure)
 
-        with patch.object(task_handler.logging, 'error') as error_log:
+        with patch.object(task_handler.logging, 'info') as info_log, \
+                patch.object(task_handler.logging, 'exception') as error_log:
             response = self.invoke([make_record('message-1', envelope)])
 
         self.assertEqual(
             response,
             {'batchItemFailures': [{'itemIdentifier': 'message-1'}]},
         )
-        messages = ' '.join(
+        info_messages = ' '.join(
             str(value)
-            for log_call in error_log.call_args_list
+            for log_call in info_log.call_args_list
             for value in log_call.args
         )
-        self.assertNotIn(secret, messages)
-        self.assertNotIn('failed with', messages)
-        self.assertIn('RuntimeError', messages)
+        self.assertIn(envelope['task_id'], info_messages)
+        self.assertIn('bot', info_messages)
+        self.assertIn('plaintext:user-1', info_messages)
+        self.assertIn(action, info_messages)
 
-        invalid_kind = make_envelope(kind=secret)
-        with patch.object(task_handler.logging, 'error') as error_log:
+        error_log.assert_called_once_with(
+            'SQS task failed: owner=%s, message_id=%s, '
+            'error_type=%s, error=%s',
+            'request-1:message-1', 'message-1', 'RuntimeError', failure,
+        )
+
+    def test_検証前の不正envelope値は詳細ログに出さない(self):
+        untrusted_value = 'untrusted-kind-value'
+        invalid_kind = make_envelope(kind=untrusted_value)
+        with patch.object(task_handler.logging, 'info') as info_log, \
+                patch.object(task_handler.logging, 'exception') as error_log:
             self.invoke([make_record('message-2', invalid_kind)])
+
         messages = ' '.join(
             str(value)
-            for log_call in error_log.call_args_list
+            for log_call in info_log.call_args_list + error_log.call_args_list
             for value in log_call.args
         )
-        self.assertNotIn(secret, messages)
+        self.assertNotIn(untrusted_value, messages)
 
     def test_message_id欠落時は空のpartial_failureを返さない(self):
         record = make_record('', make_envelope())
