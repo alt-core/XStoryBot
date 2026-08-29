@@ -4,20 +4,18 @@ import re
 import logging
 import uuid
 import time
+# import urllib3
 
 from linebot import LineBotApi, WebhookParser
-from linebot.models import MessageEvent, PostbackEvent, BeaconEvent, FollowEvent, UnfollowEvent, JoinEvent, LeaveEvent, MemberJoinedEvent, MemberLeftEvent, TextMessage, LocationMessage, StickerMessage, TextSendMessage, ImageSendMessage, TemplateSendMessage, \
+from linebot.models import MessageEvent, PostbackEvent, BeaconEvent, FollowEvent, UnfollowEvent, JoinEvent, LeaveEvent, MemberJoinedEvent, MemberLeftEvent, TextMessage, ImageMessage, VideoMessage, AudioMessage, FileMessage, LocationMessage, StickerMessage, TextSendMessage, ImageSendMessage, VideoSendMessage, TemplateSendMessage, \
     CarouselColumn, ImagemapSendMessage, ImagemapArea, MessageImagemapAction, Sender
 
-# SSL 警告を防ぐため / 今回のケースでは問題ないが、行儀は良くない
-try:
-    import requests.packages.urllib3
-    requests.packages.urllib3.disable_warnings()
-except ImportError:
-    pass
+# # SSL 警告を抑制
+# urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 from requests import RequestException
 
+from common_commands import IMAGE_CMDS, VIDEO_CMDS, RAWIMAGE_CMDS
 from context import ActionContext
 from users import User
 import hub
@@ -49,6 +47,9 @@ class LinePlugin_Interface(object):
         self.allow_special_action_text_for_debug = params.get('allow_special_action_text_for_debug', False)
         self.parser = WebhookParser(self.line_channel_secret)
         self.sender_icon_urls = params.get('sender_icon_urls', {})
+        if not isinstance(self.sender_icon_urls, dict):
+            logging.warning("sender_icon_urls is not a dictionary. Please check settings.yaml.")
+            self.sender_icon_urls = {}
         self.line_api_retry_count = int(params.get('line_api_retry_count', LINE_API_RETRY_COUNT))
         self.line_api_retry_sleep = float(params.get('line_api_retry_sleep', LINE_API_RETRY_SLEEP))
         self.line_abort_duration_ms = float(params.get('line_abort_duration', LINE_ABORT_DURATION)) * 1000
@@ -56,6 +57,9 @@ class LinePlugin_Interface(object):
 
     def get_service_list(self):
         return {'line': self}
+
+    def get_retry_count(self):
+        return self.params.get('retry_count', 3)
 
     def create_context(self, user, action, attrs):
         return LinePlugin_ActionContext(self.bot_name, self, user, action, attrs, event=None)
@@ -70,7 +74,7 @@ class LinePlugin_Interface(object):
             sender_id = event.source.room_id
         else:
             raise NotImplementedError
-        user = User("line", event.source.type + ',' + sender_id)
+        user = User("line", f"{event.source.type},{sender_id}")
         action, attrs = self._construct_action(event)
         if action is not None:
             return LinePlugin_ActionContext(self.bot_name, self, user, action, attrs, event)
@@ -86,20 +90,28 @@ class LinePlugin_Interface(object):
                     text = utility.sanitize_action(text)
                 return text, attrs
             elif isinstance(event.message, LocationMessage):
-                return u"LINE_LOCATION:{},{}({},{})".format(event.message.title, event.message.address, event.message.latitude, event.message.longitude), attrs
+                return f":LINE_LOCATION:{event.message.title},{event.message.latitude},{event.message.longitude},{event.message.address}", attrs
             elif isinstance(event.message, StickerMessage):
-                return u"LINE_STICKER:{},{}".format(event.message.package_id, event.message.sticker_id), attrs
+                return f":LINE_STICKER:{event.message.package_id},{event.message.sticker_id}", attrs
+            elif isinstance(event.message, ImageMessage) and event.message.content_provider is not None and event.message.content_provider.type == 'line':
+                return f":LINE_IMAGE:{event.message.id}", attrs
+            elif isinstance(event.message, VideoMessage) and event.message.content_provider is not None and event.message.content_provider.type == 'line':
+                return f":LINE_VIDEO:{event.message.id},{event.message.duration}", attrs
+            elif isinstance(event.message, AudioMessage) and event.message.content_provider is not None and event.message.content_provider.type == 'line':
+                return f":LINE_AUDIO:{event.message.id},{event.message.duration}", attrs
+            elif isinstance(event.message, FileMessage):
+                return f":LINE_FILE:{event.message.id},{event.message.file_name},{event.message.file_size}", attrs
             else:
-                # 画像・動画・音声メッセージ
-                return u"LINE_ETC:{}".format(event.message.type), attrs
+                # ここに来るものはないはず？
+                return f":LINE_ETC:{event.message.type}", attrs
         elif isinstance(event, PostbackEvent):
             action, token_attrs = utility.decode_action_string(event.postback.data)
             attrs.update(token_attrs)
             return action, attrs
         elif isinstance(event, BeaconEvent):
-            return u"LINE_BEACON:{},{}".format(event.beacon.type, event.beacon.hwid), attrs
+            return f":LINE_BEACON:{event.beacon.type},{event.beacon.hwid}", attrs
         elif isinstance(event, (FollowEvent, UnfollowEvent, JoinEvent, LeaveEvent)):
-            return u'##line.' + event.type, attrs
+            return f'##line.{event.type}', attrs
         else:
             # MemberJoinedEvent, MemberLeftEvent は活用が難しいので、そもそもイベントとして引き渡さない
             return None, attrs
@@ -107,7 +119,7 @@ class LinePlugin_Interface(object):
     def respond_reaction(self, context, reactions):
         msgs = self._construct_responses(context, reactions)
         if len(msgs) > 5:
-            msgs = [TextSendMessage(text=u'内部エラー: 送信するメッセージが多すぎます')]
+            msgs = [TextSendMessage(text='内部エラー: 送信するメッセージが多すぎます')]
         if len(msgs) == 0:
             return 'OK'
         last_e = None
@@ -119,9 +131,9 @@ class LinePlugin_Interface(object):
                 return 'OK' # LINE では respond_reaction の返値は見ていない
             except RequestException as e:
                 if e.response is not None and e.response.status_code == 409:
-                    logging.warning(u'[LINE] Server already processed the request')
+                    logging.warning('[LINE] Server already processed the request')
                     return 'OK'
-                logging.error(u'[LINE] Failed to reply: %s' % (unicode(e)))
+                logging.error(f'[LINE] Failed to reply: {str(e)}')
                 last_e = e
                 time.sleep(retry_sleep)
                 retry_sleep = retry_sleep * 2.0 # 指数バックオフ
@@ -131,11 +143,11 @@ class LinePlugin_Interface(object):
         if context.event is not None:
             if hasattr(context.event, 'reply_token'):
                 #for message in messages:
-                #    logging.info(u'[LINE] {}'.format(message.as_json_dict()))
+                #    logging.info(f'[LINE] {message.as_json_dict()}')
                 self.line_bot_api.reply_message(context.event.reply_token, messages)
             else:
                 # unfollow イベントなどは reply_token が存在しない
-                logging.info(u'event {} doesnt have reply_token: {}'.format(context.event.type, messages))
+                logging.info(f'event {context.event.type} doesnt have reply_token: {messages}')
         else:
             # API 経由で起動された場合は reply_token がない
             self.line_bot_api.push_message(context.source_id, messages, retry_key=retry_key)
@@ -156,10 +168,18 @@ class LinePlugin_Interface(object):
             if commands.invoke_runtime_construct_response(context, sender, msg, options, children):
                 # コマンド毎の処理メソッドの中で context.response への追加が行われている
                 pass
-            elif msg == u'@image' or msg == u'@画像':
+            elif msg in IMAGE_CMDS:
                 url = options[0]
                 response.append(ImageSendMessage(self.get_image_url(url), self.get_image_url(url, 'preview'), sender=self._make_sender(sender)))
-
+            elif msg in VIDEO_CMDS:
+                thumb_url = options[0]
+                video_url = options[1]
+                video_action = options[2] if len(options) > 2 else None
+                response.append(VideoSendMessage(original_content_url=video_url, preview_image_url=thumb_url, tracking_id=video_action, sender=self._make_sender(sender)))
+            elif msg in RAWIMAGE_CMDS:
+                image_url = options[0]
+                preview_url = options[1]
+                response.append(ImageSendMessage(image_url, preview_url, sender=self._make_sender(sender)))
             else:
                 response.append(TextSendMessage(text=msg, sender=self._make_sender(sender)))
         return response

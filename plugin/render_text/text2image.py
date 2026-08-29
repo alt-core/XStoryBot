@@ -1,25 +1,11 @@
 # coding: utf-8
-import urllib
 import logging
 import hashlib
 import re
 import json
+from urllib.parse import unquote_plus
 
-if __name__ == "__main__":
-    import os, sys, json, subprocess
-    gcloud_info = json.loads(subprocess.check_output(['gcloud', 'info', '--format=json']))
-    sdk_path = os.path.join(gcloud_info["installation"]["sdk_root"], 'platform', 'google_appengine')
-    sys.path.append(sdk_path)
-    sys.path.append(os.path.join(sdk_path, 'lib', 'yaml', 'lib'))
-    sys.path.insert(0, './lib')
-    from google.appengine.api import memcache
-    from google.appengine.ext import testbed
-    tb = testbed.Testbed()
-    tb.activate()
-    tb.init_memcache_stub()
-else:
-    from google.appengine.api import memcache
-
+import build_cache
 from bottle import request, Bottle, abort, response, HTTPResponse
 import time
 
@@ -51,13 +37,13 @@ def text2image(encoded_text):
     content_type = 'image/png'
 
     if len(encoded_text) > 2000:
-        error('too long request: {}'.format(len(encoded_text)))
+        error(f'too long request: {len(encoded_text)}')
 
     options = DEFAULT_RENDERING_OPTIONS.copy()
     options.update(settings.PLUGINS.get('render_text', {}).get('text2image', {}))
 
     size_x = int(request.params.get('size_x', options['size_x']))
-    print(size_x)
+    logging.info(f'size_x: {size_x}')
     size_y = int(request.params.get('size_y', options['size_y']))
     margin_x = int(request.params.get('margin_x', options['margin_x']))
     margin_y = int(request.params.get('margin_y', options['margin_y']))
@@ -85,8 +71,8 @@ def text2image(encoded_text):
         if not (key in text_rendering_options) and (key in options):
             text_rendering_options[key] = options[key]
 
-    source_hash = hashlib.md5(encoded_text + json.dumps([size_x, size_y, margin_x, margin_y, text_rendering_options])).hexdigest()
-    cache_etag = memcache.get('text2imagecacheetag:' + source_hash)
+    source_hash = hashlib.md5((encoded_text + json.dumps([size_x, size_y, margin_x, margin_y, text_rendering_options])).encode()).hexdigest()
+    cache_etag = build_cache.get_cache('text2imagecacheetag:' + source_hash)
     ims = request.environ.get('HTTP_IF_NONE_MATCH')
     if ims and ims == cache_etag:
         # Not Modified
@@ -94,7 +80,7 @@ def text2image(encoded_text):
 
     if cache_etag is not None:
         # キャッシュがヒットしたので返す
-        cache = memcache.get('text2imagecache:' + source_hash)
+        cache = build_cache.get_cache('text2imagecache:' + source_hash)
         if cache is not None:
             response.content_type = content_type
             response.set_header('Content-Length', str(len(cache)))
@@ -105,12 +91,12 @@ def text2image(encoded_text):
 
     logging.info('text2image cache miss-hit:' + encoded_text)
 
-    text = unicode(urllib.unquote_plus(encoded_text), 'utf-8')
+    text = unquote_plus(encoded_text)
     output_buffer, _ = renderer.render_text_to_png(text, size_x, size_y, margin_x, margin_x, margin_y, margin_y, **text_rendering_options)
 
     etag = hashlib.md5(output_buffer).hexdigest()
-    memcache.set('text2imagecacheetag:' + source_hash, etag, time=CACHE_SEC)
-    memcache.set('text2imagecache:' + source_hash, output_buffer, time=CACHE_SEC+1)
+    build_cache.set_cache('text2imagecacheetag:' + source_hash, etag , sec=CACHE_SEC)
+    build_cache.set_cache('text2imagecache:' + source_hash, output_buffer , sec=CACHE_SEC+30)
 
     response.content_type = content_type
     response.set_header('Content-Length', str(len(output_buffer)))

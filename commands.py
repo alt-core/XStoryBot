@@ -22,7 +22,7 @@ def clear():
 RE_LABEL = re.compile(r'^[*＊#＃].*')
 RE_VARIABLE = re.compile(r'^[$＄].*')
 RE_IMAGE = re.compile(r'^=IMAGE\("([^"]+)"\)')
-RE_NUMBER = re.compile(ur'^[\-−]?[0-9０-９]+([.．][0-9０-９]*)?$')
+RE_NUMBER = re.compile(r'^[\-−]?[0-9０-９]+([.．][0-9０-９]*)?$')
 
 
 class Default_Builder(object):
@@ -42,7 +42,7 @@ def _convert_format_string(s):
         if cell_format.startswith('[') and cell_format.endswith(']'):
             required = False
             cell_format = cell_format[1:-1]
-        m = re.match(ur'^([^(]*)(?:\((\d+)\))?$', cell_format)
+        m = re.match(r'^([^(]*)(?:\((\d+)\))?$', cell_format)
         if m:
             cell_format = m.group(1)
             max_len = int(m.group(2) or 0)
@@ -53,7 +53,7 @@ def _convert_format_string(s):
 class CommandEntry(object):
     def __init__(self, names, options=None, child=None, grandchild=None, builder=None, runtime=None, service='*', specs=None, min_version=1):
         """
-        :param names: [u'@コマンド名', u'@Command']
+        :param names: ['@コマンド名', '@Command']
         :param options: 'label|text|expr|image|raw(MAX_LEN) [label|text|expr|image|raw(MAX_LEN)] ...'
         :param child: 'label|text|expr|raw(MAX_LEN) [label|text|expr|raw(MAX_LEN)] ...'
         :param grandchild: 'label|text|expr|raw(MAX_LEN) [label|text|expr|raw(MAX_LEN)] ...'
@@ -113,14 +113,14 @@ def get_command(msg, version, service='*'):
 def check_format_and_normalize(builder, cell, cell_format):
     format_type, required, max_len = cell_format
 
-    if cell == u'':
+    if cell == '':
         if required:
-            builder.raise_error(u'コマンドの引数が足りません')
+            builder.raise_error('コマンドの引数が足りません')
         else:
             return cell
 
     if max_len != 0 and len(cell) > max_len:
-        builder.raise_error(u'コマンドの引数の文字数が長すぎます（最大{}文字）'.format(max_len), cell)
+        builder.raise_error('コマンドの引数の文字数が長すぎます（最大{}文字）'.format(max_len), cell)
 
     hankaku = False
     lower = False
@@ -128,7 +128,7 @@ def check_format_and_normalize(builder, cell, cell_format):
         try:
             expr = Expression.from_str(cell)
         except Exception as e:
-            builder.raise_error(u'式が不正です: {} {}'.format(cell, unicode(e)), cell)
+            builder.raise_error('式が不正です: {} {}'.format(cell, str(e)), cell)
         return expr
 
     if 'variable' in format_type:
@@ -159,7 +159,7 @@ def check_format_and_normalize(builder, cell, cell_format):
         passed = True
     elif 'variable' in format_type and RE_VARIABLE.match(cell):
         passed = True
-    elif 'image' in format_type and RE_IMAGE.match(cell):
+    elif 'image' in format_type and (RE_IMAGE.match(cell) or utility.is_valid_web_url(cell)):
         passed = True
     elif 'number' in format_type and RE_NUMBER.match(cell):
         passed = True
@@ -167,33 +167,39 @@ def check_format_and_normalize(builder, cell, cell_format):
     if not passed:
         msgs = []
         if 'label' in format_type:
-            msgs.append(u'ラベル')
+            msgs.append('ラベル')
         if 'number' in format_type:
-            msgs.append(u'数字')
+            msgs.append('数字')
         if 'image' in format_type:
-            msgs.append(u'画像')
+            msgs.append('画像')
         if 'variable' in format_type:
-            msgs.append(u'$ で始まるフラグ名')
-        builder.raise_error(u'{}を指定する必要があります'.format(u'か'.join(msgs)), cell)
+            msgs.append('$ で始まるフラグ名')
+        builder.raise_error('{}を指定する必要があります'.format('か'.join(msgs)), cell)
 
     if 'label' not in format_type and RE_LABEL.match(cell):
-        builder.raise_error(u'ラベルが指定できない引数にラベルを指定しています', cell)
+        builder.raise_error('ラベルが指定できない引数にラベルを指定しています', cell)
 
     return cell
 
 
-def invoke_builder(builder, node):
+def parse_command(builder, node):
     row = node.term
     # コマンド判定は半角化して行う
-    sender, msg = utility.parse_sender(utility.to_hankaku(row[0]))
-    if not msg.startswith(u'@'):
-        return False
+    sender, raw_msg = utility.parse_sender(row[0])
+    cmd = utility.to_hankaku(raw_msg).strip()
 
-    entry = get_command(msg, builder.version)
+    # バージョン3では、コマンド列の先頭の / を @ に変換
+    if builder.version >= 3 and cmd.startswith('/'):
+        cmd = '@' + cmd[1:]
+
+    if not cmd.startswith('@'):
+        return False, sender, raw_msg, node.get_factors(1), [], []
+
+    entry = get_command(cmd, builder.version)
     if entry is None:
-        return False
+        builder.raise_error(f'間違ったコマンドです: {cmd}')
     if entry.builder is None:
-        builder.raise_error(u'{} は builder が指定されていません'.format(msg))
+        builder.raise_error(f'{cmd} は builder が指定されていません')
 
     options = []
     children = []
@@ -204,18 +210,18 @@ def invoke_builder(builder, node):
         if len(row) > 1+i:
             cell = row[1+i]
         else:
-            cell = u''
+            cell = ''
         options.append(check_format_and_normalize(builder, cell, entry.options[i]))
         utility.remove_tail_empty_cells(options)
 
     # children のフォーマット確認と事前処理
     n_children = len(node.children)
     if n_children > 0 and entry.child is None:
-        builder.raise_error(u'このコマンドに子要素を指定することはできません')
+        builder.raise_error('このコマンドに子要素を指定することはできません')
     if 'children_min' in entry.specs and n_children < entry.specs['children_min']:
-        builder.raise_error(u'子要素は {} 個以上必要です'.format(entry.specs['children_min']))
+        builder.raise_error('子要素は {} 個以上必要です'.format(entry.specs['children_min']))
     if 'children_max' in entry.specs and n_children > entry.specs['children_max']:
-        builder.raise_error(u'子要素は {} 個以下でなくてはいけません'.format(entry.specs['children_max']))
+        builder.raise_error('子要素は {} 個以下でなくてはいけません'.format(entry.specs['children_max']))
     for i in range(n_children):
         child = []
         child_node = node.children[i]
@@ -223,7 +229,7 @@ def invoke_builder(builder, node):
             if len(child_node.term) > j:
                 cell = child_node.term[j]
             else:
-                cell = u''
+                cell = ''
             child.append(check_format_and_normalize(builder, cell, entry.child[j]))
         utility.remove_tail_empty_cells(child)
         children.append(child)
@@ -231,7 +237,7 @@ def invoke_builder(builder, node):
         # 孫要素の確認
         n_grandchildren = len(child_node.children)
         if n_grandchildren > 0 and entry.grandchild is None:
-            builder.raise_error(u'このコマンドに孫要素を指定することはできません')
+            builder.raise_error('このコマンドに孫要素を指定することはできません')
         child_grandchild_list = []
         for j in range(n_grandchildren):
             grandchild = []
@@ -240,12 +246,16 @@ def invoke_builder(builder, node):
                 if len(grandchild_node.term) > k:
                     cell = grandchild_node.term[k]
                 else:
-                    cell = u''
+                    cell = ''
                 grandchild.append(check_format_and_normalize(builder, cell, entry.grandchild[k]))
             utility.remove_tail_empty_cells(grandchild)
             child_grandchild_list.append(grandchild)
         grandchildren.append(child_grandchild_list)
 
+    return entry, sender, cmd, options, children, grandchildren
+
+
+def invoke_builder(builder, entry, sender, msg, options, children, grandchildren):
     if entry.grandchild:
         return entry.builder.build_from_command(builder, sender, msg, options, children, grandchildren)
     elif entry.child:
@@ -255,7 +265,7 @@ def invoke_builder(builder, node):
 
 
 def invoke_runtime_run_command(context, sender, msg, options, children):
-    if not msg.startswith(u'@'):
+    if not msg.startswith('@'):
         return False
     entry = get_command(msg, version=context.version, service=context.service_name)
     if entry is None:
@@ -269,7 +279,7 @@ def invoke_runtime_run_command(context, sender, msg, options, children):
 
 
 def invoke_runtime_construct_response(context, sender, msg, options, children):
-    if not msg.startswith(u'@'):
+    if not msg.startswith('@'):
         return False
     entry = get_command(msg, version=context.version, service=context.service_name)
     if entry is None:
@@ -285,7 +295,7 @@ def invoke_runtime_construct_response(context, sender, msg, options, children):
 class ObjectEntry(object):
     def __init__(self, names, runtime=None, service='*'):
         """
-        :param names: [u'ObjectName']
+        :param names: ['ObjectName']
         :param runtime: SomePlugin_Runtime() or None
         :param service: 'line'
         """
@@ -329,5 +339,3 @@ def get_runtime_object_dictionary(service='*', context=None):
             for word in entry.names:
                 m[word] = entry.runtime.get_runtime_object(word, context)
     return m
-
-

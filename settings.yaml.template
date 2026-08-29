@@ -1,0 +1,243 @@
+# デフォルト設定（全環境共通）
+"*":
+  # クラウドバックエンド設定
+  cloud:
+    provider: gcp
+
+  # 認証設定
+  auth:
+    admin_auth_json_env: XSBOT_ADMIN_AUTH_JSON
+    api_token: !env XSBOT_API_TOKEN
+
+  # GCP設定
+  gcp:
+    project_id: !env GOOGLE_CLOUD_PROJECT
+    project_number: !env GOOGLE_CLOUD_PROJECT_NUMBER
+    location: !env GOOGLE_CLOUD_LOCATION
+    credentials_path: !env GOOGLE_APPLICATION_CREDENTIALS
+    storage_bucket: !env XSBOT_STORAGE_BUCKET
+    # Cloud Run設定
+    cloud_run:
+      service: !env GOOGLE_CLOUD_PROJECT
+      region: !env GOOGLE_CLOUD_LOCATION
+      memory: "256Mi"
+      cpu: 1
+      min_instances: 1
+      max_instances: 3
+      builder_service: !format
+        - "{0}-builder"
+        - !env GOOGLE_CLOUD_PROJECT
+      builder_memory: "2Gi"
+      builder_cpu: 1
+    # サービスのドメイン設定
+    services:
+      app:
+        base_url: !env XSBOT_APP_BASE_URL
+      builder:
+        base_url: !env XSBOT_BUILDER_BASE_URL
+
+  # AWS設定
+  aws:
+    region: !env AWS_REGION
+    credential_source:
+      google_service_account_parameter: !env XSBOT_AWS_SHEETS_CREDENTIAL_PARAMETER
+      admin_auth_parameter: !env XSBOT_AWS_ADMIN_AUTH_PARAMETER
+    state_store:
+      state_table: !env XSBOT_AWS_STATE_TABLE
+      group_task_table: !env XSBOT_AWS_GROUP_TASK_TABLE
+      group_task_index: !env XSBOT_AWS_GROUP_TASK_INDEX
+      cache_table: !env XSBOT_AWS_CACHE_TABLE
+      player_max_bytes: 358400
+    object_store:
+      private_bucket: !env XSBOT_AWS_PRIVATE_BUCKET
+      media_bucket: !env XSBOT_AWS_MEDIA_BUCKET
+      public_media_base_url: !env XSBOT_AWS_PUBLIC_MEDIA_BASE_URL
+    task_queue:
+      queues:
+        action-queue:
+          url: !env XSBOT_AWS_ACTION_QUEUE_URL
+          arn: !env XSBOT_AWS_ACTION_QUEUE_ARN
+        group-message-queue:
+          url: !env XSBOT_AWS_GROUP_MESSAGE_QUEUE_URL
+          arn: !env XSBOT_AWS_GROUP_MESSAGE_QUEUE_ARN
+      scheduler:
+        role_arn: !env XSBOT_AWS_SCHEDULER_ROLE_ARN
+        group_name: !env XSBOT_AWS_SCHEDULER_GROUP_NAME
+        dead_letter_arn: !env XSBOT_AWS_SCHEDULER_DLQ_ARN
+        maximum_event_age_seconds: 3600
+        maximum_retry_attempts: 3
+      build:
+        cluster: !env XSBOT_AWS_BUILD_CLUSTER
+        task_definition: !env XSBOT_AWS_BUILD_TASK_DEFINITION
+        container_name: !env XSBOT_AWS_BUILD_CONTAINER_NAME
+        subnet_ids:
+          - !env XSBOT_AWS_BUILD_SUBNET_ID_1
+          - !env XSBOT_AWS_BUILD_SUBNET_ID_2
+        security_group_ids:
+          - !env XSBOT_AWS_BUILD_SECURITY_GROUP_ID
+    services:
+      app:
+        base_url: !env XSBOT_APP_BASE_URL
+      builder:
+        base_url: !env XSBOT_BUILDER_BASE_URL
+
+  # オプション設定
+  options:
+    api_token: !env XSBOT_API_TOKEN
+    admins: []
+    reset_keyword: "!!強制リセット!!"
+    timezone: "Asia/Tokyo"
+    scenario_version: 3
+    group_batch_size: 2000
+    group_max_workers: 150
+    group_max_rate: 500
+
+  # プラグイン設定
+  plugins:
+    chatgpt:
+      api_key: !env OPENAI_API_KEY
+      model: "gpt-4o"
+      log_conversation: true
+
+    line:
+      abort_duration: 27
+      abort_duration_dont_break: true
+      alt_text: "LINEアプリで確認してください。"
+      sender_icon_urls:
+        SENDER_NAME: "https://example.com/path/to/line_icon.jpg"
+      access_token: !env LINE_ACCESS_TOKEN
+      channel_secret: !env LINE_CHANNEL_SECRET
+
+    line.quick_reply:
+      command: ["＞", ">", "▽"]
+      default_reply: "続きを読む=>「続きを読む」"
+      ignore_pattern: "^リセット$|^「リセット」$|^\\*共通/リセット$|^##line\\.liff\\."
+      please_select_quick_reply_label: "##please_select_quick_reply"
+
+    line.more:
+      command: []
+      image_url: "https://example.com/path/to/more_button.png"
+      message: "「続きを読む」"
+      action_pattern: null
+      ignore_pattern: "^「|^リセット$|^\\*共通/リセット$"
+      please_push_more_button_label: "##please_push_more_button"
+
+    line.image_text:
+      more_message: "「続きを読む」"
+      more_image_url: "https://example.com/path/to/more_button.png"
+      default_frame: "book"
+      frames:
+        book:
+          size_x: 2080
+          size_y: 1872
+          margin_x: 90
+          margin_y: 70
+          is_vertical: true
+          font_path: "plugin/render_text/font/ipaexg_tate.ttf"
+          font_size: 100
+          color: "black"
+          background: "white"
+          line_height: 1.5
+          base_line_offset: -0.28
+
+    liff:
+      allow_origin: "*"
+
+    google_sheets:
+      sheet_id: !env SHEETS_ID
+      service_account: !env SHEETS_SERVICE_ACCOUNT
+
+    twilio:
+      sid: !env TWILIO_SID
+      auth_token: !env TWILIO_AUTH_TOKEN
+      phone_number: !env TWILIO_PHONE_NUMBER
+
+    pusher:
+      app_id: !env PUSHER_APP_ID
+      key: !env PUSHER_APP_KEY
+      secret: !env PUSHER_APP_SECRET
+      cluster: !env PUSHER_APP_CLUSTER
+
+    timestamp:
+      timezone: "Asia/Tokyo"
+
+    render_text:
+      text2image:
+        font_path: "plugin/render_text/font/ipaexg.ttf"
+
+    mock_line:
+      error_rate: 0
+      rate_limit_threshold: 100
+      logging_enabled: true
+
+    plaintext: {}
+
+  # Bot設定
+  bots:
+    bot:
+      name: "My Bot"
+      state_namespace: "bot"
+      interfaces:
+        - type: line
+          params:
+            line_access_token: !env LINE_ACCESS_TOKEN
+            line_channel_secret: !env LINE_CHANNEL_SECRET
+        - type: liff
+          params:
+      scenario:
+        type: google_sheets
+        params:
+          sheet_id: !env SHEETS_ID
+          key_file_json: !env SHEETS_SERVICE_ACCOUNT
+
+# 本番環境設定
+prod:
+  bots:
+    bot:
+      description: '<div class="alert" style="font-weight: bold; color: red; background: #cc88cc">これは本番環境です。更新時はご注意ください。</div>'
+
+# ステージング環境設定
+stg:
+  bots:
+    bot:
+      description: '<div class="alert" style="font-weight: bold; color: red; background: #cc88cc">これはステージング環境です。更新時はご注意ください。</div>'
+
+# 開発環境設定
+dev:
+  bots:
+    bot:
+      name: "My Bot (開発環境)"
+      description: '<div class="alert" style="font-weight: bold; color: white; background: #88cc88">これは開発環境です。</div>'
+
+# テスト環境設定
+test:
+  bots:
+    bot:
+      name: "My Bot (テスト環境)"
+      description: '<div class="alert" style="font-weight: bold; color: white; background: #8888cc">これはテスト環境です。</div>'
+    mock:
+      name: "Mock Bot"
+      state_namespace: "mock"
+      interfaces:
+        - type: mock_line
+          params:
+        - type: plaintext
+          params:
+      scenario:
+        type: google_sheets
+        params:
+          sheet_id: !env SHEETS_ID
+          key_file_json: !env SHEETS_SERVICE_ACCOUNT
+
+# ローカル環境設定
+local:
+  bots:
+    bot:
+      name: "My Bot (ローカル環境)"
+      description: '<div class="alert" style="font-weight: bold; color: white; background: #cc8888">これはローカル環境です。</div>'
+  gcp:
+    services:
+      app:
+        base_url: "http://localhost:8080"
+      builder:
+        base_url: "http://localhost:8081"

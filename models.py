@@ -1,98 +1,116 @@
-# coding: utf-8
 import json
 import random
 import string
+import hashlib
+import copy
 
-from google.appengine.ext import ndb
+import logging
 
+from cloud_backend import create_state_store
+from utility import deep_dump
 
-class GlobalBotVariables(ndb.Model):
-    scenario_uri = ndb.StringProperty()
+DEBUG = False
 
-
-class GroupMembers(ndb.Model):
-    members = ndb.StringProperty(repeated=True)
-
-
-class PlayerStatus(ndb.Model):
-    scene = ndb.StringProperty()
-    scene_history = ndb.StringProperty(repeated=True)
-    action_token = ndb.StringProperty()
-    value = ndb.TextProperty()
+_state_store = create_state_store()
 
 
-class PlayerStatusDB(object):
+def get_state_store():
+    """同じmoduleが所有するStateStoreを返す。"""
+    return _state_store
+
+
+class GlobalBotVariablesDB:
+    @staticmethod
+    def get_by_bot_name(bot_name):
+        return _state_store.get_global_bot_variables(bot_name)
+
+    @staticmethod
+    def save(bot_name, scenario_uri):
+        _state_store.save_global_bot_variables(bot_name, scenario_uri)
+
+
+class PlayerStatusDB:
     MAX_HISTORY = 5 # ヒストリーは最大5つまで
 
-    def __init__(self, user_id):
-        self.id = user_id
-        self.entry = PlayerStatus.get_by_id(user_id)
-        if self.entry:
-            self.db = json.loads(self.entry.value) or {}
+    def __init__(self, bot_name, user_id):
+        self.bot_name = bot_name
+        self.user_id = user_id
+        self.id = bot_name + ':' + user_id
+        state = _state_store.load_player_status(self.id)
+        if state is not None:
+            data = state.data
+            if DEBUG:
+                from pprint import pprint
+                print('==PlayerStatusDB==')
+                pprint(data)
+            self.entry = {
+                'scene': data.get('scene'),
+                'scene_history': data.get('scene_history', []),
+                'action_token': data.get('action_token'),
+                'value': data.get('value', '{}')
+            }
+            self.rollback_entry = copy.deepcopy(self.entry)
+            self.db = self._str_to_db(self.entry['value'])
+            self.last_update_time = state.version
         else:
-            self.entry = PlayerStatus(id=user_id, scene="*start", value="{}")
+            self.entry = {
+                'scene': '*start',
+                'scene_history': [],
+                'action_token': None,
+                'value': None
+            }
+            self.rollback_entry = None
             self.db = {}
-        self.is_dirty = False
-        self.is_values_dirty = False
+            self.last_update_time = None
+        self.is_dirty = False # is_dirty は self.db 以外の値の更新確認
         if self.action_token is None:
             self.renew_action_token()
 
     def __getitem__(self, item):
-        value = self.db[item]
-        return value
+        return self.db[item]
 
     def __setitem__(self, item, value):
-        if isinstance(value, list) or isinstance(value, dict):
-            is_ref = True
-        else:
-            is_ref = False
-        if item not in self.db or (self.db[item] != value or is_ref):
-            # 参照型は直接中身を書き換えられてしまうと更新チェックができないので、保守的に倒す
-            self.db[item] = value
-            self.is_dirty = True
-            self.is_values_dirty = True
+        if DEBUG:
+            print(f'PlayerStatusDB: {item} = {value}')
+        self.db[item] = value
+        # db の更新は保存時に dump して比較する
 
     def __delitem__(self, item):
         del self.db[item]
-        self.is_dirty = True
-        self.is_values_dirty = True
 
     def __contains__(self, item):
         return item in self.db
 
     def keys(self):
-        return self.db.keys()
+        return list(self.db.keys())
 
     def get(self, item, default=None):
-        if item in self:
-            return self[item]
-        else:
-            return default
+        return self.db.get(item, default)
 
     def reset(self):
         self.db = {}
-        self.entry.scene = None
-        self.entry.scene_history = []
+        self.entry['scene'] = None
+        self.entry['scene_history'] = []
+        self.entry['action_token'] = None
         self.is_dirty = True
-        self.is_values_dirty = True
         self.renew_action_token()
 
     @property
     def scene(self):
-        return self.entry.scene
+        return self.entry['scene']
 
     @scene.setter
     def scene(self, value):
-        self.entry.scene = value
+        self.entry['scene'] = value
         self.is_dirty = True
 
     @property
     def scene_history(self):
-        return self.entry.scene_history
+        return self.entry['scene_history']
 
     @scene_history.setter
     def scene_history(self, value):
-        self.entry.scene_history = value
+        self.entry['scene_history'] = value
         self.is_dirty = True
 
     def push_scene_history(self, scene_title):
@@ -108,75 +126,130 @@ class PlayerStatusDB(object):
 
     @property
     def action_token(self):
-        return self.entry.action_token
+        return self.entry['action_token']
 
     @action_token.setter
     def action_token(self, value):
-        self.entry.action_token = value
+        self.entry['action_token'] = value
         self.is_dirty = True
-        
+
     def renew_action_token(self):
-        self.action_token = \
-            u''.join([random.choice(string.ascii_letters) for _ in range(8)])
+        self.action_token = ''.join([random.choice(string.ascii_letters) for _ in range(8)])
 
     def __str__(self):
         return str(self.db)
 
-    def save(self):
-        if self.is_dirty:
-            if self.is_values_dirty:
-                self.entry.value = json.dumps(self.db)
-            self.entry.put()
+    def _db_to_str(self, db):
+        # $_ で始まるローカル変数は保存しない
+        return json.dumps({k: v for k, v in db.items() if not k.startswith('$_')})
 
+    def _str_to_db(self, s):
+        return json.loads(s)
 
-class GroupDB(object):
-    def __init__(self, group_id):
-        self.entry = GroupMembers.get_by_id(id=group_id)
-        if self.entry is None:
-            self.entry = GroupMembers(id=group_id, members=[])
-
-    def append_member(self, member):
-        if member not in self.entry.members:
-            self.entry.members.append(member)
-            self.entry.put()
-
-    def remove_member(self, member):
-        if member in self.entry.members:
-            self.entry.members.remove(member)
-            self.entry.put()
-
-    def clear(self):
-        if self.entry.members:
-            del self.entry.members[:]
-            self.entry.put()
-
-
-class ImageFileStatDB(ndb.Model):
-    file_digest = ndb.StringProperty()
-    width = ndb.IntegerProperty()
-    height = ndb.IntegerProperty()
-
-    @classmethod
-    def get_cached_image_file_stat(cls, kind, image_url):
-        key = u'{}|{}'.format(kind, image_url)
-        stat = cls.get_by_id(id=key)
-        if stat is None:
-            return None
-        size = (stat.width, stat.height)
-        return stat.file_digest, size
-
-    @classmethod
-    def put_cached_image_file_stat(cls, kind, image_url, file_digest, size):
-        key = u'{}|{}'.format(kind, image_url)
-        entry = cls.get_by_id(id=key)
-        if entry is None:
-            entry = cls(id=key, file_digest=file_digest, width=size[0], height=size[1])
+    def save(self, force=False):
+        if DEBUG:
+            from pprint import pprint
+            print('==DB @ save==')
+            deep_dump(self.db)
+        new_value = self._db_to_str(self.db)
+        if force or self.is_dirty or self.entry['value'] != new_value:
+            if DEBUG:
+                print('== SAVED ==')
+            self.entry['value'] = new_value
+            if force:
+                self.last_update_time = _state_store.force_put_player_status(
+                    self.id, self.entry)
+            elif self.last_update_time is not None:
+                # 更新の場合は前回の更新時間を指定することで並行実行を排除する
+                # 失敗したときは例外が上がるはず
+                self.last_update_time = _state_store.update_player_status(
+                    self.id, self.entry, self.last_update_time)
+            else:
+                self.last_update_time = _state_store.create_player_status(
+                    self.id, self.entry)
+            self.is_dirty = False
         else:
-            if entry.file_digest == file_digest:
-                # 更新しない
-                return
-            entry.file_digest = file_digest
-            entry.width, entry.height = size
-        entry.put()
+            if DEBUG:
+                print('== not saved ==')
+
+    def rollback(self):
+        logging.info(f'Rollback: {self.id}')
+        if self.rollback_entry is not None:
+            self.entry = copy.deepcopy(self.rollback_entry)
+            self.db = self._str_to_db(self.entry['value'])
+            self.save(force=True)
+            self.is_dirty = False
+        else:
+            _state_store.delete_player_status(self.id)
+            self.reset()
 
 
+class GroupMembersDB:
+    @staticmethod
+    def _get_shard_id(member):
+        # user_idのSHA-256先頭2桁をshard IDに使う（256分割）。
+        # GCPでは各shard documentを1MiB未満に保つ。
+        h = hashlib.sha256(member.encode('utf-8')).hexdigest()
+        return h[:2]
+
+    @staticmethod
+    def get_members(group_id):
+        return _state_store.get_group_members(group_id)
+
+    @staticmethod
+    def append_member(group_id, member):
+        shard_id = GroupMembersDB._get_shard_id(member)
+        _state_store.append_group_member(group_id, shard_id, member)
+
+    @staticmethod
+    def remove_member(group_id, member):
+        shard_id = GroupMembersDB._get_shard_id(member)
+        _state_store.remove_group_member(group_id, shard_id, member)
+
+    @staticmethod
+    def clear(group_id):
+        _state_store.clear_group_members(group_id)
+
+    @staticmethod
+    def get_all_groups():
+        return _state_store.get_all_groups()
+
+
+import urllib.parse
+
+class ImageFileStatDB:
+    @staticmethod
+    def get_cached_image_file_stat(kind, image_url):
+        key = f'{kind}|{urllib.parse.quote_plus(image_url)}'
+        data = _state_store.get_image_file_stat(key)
+        if data is not None:
+            return data.get('file_digest'), (data.get('width'), data.get('height'))
+        return None
+
+    @staticmethod
+    def put_cached_image_file_stat(kind, image_url, file_digest, size):
+        key = f'{kind}|{urllib.parse.quote_plus(image_url)}'
+        _state_store.put_image_file_stat(key, {
+            'file_digest': file_digest,
+            'width': size[0],
+            'height': size[1]
+        })
+
+class MediaFileStatDB:
+    @staticmethod
+    def get_cached_media_file_stat(kind, media_url):
+        key = f'{kind}|{urllib.parse.quote_plus(media_url)}'
+        data = _state_store.get_media_file_stat(key)
+        if data is not None:
+            return data.get('file_type'), data.get('file_size'), data.get('file_digest'), data.get('attributes', {})
+        return None
+
+    @staticmethod
+    def put_cached_media_file_stat(kind, media_url, file_type, file_size, file_digest, attributes=None):
+        key = f'{kind}|{urllib.parse.quote_plus(media_url)}'
+        _state_store.put_media_file_stat(key, {
+            'file_type': file_type,
+            'file_size': file_size,
+            'file_digest': file_digest,
+            'attributes': attributes or {}
+        })

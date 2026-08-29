@@ -2,66 +2,38 @@
 import logging
 import re
 
-from google.appengine.ext import ndb
-
+from cloud_backend import create_state_store
 import hub
 import commands
 from plugin.line import default_commands
 from utility import safe_list_get
 
 
-SET_NEXT_LABEL_CMD = u'@@set_next_label'
-CLEAR_NEXT_LABEL_CMDS = (u'@clear_next_label', u'@reset_next_label')
+SET_NEXT_LABEL_CMD = '@@set_next_label'
+CLEAR_NEXT_LABEL_CMDS = ('@clear_next_label', '@reset_next_label')
 
 
-class PlayerNextLabel(ndb.Model):
-    next_label = ndb.StringProperty()
-    trigger_message = ndb.StringProperty()
+_state_store = create_state_store()
 
 
-class PlayerNextLabelDB(object):
-    # next_label は競合すると先に進めなくなるため、独立させ、トランザクションで囲う
-    @ndb.transactional
-    def set_next_label(self, label, trigger_message, status):
-        entry_next_label = PlayerNextLabel.get_by_id(status.id)
-        overwrite = (None, None)
-        if not entry_next_label:
-            entry_next_label = PlayerNextLabel(id=status.id, next_label=label, trigger_message=trigger_message)
-        else:
-            if entry_next_label.next_label:
-                overwrite = (entry_next_label.next_label, entry_next_label.trigger_message)
-            entry_next_label.next_label = label
-            entry_next_label.trigger_message = trigger_message
-        entry_next_label.put()
-        return overwrite
+class PlayerNextLabelDB:
+    @staticmethod
+    def set_next_label(label, trigger_message, status):
+        return _state_store.set_next_label(
+            status.id, label, trigger_message)
 
-    @ndb.transactional
-    def get_next_label(self, status):
-        entry_next_label = PlayerNextLabel.get_by_id(status.id)
-        if entry_next_label is None:
-            return (None, None)
-        return (entry_next_label.next_label, entry_next_label.trigger_message)
+    @staticmethod
+    def get_next_label(status):
+        return _state_store.get_next_label(status.id)
 
-    @ndb.transactional
-    def compare_and_clear_next_label(self, status, next_label):
-        entry_next_label = PlayerNextLabel.get_by_id(status.id)
-        if entry_next_label is None:
-            return (None, None)
-        ret = (entry_next_label.next_label, entry_next_label.trigger_message)
-        if ret[0] == next_label:
-            entry_next_label.next_label = None
-            entry_next_label.trigger_message = None
-            entry_next_label.put()
-            return ret
-        return (None, None)
+    @staticmethod
+    def compare_and_clear_next_label(status, next_label):
+        return _state_store.compare_and_clear_next_label(
+            status.id, next_label)
 
-    @ndb.transactional
-    def clear_next_label(self, status):
-        entry_next_label = PlayerNextLabel.get_by_id(status.id)
-        if entry_next_label:
-            entry_next_label.next_label = None
-            entry_next_label.trigger_message = None
-            entry_next_label.put()
+    @staticmethod
+    def clear_next_label(status):
+        _state_store.clear_next_label(status.id)
 
 
 class LineMorePlugin_Builder(object):
@@ -73,17 +45,17 @@ class LineMorePlugin_Builder(object):
     def filter_plain_text(self, builder, msg, _options, sender):
 
         if msg in self.command:
-            if builder.i_node == len(builder.parent_node.children) - 1:
-                builder.raise_error(u'入力待ちの後に表示するメッセージがありません')
+            # if builder.i_node == len(builder.parent_node.children) - 1:
+            #     builder.raise_error('入力待ちの後に表示するメッセージがありません')
             # 読み進めるボタンを表示するための特殊なメッセージ
             filepath, size = builder.build_image_for_imagemap_command(self.image_url)
-            builder.add_command(sender, default_commands.IMAGEMAP_CMDS[0], [unicode(filepath), unicode(size[0]), unicode(size[1])], [[u'0,0,{},{}'.format(size[0],size[1]), self.message]])
+            builder.add_command(sender, default_commands.IMAGEMAP_CMDS[0], [str(filepath), str(size[0]), str(size[1])], [['0,0,{},{}'.format(size[0],size[1]), self.message]])
 
-            next_label = u'##MORE__{}'.format(builder.scene.get_relative_position_desc(builder.node))
+            next_label = '##MORE__{}'.format(builder.scene.get_relative_position_desc(builder.node))
             builder.add_command(sender, SET_NEXT_LABEL_CMD, [next_label, self.message], None)
-            #logging.info(u'insert set next label cmd: {}'.format(next_label))
+            #logging.info('insert set next label cmd: {}'.format(next_label))
 
-            builder.add_new_string_index(next_label)
+            builder.add_new_string_block(next_label)
 
             # 解釈はここで終了
             return None
@@ -105,18 +77,18 @@ class LineMorePlugin_Runtime(object):
 
     def run_command(self, context, sender, msg, options):
         if msg == SET_NEXT_LABEL_CMD:
-            overwrite_label, overwrite_trigger = PlayerNextLabelDB().set_next_label(options[0], safe_list_get(options, 1, None), context.status)
+            overwrite_label, overwrite_trigger = PlayerNextLabelDB.set_next_label(options[0], safe_list_get(options, 1, None), context.status)
             if overwrite_label:
-                logging.warning(u'exec set next label command: {} overwrites {}'.format(options[0], overwrite_label))
+                logging.warning('exec set next label command: {} overwrites {}'.format(options[0], overwrite_label))
             else:
-                logging.debug(u'exec set next label command: {}'.format(options[0]))
+                logging.debug('exec set next label command: {}'.format(options[0]))
 
             # 解釈はここで終了
             return True
 
         elif msg in CLEAR_NEXT_LABEL_CMDS:
-            PlayerNextLabelDB().clear_next_label(context.status)
-            logging.debug(u'exec reset next label command')
+            PlayerNextLabelDB.clear_next_label(context.status)
+            logging.debug('exec reset next label command')
 
             # 解釈はここで終了
             return True
@@ -125,21 +97,20 @@ class LineMorePlugin_Runtime(object):
         return False
 
     def modify_incoming_action(self, context, action):
-        db = PlayerNextLabelDB()
         for retry in range(10):
-            next_label, trigger_message = db.get_next_label(context.status)
+            next_label, trigger_message = PlayerNextLabelDB.get_next_label(context.status)
             if next_label is None:
                 # next_label が設定されていなかったらスルー
                 return action
             else:
-                if action in [u'##line.follow', u'##line.join']:
+                if action in ['##line.follow', '##line.join']:
                     # 変な状態でハマった時の復旧用に ##follow と ##join で状態リセット
-                    logging.warning(u'LineMorePlugin_Runtime: reset next_label: {} {}'.format(next_label, action))
-                    db.clear_next_label(context.status)
+                    logging.warning('LineMorePlugin_Runtime: reset next_label: {} {}'.format(next_label, action))
+                    PlayerNextLabelDB.clear_next_label(context.status)
                     return action
                 elif action == trigger_message or (self.action_pattern_re and self.action_pattern_re.search(action)):
                     # 「続きを読む」ボタンが押されるなど、次に進む入力が来た
-                    if db.compare_and_clear_next_label(context.status, next_label)[0]:
+                    if PlayerNextLabelDB.compare_and_clear_next_label(context.status, next_label)[0]:
                         # クリアに成功したので next_label に入力を差し替える
                         return next_label
                     else:
@@ -152,7 +123,7 @@ class LineMorePlugin_Runtime(object):
                     # next_label 設定時に他の入力がやってきたときは、more button を押すように促す
                     return self.please_push_more_button_label
 
-        logging.error(u'LineMorePlugin_Runtime: retry limit exceeds: {}'.format(action))
+        logging.error('LineMorePlugin_Runtime: retry limit exceeds: {}'.format(action))
         return action
 
 

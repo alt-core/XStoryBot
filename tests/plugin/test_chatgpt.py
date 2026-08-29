@@ -1,177 +1,150 @@
 # coding: utf-8
-from __future__ import absolute_import
+
+import copy
+import datetime
+import importlib.util
+import json
+from pathlib import Path
+import sys
+import types
 import unittest
-from pprint import pprint
-import urllib
-#import sys
-#reload(sys)
-#sys.setdefaultencoding('utf-8')
-
-from webtest import TestApp
-import logging
-
-import os, sys, subprocess, json
-gcloud_info = json.loads(subprocess.check_output(['gcloud', 'info', '--format=json']))
-sdk_path = os.path.join(gcloud_info["installation"]["sdk_root"], 'platform', 'google_appengine')
-sys.path.append(sdk_path)
-sys.path.append(os.path.join(sdk_path, 'lib', 'yaml', 'lib'))
-sys.path.insert(0, './lib')
-#sys.path.append(os.path.join(sdk_path, 'platform/google_appengine/lib'))
-
-from google.appengine.ext import testbed
-tb = testbed.Testbed()
-tb.activate()
-#tb.init_datastore_v3_stub()
-#tb.init_memcache_stub()
-#tb.init_app_identity_stub()
-tb.init_all_stubs()
-#tb.deactivate()
-
-BOT_SETTINGS = {
-    'OPTIONS': {
-        'api_token': u'test_api_token',
-        'reset_keyword': u'強制リセット',
-        'timezone': 'Asia/Tokyo',
-    },
-
-    'PLUGINS': {
-        'plaintext': {},
-        'google_sheets': {},
-        'chatgpt': {
-            'api_key': '<<CHATGPT_APIKEY>>',
-            'model': 'gpt-3.5-turbo',
-        },
-    },
-
-    'BOTS': {
-        'testbot': {
-            'interfaces': [{
-                'type': 'plaintext',
-            }],
-            'scenario': {
-                'type': 'google_sheets',
-                'params': {
-                    'sheet_id': "<<sheet_id>>",
-                    'key_file_json': 'path_to_keyfile_sheets_prod.json',
-                }
-            }
-        },
-    }
-}
-
-import settings
-import main
-import auth
-import common_commands
-import webapi
-from scenario import Scenario, ScenarioSyntaxError, ScenarioBuilder
+from unittest import mock
 
 
-def reinitialize_bot(bot_settings):
-    # settings を上書きして main.initialize() で再設定
-    settings.OPTIONS = bot_settings['OPTIONS']
-    settings.PLUGINS = bot_settings['PLUGINS']
-    settings.BOTS = bot_settings['BOTS']
-
-    main.initialize()
+TARGET = Path(__file__).resolve().parents[2] / 'plugin' / 'chatgpt.py'
 
 
-class DummyScenarioLoader(object):
-    def __init__(self):
-        self.data = []
+def load_chatgpt_module():
+    """外部依存を最小の代用品へ差し替えて対象モジュールを読み込む。"""
+    commands = types.ModuleType('commands')
+    requests = types.ModuleType('requests')
+    requests.post = mock.Mock()
 
-    def load_scenario(self):
-        return self.data
+    pytz = types.ModuleType('pytz')
+    pytz.timezone = lambda _name: datetime.timezone.utc
+    pytz.exceptions = types.SimpleNamespace(UnknownTimeZoneError=ValueError)
 
-
-def dummy_send_request_factory(test, app):
-    def dummy_send_request(bot_name, user, action, delay_secs=None):
-        params = {
-            u'user': user.serialize(),
-            u'action': action,
-            u'token': auth.api_token
-        }
-        for key, value in params.items():
-            if isinstance(value, unicode):
-                params[key] = value.encode('utf-8')
-        test.forwarded_messages = []
-        res = app.post('/api/v1/bots/{}/action'.format(bot_name), params)
-        test.assertEqual(res.status, "200 OK")
-        test.assertEqual(res.headers["Content-Type"], u"text/plain; charset=UTF-8")
-        res_json = json.loads(res.text)
-        test.assertEqual(res_json[u"code"], 200)
-        test.assertEqual(res_json[u"result"], u"Success")
-        msgs = res_json[u"message"].rstrip()
-        test.forwarded_messages = msgs.split(u"\n") if msgs else []
-
-    return dummy_send_request
+    module_name = 'tests_target_chatgpt'
+    spec = importlib.util.spec_from_file_location(module_name, TARGET)
+    module = importlib.util.module_from_spec(spec)
+    with mock.patch.dict(sys.modules, {
+        'commands': commands,
+        'requests': requests,
+        'pytz': pytz,
+        module_name: module,
+    }):
+        spec.loader.exec_module(module)
+    return module, requests
 
 
-class BotTestCaseBase(unittest.TestCase):
+class FakeResponse:
+    def __init__(self, status_code, content, json_value=None, json_error=None):
+        self.status_code = status_code
+        self.content = content
+        self._json_value = json_value
+        self._json_error = json_error
+        self.json_calls = 0
 
-    def setUp(self, bot_settings=BOT_SETTINGS):
-        reinitialize_bot(bot_settings)
-        self.app = TestApp(webapi.app)
-        self.orig_send_request = common_commands.send_request
-        common_commands.send_request = dummy_send_request_factory(self, self.app)
-        self.test_bot_loader = DummyScenarioLoader()
-        self.test_bot = main.get_bot('testbot')
-        self.test_bot.scenario_loader = self.test_bot_loader
-        self.messages = []
-        self.forwarded_messages = []
-        import bottle
-        bottle.debug(True)
-        logging.disable(logging.CRITICAL)
-
-    def tearDown(self):
-        common_commands.send_request = self.orig_send_request
-        logging.disable(logging.NOTSET)
-
-    def send_action_to(self, bot_name, user_id, action):
-        res = self.app.get(('/api/v1/bots/'+bot_name+'/action?user='+user_id+'&action='+urllib.quote(action.encode('utf-8'))+'&token='+auth.api_token).encode('utf-8'))
-        self.assertEqual(res.status, "200 OK")
-        self.assertEqual(res.headers["Content-Type"], u"text/plain; charset=UTF-8")
-        res_json = json.loads(res.text)
-        self.assertEqual(res_json[u"code"], 200)
-        self.assertEqual(res_json[u"result"], u"Success")
-        msgs = res_json[u"message"].rstrip()
-        self.messages = msgs.split(u"\n") if msgs else []
-        return res_json[u"message"]
-
-    def send_message(self, action):
-        return self.send_action_to('testbot', 'plaintext:0001', action).split(u"\n")
-
-    def send_group_message(self, group_id, action):
-        return self.send_action_to('testbot', 'group:'+group_id, action)
-
-    def send_reset(self):
-        return self.send_message(settings.OPTIONS['reset_keyword'])
+    def json(self):
+        self.json_calls += 1
+        if self._json_error is not None:
+            raise self._json_error
+        return self._json_value
 
 
-class MainTestCase(BotTestCaseBase):
-    def test_chatgpt(self):
-        self.test_bot.scenario = ScenarioBuilder.build_from_table([
-            [u'/(.*)/', u'@chatgpt', u'関西弁のさっぱりした性格の女子高校生としてロールプレイをして返事をしてください。', u'{0}'],
-        ], options={'force': True}, version=1)
-        self.send_reset()
-        self.send_message(u'じゃんけんしよう')
-        self.assertEqual(len(self.messages), 1)
-        print(self.messages[0])
-        self.send_message(u'ぱー')
-        self.assertEqual(len(self.messages), 1)
-        print(self.messages[0])
+class Status(dict):
+    scene = 'scene-1'
 
-    def test_chatgpt_history(self):
-        self.test_bot.scenario = ScenarioBuilder.build_from_table([
-            [u'/(.*)/', u'@chatgpt', u'関西弁のさっぱりした性格の女子高校生としてロールプレイをして返事をしてください。', u'{0}', u'$history'],
-        ], options={'force': True}, version=1)
-        self.send_reset()
-        self.send_message(u'じゃんけんしよう')
-        self.assertEqual(len(self.messages), 1)
-        print(self.messages[0])
-        self.send_message(u'ぱー')
-        self.assertEqual(len(self.messages), 1)
-        print(self.messages[0])
+
+class ChatGPTPluginTest(unittest.TestCase):
+    def setUp(self):
+        self.module, self.requests = load_chatgpt_module()
+        self.runtime = self.module.ChatGPTPlugin_Runtime({
+            'api_key': 'secret-api-key',
+            'model': 'test-model',
+        })
+
+    def test_utf8_json_bytes_are_sent_with_data(self):
+        response = FakeResponse(
+            200,
+            b'{"choices": [{"message": {"content": "ok"}}]}',
+            {'choices': [{'message': {'content': 'ok'}}]},
+        )
+        self.requests.post.return_value = response
+
+        history = [{'role': 'assistant', 'content': '前の返答'}]
+        original_history = copy.deepcopy(history)
+        result = self.runtime.call_chatgpt_chat('システム', 'こんにちは', history)
+
+        self.assertEqual(result, 'ok')
+        self.assertEqual(history, original_history)
+        _, kwargs = self.requests.post.call_args
+        self.assertNotIn('json', kwargs)
+        self.assertEqual(kwargs['timeout'], 120)
+        self.assertIsInstance(kwargs['data'], bytes)
+        payload = json.loads(kwargs['data'].decode('utf-8'))
+        self.assertEqual(payload['model'], 'test-model')
+        self.assertEqual(payload['messages'][-1]['content'], 'こんにちは')
+        self.assertEqual(response.json_calls, 1)
+
+    def test_request_and_json_errors_propagate(self):
+        self.requests.post.side_effect = RuntimeError('接続失敗')
+        with self.assertRaisesRegex(RuntimeError, '接続失敗'):
+            self.runtime.call_chatgpt_chat('system', 'user')
+
+        self.requests.post.side_effect = None
+        self.requests.post.return_value = FakeResponse(
+            200, b'not-json', json_error=ValueError('不正JSON'))
+        with self.assertRaisesRegex(ValueError, '不正JSON'):
+            self.runtime.call_chatgpt_chat('system', 'user')
+
+    def test_non_200_returns_none_and_keeps_response_log(self):
+        response = FakeResponse(503, b'service unavailable')
+        self.requests.post.return_value = response
+
+        with self.assertLogs(level='INFO') as captured:
+            result = self.runtime.call_chatgpt_chat('system', 'user')
+
+        self.assertIsNone(result)
+        self.assertEqual(response.json_calls, 0)
+        output = '\n'.join(captured.output)
+        self.assertIn('503', output)
+        self.assertIn("b'service unavailable'", output)
+        self.assertNotIn('secret-api-key', output)
+
+    def test_invalid_response_structure_is_logged(self):
+        response_json = {'choices': []}
+        self.requests.post.return_value = FakeResponse(
+            200, b'{"choices": []}', response_json)
+
+        with self.assertLogs(level='INFO') as captured:
+            result = self.runtime.call_chatgpt_chat('system', 'user')
+
+        self.assertIsNone(result)
+        self.assertIn("{'choices': []}", '\n'.join(captured.output))
+
+    def test_json_command_logs_parse_failure_and_invalid_value(self):
+        context = types.SimpleNamespace(
+            status=Status(),
+            reactions=[],
+            user='line:user-1',
+        )
+
+        self.runtime.call_chatgpt_chat = mock.Mock(return_value='not-json')
+        with self.assertLogs(level='ERROR') as captured:
+            handled = self.runtime.run_command(
+                context, None, '@chatgptjson', ['system', 'user', 'answer'])
+        self.assertTrue(handled)
+        self.assertFalse(context.status['$$result'])
+        self.assertIn('not-json', '\n'.join(captured.output))
+
+        self.runtime.call_chatgpt_chat = mock.Mock(return_value='{"answer": []}')
+        with self.assertLogs(level='WARNING') as captured:
+            handled = self.runtime.run_command(
+                context, None, '@chatgptjson', ['system', 'user', 'answer'])
+        self.assertTrue(handled)
+        self.assertFalse(context.status['$$result'])
+        self.assertIn('answer: []', '\n'.join(captured.output))
 
 
 if __name__ == '__main__':

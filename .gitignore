@@ -64,7 +64,8 @@ instance/
 # Scrapy stuff:
 .scrapy
 
-# Sphinx documentation
+# ローカル作業用の指示と合意
+/AGENTS.md
 docs/_build/
 
 # PyBuilder
@@ -81,6 +82,8 @@ celerybeat-schedule
 
 # dotenv
 .env
+.env.*
+!.env.template
 
 # virtualenv
 venv/
@@ -91,3 +94,17 @@ ENV/
 
 # Rope project settings
 .ropeproject
+
+# 認証情報とローカル設定
+.netrc
+_netrc
+settings.yaml
+*service-account*.json
+*service_account*.json
+*firebase-adminsdk*.json
+keyfile*.json
+credentials*.json
+client_secret*.json
+*.pem
+*.key
+*.p12

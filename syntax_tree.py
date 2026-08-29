@@ -23,7 +23,7 @@ class SyntaxNode(object):
         if self.is_terminal:
             return repr(self.value)
         else:
-            return u'{}({})'.format(self.name, u','.join(map(repr, self.children)))
+            return '{}({})'.format(self.name, ','.join(list(map(repr, self.children))))
 
     def __getstate__(self):
         return { name: getattr(self, name) for name in self.__slots__ }
@@ -53,5 +53,4 @@ class SyntaxTreeEvaluator(object):
     def eval_children(self, node):
         if node.is_terminal:
             raise RuntimeError
-        return map(self.eval, node.children)
-
+        return list(map(self.eval, node.children))

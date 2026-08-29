@@ -8,7 +8,7 @@
 
 シナリオを Google Sheets 上で記述できるため、シナリオ作成者との作業分担が行いやすいという特徴もあります。
 
-Google App Engine 向けのサーバアプリケーションとして開発されています。
+現在の公開版は Python 3.11 で動作し、Cloud Run または AWS 向けに構成されています。
 
 ### プロジェクトの状態
 
@@ -22,6 +22,8 @@ Google App Engine 向けのサーバアプリケーションとして開発さ�
 
 ![システム構成図](./docs/system_diagram.png)
 
+この構成図は旧GAE版を基にした概念図です。現行版のGCP構成ではCloud Run、AWS構成ではAPI Gateway、Lambda、Fargateなどが、図中のGoogle App Engineに相当する役割を担います。
+
 ## できること
 
 ユーザからの入力テキストに対して、どんな反応を返すのか、スプレッドシート上で定義します。
@@ -32,7 +34,7 @@ Google App Engine 向けのサーバアプリケーションとして開発さ�
 
 また、記述方法がこなれていないためオススメできませんが、フラグ管理にも対応しています。
 
-複数のbotを同時に実行できることも特徴で、全体でユーザの状態を共有しているため、複数のbotを組み合わせたユーザ体験を作ることもできます。
+複数のbotを同時に実行できます。ユーザの状態は既定ではbotごとに分離され、同じ`state_namespace`を設定したbot間では共有できます。
 
 ## 対応サービス
 
@@ -47,7 +49,7 @@ plugin によって拡張可能な設計になっています。
 - [Twilio](https://twilio.kddi-web.com/) （電話・SMS）
   - 電話がかかってきたことをトリガーに SMS を送信し、返信の内容によって電話をかける、といったことが可能です。
   - しかし、電話にせよ、SMS にせよ、とにかく[単価が高い](https://twilio.kddi-web.com/price/)ため、大規模な利用は困難です。
-- WebAPI （テスト用）
+- WebAPI（認証付き action API）
 
 ### IoT 機器などとの連携
 
@@ -60,20 +62,12 @@ plugin によって拡張可能な設計になっています。
 
 ## インストール手順
 
-このリポジトリを clone した上で、追加のパッケージを pip で lib/ 以下にインストールします。
+このリポジトリを clone した上で、Python 3.11 環境へ必要なパッケージをインストールします。
 
-    > git clone ...
-    > pip install -r requirements.txt -t lib
+    > git clone https://github.com/alt-core/XStoryBot.git
+    > python3 -m pip install -r requirements.txt
 
-なお、line_bot_sdk が利用する requests が利用する urllib3 で chunked encoding を受信する際に例外が出る不具合があります。
-https://github.com/agfor/requests/commit/6f7af88464504d6c9a4f84ce9c9535d2eb941b39
-このパッチを lib/requests/models.py に当ててください。
-
-続いて、GAE のセットアップです。
-詳しくは、一般的な GAE のセットアップ手順を参照してください。
-
-    > gcloud auth ...
-    > gcloud app --project="<<your-project-name>>" create
+Cloud Runへデプロイする場合は、利用するGCPプロジェクトを準備してください。
 
 以下、特殊な前準備が必要です。
 
@@ -92,24 +86,34 @@ https://github.com/agfor/requests/commit/6f7af88464504d6c9a4f84ce9c9535d2eb941b3
   - Twilio の電話番号を取得し、必要な情報をメモ
   - Twilio の webhook に 〜/twilio/callback/＜botname＞ を設定
 
-続いて、設定ファイルを編集します。
+続いて、設定ファイルと環境変数を準備します。ローカルで直接実行する場合は、次のようにローカル用の設定を作成します。
 
-    > vim settings.py
+    > cp settings.yaml.template settings.yaml
 
-前準備で準備した情報を記入してください。
+`settings.yaml`を必要に応じて編集し、`.env.template`に列挙された環境変数を実行環境へ設定してください。Dockerイメージでは`settings.yaml`は取り込まず、`settings.yaml.template`をイメージ内の設定として使うため、コンテナ用のBot・plugin構成はこちらを編集します。`XSBOT_DEPLOY_ENV`には適用する環境別設定（例: `prod`、`stg`、`dev`、`test`、`local`）を指定します。
+
+GCPとGoogle Sheetsで使うサービスアカウントJSONはコンテナイメージへ含めず、Secret Managerから読み取り専用ファイルとしてマウントし、それぞれのコンテナ内パスを`GOOGLE_APPLICATION_CREDENTIALS`と`SHEETS_SERVICE_ACCOUNT`へ指定してください。同じサービスアカウントを使う場合は、両方に同じパスを指定できます。
+
 sheet_id は Google Sheets の編集時に URL に含まれるランダム英数字です。
 api_token は、WebAPI などでの認証のために使われる情報です。必ず独自の値を設定してください。
 
-    > vim app.yaml
+利用するpluginとBot interfaceは、ローカルでは`settings.yaml`、コンテナでは`settings.yaml.template`で設定します。
 
-plugin の下の app.yaml を include していますので、使わない plugin をコメントアウトしてください。
+設定後、`Dockerfile`からコンテナイメージを一度ビルドし、同じイメージをCloud RunのAPI用サービスとビルダー用サービスへデプロイします。API用は既定の`app:app`を使い、ビルダー用だけ`XSBOT_APP_MODULE=app_builder:app`を設定します。それぞれのURLを`XSBOT_APP_BASE_URL`と`XSBOT_BUILDER_BASE_URL`へ指定し、Cloud Tasksには同じプロジェクト・リージョンで`build-queue`、`action-queue`、`group-message-queue`の3キューを作成します。現行のTaskQueueはOIDCトークンを付けないため、両サービスはCloud IAMで未認証HTTP呼び出しを許可し、保護が必要なrouteはWebhook署名、フォーム認証、または`X-API-Token`で保護します。
 
-設定が終われば、デプロイします。
+現行GCP実装はシナリオとメディアをオブジェクトACLで公開します。そのため、保存先にはオブジェクト単位の公開を許す専用バケットが必要で、Uniform bucket-level accessとPublic Access Preventionは有効にできません。バケット全体を公開する必要はありません。
 
-    > gcloud app deploy
+共有APIトークンで利用できるグループ管理APIとして、`POST /api/v1/groups/<group_id>/add_members`と`GET /api/v1/groups/<group_id>/members`があります。認証には`X-API-Token`ヘッダーを使用します。
 
-詳細は、通常の GAE のデプロイ手順を参照してください。
-なお、2024年より、Python2.7をGAEで利用するには特殊な組織ポリシーの設定が必要となっていますので、注意してください。
+### AWSへデプロイする場合
+
+AWS CLI、AWS SAM CLI、DockerとAWS認証情報、既存のECR repositoryを準備してください。Google Sheets資格情報、管理者認証JSON、runtime秘密値JSONは、AWS管理KMSキーを使うParameter Storeの`SecureString`へ事前に登録します。
+
+管理者認証JSONは`python3 tools/generate_admin_auth.py`で生成できます。
+
+`AWS_REGION`、`XSBOT_AWS_STACK_NAME`、`XSBOT_AWS_ECR_REPOSITORY`、`XSBOT_AWS_ENVIRONMENT`、`XSBOT_AWS_SHEET_ID`、`XSBOT_AWS_SHEETS_CREDENTIAL_PARAMETER`、`XSBOT_AWS_ADMIN_AUTH_PARAMETER`、`XSBOT_AWS_RUNTIME_SECRETS_PARAMETER`を環境変数に設定し、`./deploy_aws.sh`を実行します。秘密値そのものはスクリプトへ渡しません。
+
+API、2つのworker、Fargateで同じECR imageを共用するため、スクリプトはDockerで一度だけ`linux/amd64` imageをbuild/pushし、`ImageUri`をSAMへ渡します。同一imageの再buildを避けるため`sam build`は実行しません。
 
 ## シナリオの作成
 
@@ -120,80 +124,24 @@ Google Sheets 上でシナリオを作成します。
 
 デプロイ先のホストの 〜/dashboard/ にブラウザでアクセスすると管理画面が開きます。
 
-Google アカウントでの認証が要求されますので、GAE の admin 権限を持ったアカウントでアクセスするか、もしくはアクセスを許可したい Google アカウントのメールアドレスを settings.py の OPTIONS['admins'] に設定してください。
+ダッシュボードではユーザー名とパスワードによる認証が要求されます。管理者認証JSONは環境変数またはAWS Parameter Storeから設定してください。
 
-ダッシュボードにある「シナリオ修正の反映」のボタンを押すことで、Google Sheets からシナリオを読み込み、Google Cloud Storage 上に中間ファイルを生成します。
+ダッシュボードにある「シナリオ修正の反映」のボタンを押すことで、Google Sheets からシナリオを読み込み、選択したクラウドプロバイダーのオブジェクトストレージ上に中間ファイルを生成します。
 
-この時、シナリオで指定された画像等のリソースファイルも全て Google Cloud Storage 上にコピーされますので、安定したサービス提供が可能です。
+この時、シナリオで指定された画像等のリソースファイルも全て同じオブジェクトストレージ上にコピーされますので、安定したサービス提供が可能です。
 
-## ログの BigQuery での集計
+## ログ
 
 @log コマンドで、ユーザがシーン中の特定の箇所に来た際にログを出力することが可能です。
-Google App Engine のログは、Stackdriver Logging にまずは出力されますので、ここから直接ログを取得することも可能ですが、BigQuery を経由した方が柔軟な対応が可能となります。
+GCPではアプリケーションログがCloud Logging、AWSではCloudWatch Logsに出力されます。GCPでBigQueryへ集計する場合は、Cloud LoggingからBigQueryへのシンクを設定してください。
 
-### Stackdriver Logging から BigQuery の接続
-
-Cloud Console の Logging > エクスポート から「エクスポートを作成」を選択。
-シンク名は適当に。シンクサービスに BigQuery、シンクのエクスポート先に「新しい BigQuery データセットを作成」を選び、ポップアップした入力欄に「log」と設定。
-
-この設定を行った後から、ログが BigQuery に取り込まれるようになります。
-
-### BigQuery でのビューの設定
-
-ログが出力されるように、bot を少し動かしてしばらく待つと、Cloud Console の BigQuery の「リソース」内の先ほど作成した log というデータセットの下に、 appengine_googleapis_com_request_log_* というテーブルが作成されます。
-
-クエリエディタ内で以下のクエリを作成し、一度「実行」してみて、問題なさそうであれば、「ビューを保存」してください。
-
-```
-SELECT
-  timestamp,
-  JSON_EXTRACT_SCALAR(l.logMessage, "$.date") AS date,
-  JSON_EXTRACT_SCALAR(l.logMessage, "$.uid") AS uid,
-  JSON_EXTRACT_SCALAR(l.logMessage, "$.cat") AS cat,
-  JSON_EXTRACT_SCALAR(l.logMessage, "$.log") AS log,
-  JSON_EXTRACT_SCALAR(l.logMessage, "$.scene") AS scene
-FROM
-  `log.appengine_googleapis_com_request_log_*`,
-  UNNEST(protoPayload.line) as l
-WHERE
-  _TABLE_SUFFIX BETWEEN 
-  FORMAT_DATE("%Y%m%d", DATE_SUB(CURRENT_DATE(), INTERVAL 12 MONTH)) AND FORMAT_DATE("%Y%m%d", CURRENT_DATE())
-  AND
-  timestamp >= TIMESTAMP("2019-01-01 00:00:00+09")
-  AND
-  l.logMessage LIKE "%XSBLog%"
-ORDER BY
-  timestamp DESC
-LIMIT 50000
-```
-
-INTERVAL 12 MONTH としている部分は、実際に何ヶ月前まで取得したいかを、timestamp と比較している日付は、ログの取得を開始したい日時（サービスインの日時など）を指定します。
-
-### BigQuery のビューの利用
-
-[データポータル（旧 Google Data Studio）](https://datastudio.google.com/)は簡易的な BI ツールです。
-
-空のレポートを作成し、「新しいデータソースを追加」から、BigQuery を選んで、上記で作成したビューを選ぶことで、ログの簡易分析が可能です。
-
-一番シンプルな、特定のログが何回出力されたかを表示するには、以下の手順で表を設定します。
-
-* 期間のディメンションを「date」に（JSTでフィルタできるようになる）
-* ディメンションを「cat」と「log」に
-* 指標は「Record Count」に
-  * ユニークユーザ数がほしい場合はカスタムから `COUNT_DISTINCT(uid)` という式を入力
-
-日付ごとのログ出力回数のグラフを作成することなども簡単にできますので、詳細はデータポータルの使い方を調べてください。
-
-また、１件ずつのデータを見ながら解析を行いたい場合は、Google App Script から BigQuery のビューデータを引っ張ってきて Google スプレッドシート上でデータ表示／分析を行うことも可能です。
+Cloud LoggingからBigQueryへエクスポートされるテーブル名とスキーマは、シンク設定とログ形式によって異なります。実際に作成されたテーブルとフィールドを確認してクエリを作成し、ビューとして保存してください。
 
 ## ユニットテスト
 
 ### 準備
 
-追加でいくつかのパッケージが必要です。
-
-    > pip install webtest pyyaml Pillow
-    > gcloud components install app-engine-python
+    > python3 -m pip install -r requirements-dev.txt
 
 ### 実行
 
@@ -201,6 +149,8 @@ INTERVAL 12 MONTH としている部分は、実際に何ヶ月前まで取得�
 
 ## 注意事項
 
-Google App Engine および Google Cloud Storage, Stackdriver Logging, Google BigQuery は従量課金サービスです。
+Cloud Run、Firestore、Cloud Storage、Cloud Tasks、Cloud Logging、BigQueryに加え、AWSのLambda、API Gateway、DynamoDB、S3、CloudFront、SQS、EventBridge Scheduler、Fargate、CloudWatchは従量課金の対象です。
 
 不具合により、意図しない課金が発生したとしても、補償いたしかねますので、[アラート](https://cloud.google.com/billing/docs/how-to/budgets?hl=ja&ref_topic=6288636&visit_id=1-636539550464473783-319035179&rd=1)などをご活用ください。
+
+以前のデプロイから移行する場合は、[移行ガイド](./docs/migration.md)を参照してください。

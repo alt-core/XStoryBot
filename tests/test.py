@@ -2,7 +2,7 @@
 from __future__ import absolute_import
 import unittest
 from pprint import pprint
-import urllib
+import urllib.parse
 #import sys
 #reload(sys)
 #sys.setdefaultencoding('utf-8')
@@ -104,7 +104,7 @@ def dummy_send_request_factory(test, app):
             u'token': auth.api_token
         }
         for key, value in params.items():
-            if isinstance(value, unicode):
+            if isinstance(value, str):
                 params[key] = value.encode('utf-8')
         test.forwarded_messages = []
         res = app.post('/api/v1/bots/{}/action'.format(bot_name), params)
@@ -143,7 +143,7 @@ class BotTestCaseBase(unittest.TestCase):
         logging.disable(logging.NOTSET)
 
     def send_action_to(self, bot_name, user_id, action):
-        res = self.app.get(('/api/v1/bots/'+bot_name+'/action?user='+user_id+'&action='+urllib.quote(action.encode('utf-8'))+'&token='+auth.api_token).encode('utf-8'))
+        res = self.app.get('/api/v1/bots/'+bot_name+'/action?user='+user_id+'&action='+urllib.parse.quote(action)+'&token='+auth.api_token)
         self.assertEqual(res.status, "200 OK")
         self.assertEqual(res.headers["Content-Type"], u"text/plain; charset=UTF-8")
         res_json = json.loads(res.text)
@@ -213,8 +213,8 @@ class MainTestCase(BotTestCaseBase):
             [u'ABC&HIJ', u'abcdefghij'],
             [u'(123|890)&(opq|stu|xyz)', u'opqrstuvwxyz'],
             [u' (　あ　｜　い　｜　う　)　＆　（α|β） & ！', u'mix'],
-            [ur'\(\|\&\\\)', u'escape'],
-            [ur'\（\｜\＆￥\）', u'escapezen'],
+            [r'\(\|\&\\\)', u'escape'],
+            [r'\（\｜\＆￥\）', u'escapezen'],
             [u'(/[あいう]/＆（　/α/ | /β/　）)&?', u'regexmix'],
             [u'(/ab/|/a(.)c/|/d/)&(/(123)/|/4(5)6/)', u'capture:{0}/{1}/{2}'],
             [u'//', u'not found'],
@@ -278,10 +278,10 @@ class MainTestCase(BotTestCaseBase):
         self.send_message(u'アα!')
         self.assertEqual(len(self.messages), 1)
         self.assertEqual(self.messages[0], u"not found")
-        self.send_message(ur'(|&\)')
+        self.send_message(r'(|&\)')
         self.assertEqual(len(self.messages), 1)
         self.assertEqual(self.messages[0], u"escape")
-        self.send_message(ur'（｜＆￥）')
+        self.send_message(r'（｜＆￥）')
         self.assertEqual(len(self.messages), 1)
         self.assertEqual(self.messages[0], u"escapezen")
         self.send_message(u'あいβγ?')
@@ -1380,7 +1380,7 @@ class MainTestCase(BotTestCaseBase):
             ScenarioBuilder.build_from_table(table)
             return None
         except ScenarioSyntaxError as e:
-            return unicode(e)
+            return str(e)
 
     def test_lint1(self):
         pass

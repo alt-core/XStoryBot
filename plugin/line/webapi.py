@@ -35,7 +35,10 @@ def callback(bot_name):
     if interface is None:
         abort_json(404, u'not found')
 
-    signature = request.headers['X-Line-Signature']
+    signature = request.headers.get('X-Line-Signature')
+    if signature is None:
+        abort_json(401, u'invalid signature')
+
     body = request.body.read().decode('utf-8')
     # logging.info(u"Signature: %s" % signature)
     # gen_signature = base64.b64encode(hmac.new(
@@ -44,16 +47,16 @@ def callback(bot_name):
     #     hashlib.sha256
     # ).digest())
     # logging.info(u"Gen-Signature: %s" % gen_signature)
-    logging.info(u'Request body: {}'.format(body))
     #logging.info(u'Headers: {}'.format(repr(request.environ)))
 
     try:
         events = interface.parser.parse(body, signature)
+        logging.info(u'Request body: {}'.format(body))
 
         bot.check_reload()
 
         if interface.line_abort_duration_ms > 0 and len(events) > 0:
-            # GAE のスピンアップが遅くて、LINE の ReplyToken の期限に間に合いそうになかったら実行前に中断する
+            # Webhook受信が遅れ、ReplyTokenの期限内に応答できない場合は処理を中断する。
             timestamp = events[0].timestamp
             if timestamp is not None:
                 current = int(time.time() * 1000)
@@ -61,10 +64,10 @@ def callback(bot_name):
                 #logging.info(u'timestamp: {}, current: {}, diff: {}'.format(timestamp, current, diff))
                 if diff > interface.line_abort_duration_ms:
                     if not interface.line_abort_duration_dont_break:
-                        logging.warning(u'[LINE] GAE spin-up is too late; aborted: {}'.format(diff))
+                        logging.warning(u'[LINE] webhook delivery delay exceeded limit; aborted: {}'.format(diff))
                         abort_json(504, u'Timeout')
                     else:
-                        logging.warning(u'[LINE] GAE spin-up is too late; continue: {}'.format(diff))
+                        logging.warning(u'[LINE] webhook delivery delay exceeded limit; continue: {}'.format(diff))
 
         for event in events:
             context = interface.create_context_from_line_event(event)
@@ -74,5 +77,3 @@ def callback(bot_name):
         abort_json(401, u'invalid signature')
 
     return utility.make_ok_json(u'OK')
-
-

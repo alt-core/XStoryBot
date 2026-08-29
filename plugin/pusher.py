@@ -3,11 +3,10 @@
 import commands
 
 
-PUSHER_CMDS = (u'@pusher', u'@Pusher')
+PUSHER_CMDS = ('@pusher', '@Pusher')
 
 
 import pusher
-import pusher.gae
 
 
 class PusherPlugin_Runtime(object):
@@ -21,8 +20,7 @@ class PusherPlugin_Runtime(object):
                 app_id=self.params['app_id'],
                 key=self.params['key'],
                 secret=self.params['secret'],
-                cluster=self.params['cluster'],
-                backend=pusher.gae.GAEBackend
+                cluster=self.params['cluster']
             )
         return self.pusher_client
 

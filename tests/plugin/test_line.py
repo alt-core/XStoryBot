@@ -40,14 +40,14 @@ BOT_SETTINGS = {
             'command': [u'＞', u'>'],
             'default_reply': u'続きを読む=>',
             'retry_message': u'システム:\n【以下の返答を選んでください】',
-            'ignore_pattern': ur'^リセット$',
+            'ignore_pattern': r'^リセット$',
         },
         'line.more': {
             'command': [u'▽'],
             'image_url': 'https://www.google.co.jp/images/branding/googlelogo/2x/googlelogo_color_272x92dp.png',
             'message': u'「続きを読む」',
             'action_pattern': None,
-            'ignore_pattern': ur'^「|^リセット$',
+            'ignore_pattern': r'^「|^リセット$',
             'please_push_more_button_label': u'##please_push_more_button',
         },
         'line.image_text': {
@@ -1044,7 +1044,7 @@ class LineTestCase(LinePluginTestCaseBase):
             ScenarioBuilder.build_from_table(table)
             return None
         except ScenarioSyntaxError as e:
-            return unicode(e)
+            return str(e)
 
     def test_lint1(self):
         self.assertIsNone(self.try_lint([

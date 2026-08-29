@@ -16,7 +16,11 @@ class ActionContext(object):
                     return d[key]
             if key in self.context.status:
                 return self.context.status[key]
-            return 0 # default
+            # default
+            if self.context.version >= 3:
+                return None
+            else:
+                return 0
 
         def __contains__(self, key):
             for d in self.context.env_dicts:
@@ -42,6 +46,7 @@ class ActionContext(object):
 
     def __init__(self, bot_name, service_name, interface, user, action, attrs):
         self.bot_name = bot_name
+        self.state_namespace = bot_name
         self.service_name = service_name
         self.user = user
         self.action = action
@@ -65,10 +70,20 @@ class ActionContext(object):
 
     def load_status(self):
         user_id = self.user.serialize()
-        self.status = PlayerStatusDB(user_id)
+        self.status = PlayerStatusDB(self.state_namespace, user_id)
+
+    def set_or_del_status_value(self, key, value):
+        if value is None:
+            if key in self.status:
+                del self.status[key]
+        else:
+            self.status[key] = value
 
     def save_status(self):
         self.status.save()
+
+    def rollback_status(self):
+        self.status.rollback()
 
     def add_reaction(self, sender, msg, options=None, children=None):
         row = [sender, msg]

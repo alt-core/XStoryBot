@@ -4,6 +4,7 @@ import hub
 import commands
 import utility
 import context
+import json
 
 
 class LiffPlugin_ActionContext(context.ActionContext):
@@ -16,9 +17,13 @@ class LiffPlugin_Interface(object):
         self.bot_name = bot_name
         self.params = params
         self.allow_origin = params['allow_origin']
+        self.action_prefix = params.get('action_prefix', "##liff.")
 
     def get_service_list(self):
         return {"liff": self}
+
+    def get_retry_count(self):
+        return self.params.get('retry_count', 3)
 
     def create_context(self, user, action, attrs):
         return LiffPlugin_ActionContext(self.bot_name, self, user, action, attrs)
@@ -34,12 +39,12 @@ class LiffPlugin_Interface(object):
                 # コマンド毎の処理メソッドの中で context.response への追加が行われている
                 pass
             else:
-                #text = msg if sender is None else sender + u"：\n" + msg
+                #text = msg if sender is None else sender + "：\n" + msg
                 # LIFFではsenderを無視する
                 text = msg
                 context.response.append(text)
 
-        return u"\n".join(context.response) + u"\n"
+        return json.dumps(context.response)
 
 
 class LiffPlugin_InterfaceFactory(object):

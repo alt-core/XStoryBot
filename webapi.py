@@ -1,155 +1,230 @@
-# coding: utf-8
 import logging
+import time
 
-from google.appengine.api import taskqueue, memcache
+from bottle import Bottle, HTTPResponse, request, response
 
-from bottle import request, response, Bottle, abort
-
-import main
-import utility
-import users
 import auth
+import async_task_processor
+import main
+import settings
+import users
+import utility
 
 
 app = Bottle()
 
 
-def abort_json(code, msg):
-    abort(code, utility.make_error_json(code, msg))
+def abort_json(code, msg, data=None):
+    raise HTTPResponse(
+        body=utility.make_error_json(code, msg, data),
+        status=code,
+        headers={'Content-Type': 'application/json; charset=utf-8'},
+    )
 
 
-@app.post('/api/build/<bot_name>')
-def api_build(bot_name):
-    bot = main.get_bot(bot_name)
-    if not bot:
-        abort_json(404, u'not found')
-
-    options = {}
-    options['skip_image'] = (request.params.get('skip_image') == 'true')
-    options['force'] = (request.params.get('force') == 'true')
-
-    version = main.get_options().get('scenario_version', 1)
-
-    logging.info("start building...: options: {}, version: {}".format(options, version))
-
-    ok, err = bot.build_scenario(options=options, version=version)
-
-    response.content_type = 'text/plain; charset=UTF-8'
-    response.headers['Access-Control-Allow-Origin'] = '*'
-    if ok:
-        # リロードに成功した
-        return utility.make_ok_json(u"反映作業に成功しました。")
-    else:
-        return utility.make_ng_json(u"反映作業に失敗しました。\n\n" + err)
+def set_json_response_headers():
+    response.set_header('Content-Type', 'text/plain; charset=utf-8')
+    response.set_header('Access-Control-Allow-Origin', '*')
 
 
-@app.get('/api/build_async/<bot_name>')
-@app.post('/api/build_async/<bot_name>')
-def api_build_async(bot_name):
-    bot = main.get_bot(bot_name)
-    if not bot:
-        abort_json(404, u'not found')
-
-    options = {}
-    skip_option = request.params.get('skip_image')
-    if skip_option:
-        options['skip_image'] = skip_option
-    force_option = request.params.get('force')
-    if force_option:
-        options['force'] = force_option
-
-    task = taskqueue.add(url='/api/build/' + bot.name,
-                         params=options,
-                         retry_options=taskqueue.TaskRetryOptions(task_retry_limit=0))
-    logging.info("enqueue a build task: {}, options: {}, ETA {}".format(task.name, options, task.eta))
-
-    response.content_type = 'text/plain; charset=UTF-8'
-    response.headers['Access-Control-Allow-Origin'] = '*'
-    return utility.make_ok_json(u"OK")
-
-
-@app.get('/api/last_build_result/<bot_name>')
-def api_get_last_build_result(bot_name):
-    bot = main.get_bot(bot_name)
-    if not bot:
-        abort_json(404, u'not found')
-
-    result = memcache.get('last_build_result:' + bot.name)
-    if result is None:
-        result = u"\tNot Found"
-
-    response.content_type = 'text/plain; charset=UTF-8'
-    return result
+def _get_auth_token():
+    # ヘッダーから認証トークンを取得（優先）
+    token = request.headers.get('X-API-Token')
+    if token is None:
+        # ヘッダー未指定時はqueryまたはformのtokenを使う。
+        token = request.params.getunicode('token', '').strip()
+    return token
 
 
 def _do_action_iter(result, bot, user, action, attrs, level=0):
-    if level > 20:
-        logging.warning(u'group infinite loop: {} {}'.format(user, action))
-        abort_json(400, u'infinite loop is detected')
+    try:
+        return async_task_processor._do_action_iter(
+            result, bot, user, action, attrs,
+            users.get_group_members, settings.OPTIONS, time.sleep, level,
+        )
+    except async_task_processor.TaskProcessingError as error:
+        abort_json(error.status_code, error.public_message)
 
-    if user.service_name == 'group':
-        for member in users.get_group_members(user.user_id):
-            _do_action_iter(result, bot, member, action, attrs, level+1)
-            # TODO: rate limit があるサービスでの対応
-    else:
-        interface = bot.get_interface(user.service_name)
-        if interface is None:
-            abort_json(404, u'not found')
-        context = interface.create_context(user, action, attrs)
-        result.append(unicode(bot.handle_action(context)))
+
+def process_action_task(bot, user_str, action, attrs):
+    """HTTPとSQSから同じaction処理を呼ぶための共通入口。"""
+    return async_task_processor.process_decoded_action(
+        bot, user_str, action, attrs,
+        users.User, users.get_group_members, settings.OPTIONS, time.sleep,
+    )
+
+
+def process_group_batch_task(bot_name, bot, task_id, batch_index):
+    """HTTPとSQSから同じgroup batch処理を呼ぶための共通入口。"""
+    from group_message_task_manager import GroupMessageTaskManager
+    return async_task_processor.process_group_batch(
+        bot_name, bot, task_id, batch_index, GroupMessageTaskManager)
 
 
 @app.post('/api/v1/bots/<bot_name>/action')
 @app.get('/api/v1/bots/<bot_name>/action')
 def do_action(bot_name):
-    response.content_type = 'text/plain; charset=UTF-8'
+    response.set_header('Content-Type', 'text/plain; charset=utf-8')
 
     bot = main.get_bot(bot_name)
     if not bot:
-        abort_json(404, u'not found')
+        abort_json(404, 'not found')
 
-    user_str = request.params.getunicode('user')
-    action, attrs = utility.decode_action_string(request.params.getunicode('action'))
-    token = request.params.getunicode('token')
-
-    logging.info(u"API call: bot_name: {}, user: {}, action: {}".format(bot_name, user_str, action))
+    user_str = request.params.getunicode('user', '').strip()
+    action, attrs = utility.decode_action_string(request.params.getunicode('action', ''))
+    token = _get_auth_token()
 
     # token チェック
     if not auth.check_token(token):
-        abort_json(401, u'invalid token')
+        abort_json(401, 'invalid token')
 
-    user = None
-    if user_str:
-        user = users.User.deserialize(user_str)
-    if user is None or action is None:
-        abort_json(400, u'invalid parameter')
+    logging.info(f"API call: bot_name: {bot_name}, user: {user_str}, action: {action}")
 
-    bot.check_reload()
+    try:
+        result = process_action_task(
+            bot, user_str, action, attrs,
+        )
+    except async_task_processor.TaskProcessingError as error:
+        abort_json(error.status_code, error.public_message)
 
-    result = []
-    _do_action_iter(result, bot, user, action, attrs)
-
-    return utility.make_ok_json(u"\n".join(result))
+    return utility.make_ok_json(result)
 
 
 @app.get('/_ah/start')
 def start_handler():
-    response.content_type = 'text/plain; charset=UTF-8'
-    return u'Start successful'
+    response.set_header('Content-Type', 'text/plain; charset=utf-8')
+    return 'Start successful'
 
 
 @app.get('/_ah/stop')
 def stop_handler():
-    response.content_type = 'text/plain; charset=UTF-8'
-    return u'Stop successful'
+    response.set_header('Content-Type', 'text/plain; charset=utf-8')
+    return 'Stop successful'
 
 
-@app.get('/_ah/warmup')
-def warmup_handler():
-    for bot_name, bot in main.get_bots().items():
-        bot.check_reload()
-    response.content_type = 'text/plain; charset=UTF-8'
-    return u'Warmup successful'
+def _parse_group_member_ids():
+    """グループ追加APIのJSON本文からメンバーIDを取得する。"""
+    try:
+        data = request.json
+    except Exception as error:
+        if getattr(error, 'status_code', None) == 413:
+            raise
+        logging.warning('グループメンバー追加APIのJSON解析に失敗しました')
+        abort_json(400, 'invalid request format')
+
+    if not isinstance(data, dict):
+        abort_json(400, 'invalid request format')
+
+    members_str = data.get('members', '')
+    if not isinstance(members_str, str):
+        abort_json(400, 'invalid request format')
+
+    members_str = members_str.strip()
+    if not members_str:
+        return []
+    if '\n' in members_str:
+        return [member.strip() for member in members_str.split('\n')
+                if member.strip()]
+    return [member.strip() for member in members_str.split(',')
+            if member.strip()]
+
+
+@app.post('/api/v1/groups/<group_id>/add_members')
+def add_group_members(group_id):
+    response.set_header('Content-Type', 'application/json; charset=utf-8')
+
+    # 未認証要求では本文を解析しない。
+    if not auth.check_token(_get_auth_token()):
+        abort_json(401, 'invalid token')
+
+    member_ids = _parse_group_member_ids()
+    added_count = 0
+    failed_ids = []
+
+    for member_id in member_ids:
+        try:
+            user = users.User.deserialize(member_id)
+            if user is None:
+                failed_ids.append(member_id)
+                continue
+            users.append_group_member(group_id, user)
+            added_count += 1
+        except Exception as error:
+            logging.error(
+                'グループメンバーの追加に失敗しました: error_type=%s',
+                type(error).__name__)
+            failed_ids.append(member_id)
+
+    return utility.make_ok_json(
+        f'グループ {group_id} に {added_count} 人のメンバーを追加しました',
+        {
+            'group_id': group_id,
+            'added_count': added_count,
+            'failed_count': len(failed_ids),
+            'failed_ids': failed_ids,
+        },
+    )
+
+
+@app.get('/api/v1/groups/<group_id>/members')
+def get_group_members(group_id):
+    response.set_header('Content-Type', 'application/json; charset=utf-8')
+
+    if not auth.check_token(_get_auth_token()):
+        abort_json(401, 'invalid token')
+
+    try:
+        members = users.get_group_members(group_id)
+        member_ids = [member.serialize() for member in members]
+    except Exception as error:
+        logging.error(
+            'グループメンバーの取得に失敗しました: error_type=%s',
+            type(error).__name__)
+        abort_json(500, 'failed to get group members')
+
+    return utility.make_ok_json(
+        f'グループ {group_id} のメンバー情報を取得しました ({len(member_ids)} 件)',
+        {
+            'group_id': group_id,
+            'count': len(member_ids),
+            'members': member_ids,
+        },
+    )
+
+
+@app.route('/api/v1/bots/<bot_name>/process_group_batch', method=['OPTIONS'])
+def options_process_group_batch(bot_name):
+    set_json_response_headers()
+    return ''
+
+
+@app.post('/api/v1/bots/<bot_name>/process_group_batch')
+def process_group_batch(bot_name):
+    logging.info(f"process_group_batch: bot_name: {bot_name}")
+    response.set_header('Content-Type', 'application/json; charset=utf-8')
+
+    token = request.headers.get('X-API-Token', '')
+    if not auth.check_token(token):
+        abort_json(401, 'invalid token')
+
+    bot = main.get_bot(bot_name)
+    if not bot:
+        abort_json(404, 'bot not found')
+
+    task_id = request.params.getunicode('message_task_id', '').strip()
+    batch_index = int(request.params.getunicode('batch_index', '0'))
+
+    try:
+        result = process_group_batch_task(
+            bot_name, bot, task_id, batch_index)
+    except async_task_processor.TaskProcessingError as error:
+        logging.error(
+            f"Error processing batch: {error.status_code} - "
+            f"{error.public_message}"
+        )
+        abort_json(error.status_code, error.public_message)
+
+    return utility.make_ok_json(result.get('message', '処理完了'), result)
 
 
 if __name__ == "__main__":

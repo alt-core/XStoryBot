@@ -13,15 +13,22 @@ class TwilioPlugin_ActionContext(context.ActionContext):
     def __init__(self, bot_name, interface, user, action, attrs):
         context.ActionContext.__init__(self, bot_name, "twilio", interface, user, action, attrs)
         self.from_tel = attrs.get('twilio.from_tel', user.user_id)
-        self.to_tel = attrs.get('twilio.to_tel', u"null")
+        self.to_tel = attrs.get('twilio.to_tel', "null")
         self.is_voicecall = attrs.get('twilio.is_voicecall', False)
-        self.message = attrs.get('twilio.message', u"")
+        self.message = attrs.get('twilio.message', "")
 
 
 class TwilioPlugin_Interface(object):
     def __init__(self, bot_name, params):
         self.bot_name = bot_name
-        self.params = params
+        self.params = params.copy()
+        self.params.setdefault('twilio_sid', self.params.get('sid', ''))
+        self.params.setdefault(
+            'twilio_auth_token',
+            self.params.get('auth_token', ''),
+        )
+        self.params.setdefault('sms_from', self.params.get('phone_number', ''))
+        self.params.setdefault('dial_from', self.params.get('phone_number', ''))
         self._twilio_client = None
 
     def get_twilio_client(self):
@@ -32,6 +39,9 @@ class TwilioPlugin_Interface(object):
     def get_service_list(self):
         return {'twilio': self}
 
+    def get_retry_count(self):
+        return self.params.get('retry_count', 3)
+
     def create_context(self, user, action, attrs):
         return TwilioPlugin_ActionContext(self.bot_name, self, user, action, attrs)
 
@@ -41,7 +51,7 @@ class TwilioPlugin_Interface(object):
         user = users.User("twilio", from_tel)
         if is_voicecall:
             # 音声着信の場合、action は #tel:電話番号 とする
-            action = u'#tel:'+to_tel
+            action = f'#tel:{to_tel}'
             if message is not None:
                 # message がある場合（音声認識した、または @dial の内容取得時）は
                 # message で上書き
@@ -59,8 +69,8 @@ class TwilioPlugin_Interface(object):
         return TwilioPlugin_ActionContext(self.bot_name, self, user, action, attrs)
 
     def respond_reaction(self, context, reactions):
-        twiml = u'<?xml version="1.0" encoding="UTF-8"?>' \
-                u'<Response>'
+        twiml = '<?xml version="1.0" encoding="UTF-8"?>' \
+                '<Response>'
 
         context.response = []
         for reaction, children in reactions:
@@ -71,17 +81,17 @@ class TwilioPlugin_Interface(object):
             if commands.invoke_runtime_construct_response(context, sender, msg, options, children):
                 # コマンド毎の処理メソッドの中で context.response への追加が行われている
                 pass
-            elif msg.startswith(u'<'):
+            elif msg.startswith('<'):
                 context.response.append(msg)
             else:
                 if context.is_voicecall:
-                    context.response.append(u'<Say language="ja-jp" voice="woman">' + msg + u'</Say>')
+                    context.response.append(f'<Say language="ja-jp" voice="woman">{msg}</Say>')
                 else:
-                    text = msg if sender is None else sender + u"：\n" + msg
-                    context.response.append(u'<Message>' + text + u'</Message>')
+                    text = msg if sender is None else f"{sender}:\n{msg}"
+                    context.response.append(f'<Message>{text}</Message>')
 
-        twiml += u''.join(context.response)
-        twiml += u'</Response>'
+        twiml += ''.join(context.response)
+        twiml += '</Response>'
 
         return twiml
 
