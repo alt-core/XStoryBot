@@ -5,7 +5,7 @@ google-cloud-tasks~=2.18.0
 google-cloud-logging~=3.11.4
 line-bot-sdk==2.4.3
 google-api-python-client~=2.160.0
-requests==2.31.0
+requests==2.33.0
 twilio~=9.4.4
 pusher~=3.3.3
 argon2-cffi~=25.1.0
