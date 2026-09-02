@@ -2,6 +2,7 @@
 set -eu
 
 export XSBOT_DEPLOY_ENV=test
+export XSBOT_CLOUD_PROVIDER=gcp
 
 python3 -m unittest \
     tests.test_settings_configuration \
@@ -25,6 +26,10 @@ python3 -m unittest \
     tests.plugin.test_mock_line \
     tests.plugin.test_images \
     tests.plugin.test_twilio \
+    tests.plugin.test_webchat \
+    tests.plugin.test_webchat_runtime_e2e \
+    tests.test_webchat_dev_server \
+    tests.test_webchat_reference_ui \
     tests.plugin.test_line_contracts \
     tests.test_task_client \
     tests.test_task_queue_contract \
@@ -33,6 +38,7 @@ python3 -m unittest \
     tests.test_aws_build_task_launcher \
     tests.test_aws_template \
     tests.test_aws_deploy_script \
+    tests.test_webchat_scenario_update \
     tests.test_build_service \
     tests.test_async_task_processor \
     tests.test_aws_task_handler \

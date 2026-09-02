@@ -1,11 +1,17 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Transform: AWS::Serverless-2016-10-31
+Transform:
+  - AWS::LanguageExtensions
+  - AWS::Serverless-2016-10-31
 Description: XStoryBotの最小AWS実行基盤
 
 Parameters:
   ImageUri:
     Type: String
     Description: API、worker、builderで共用するコンテナイメージURI
+  WebchatImageUri:
+    Type: String
+    Default: ''
+    Description: Webchatだけを個別更新するコンテナイメージURI。空ならImageUriを使用
   EnvironmentName:
     Type: String
     Default: prod
@@ -26,6 +32,45 @@ Parameters:
     Type: AWS::SSM::Parameter::Name
     Description: LINE等のruntime秘密値JSONを保存したSecureString名
     AllowedPattern: '^/[a-zA-Z0-9_.\-/]+$'
+  WebchatEnabled:
+    Type: String
+    Default: 'false'
+    AllowedValues: ['true', 'false']
+  WebchatSigningKey:
+    Type: String
+    Default: ''
+    NoEcho: true
+    Description: Webchat専用32 byte以上のbase64url HMAC鍵
+  WebchatScenarioUri:
+    Type: String
+    Default: ''
+    Description: Webchat Lambda versionへ固定するimmutable Scenario URI
+  WebchatCompatibilityEpoch:
+    Type: String
+    Default: webchat-v1
+  WebchatAllowedOrigins:
+    Type: String
+    Default: ''
+    Description: 同一origin参照UI以外で許可するカンマ区切りHTTPS origin
+  WebchatExternalHttpOrigins:
+    Type: String
+    Default: ''
+    Description: Scenario外部HTTPのカンマ区切りHTTPS origin
+  WebchatMediaOrigins:
+    Type: String
+    Default: ''
+    Description: 実行時media URLのカンマ区切りHTTPS origin
+  WebchatThrottleRate:
+    Type: Number
+    Default: 10
+    MinValue: 1
+  WebchatThrottleBurst:
+    Type: Number
+    Default: 20
+    MinValue: 1
+Conditions:
+  WebchatEnabledCondition: !Equals [!Ref WebchatEnabled, 'true']
+  WebchatImageSpecifiedCondition: !Not [!Equals [!Ref WebchatImageUri, '']]
 Globals:
   Function:
     Architectures:
@@ -301,6 +346,13 @@ Resources:
       LogGroupName: !Sub '/aws/apigateway/${AWS::StackName}-http-api'
       RetentionInDays: 30
 
+  WebchatLogGroup:
+    Type: AWS::Logs::LogGroup
+    Condition: WebchatEnabledCondition
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/${AWS::StackName}-webchat'
+      RetentionInDays: 30
+
   ActionWorkerLogGroup:
     Type: AWS::Logs::LogGroup
     Properties:
@@ -394,6 +446,28 @@ Resources:
                   - !Sub 'arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${AdminAuthParameterName}'
                   - !Sub 'arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${RuntimeSecretsParameterName}'
 
+  WebchatRole:
+    Type: AWS::IAM::Role
+    Condition: WebchatEnabledCondition
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - !Sub 'arn:${AWS::Partition}:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole'
+      Policies:
+        - PolicyName: WebchatScenarioRead
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: s3:GetObject
+                Resource: !Sub '${PrivateBucket.Arn}/scenario/*'
+
   WorkerRole:
     Type: AWS::IAM::Role
     Properties:
@@ -474,6 +548,19 @@ Resources:
       PayloadFormatVersion: '2.0'
       TimeoutInMillis: 30000
 
+  WebchatHttpApiIntegration:
+    Type: AWS::ApiGatewayV2::Integration
+    Condition: WebchatEnabledCondition
+    Properties:
+      ApiId: !Ref HttpApi
+      IntegrationType: AWS_PROXY
+      IntegrationUri: !Sub
+        - 'arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${FunctionArn}/invocations'
+        - FunctionArn: !Ref WebchatFunction.Alias
+      IntegrationMethod: POST
+      PayloadFormatVersion: '2.0'
+      TimeoutInMillis: 30000
+
   HttpApiDefaultRoute:
     Type: AWS::ApiGatewayV2::Route
     Properties:
@@ -484,6 +571,50 @@ Resources:
         - - integrations
           - !Ref HttpApiIntegration
 
+  WebchatTurnRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Condition: WebchatEnabledCondition
+    Properties:
+      ApiId: !Ref HttpApi
+      RouteKey: 'ANY /api/webchat/v1/bots/{bot_name}/turn'
+      Target: !Join
+        - /
+        - - integrations
+          - !Ref WebchatHttpApiIntegration
+
+  WebchatPageRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Condition: WebchatEnabledCondition
+    Properties:
+      ApiId: !Ref HttpApi
+      RouteKey: 'GET /chat/{bot_name}'
+      Target: !Join
+        - /
+        - - integrations
+          - !Ref WebchatHttpApiIntegration
+
+  WebchatStaticRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Condition: WebchatEnabledCondition
+    Properties:
+      ApiId: !Ref HttpApi
+      RouteKey: 'GET /static/webchat/{proxy+}'
+      Target: !Join
+        - /
+        - - integrations
+          - !Ref WebchatHttpApiIntegration
+
+  WebchatClientRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Condition: WebchatEnabledCondition
+    Properties:
+      ApiId: !Ref HttpApi
+      RouteKey: 'GET /webchat-client/{proxy+}'
+      Target: !Join
+        - /
+        - - integrations
+          - !Ref WebchatHttpApiIntegration
+
   HttpApiStage:
     Type: AWS::ApiGatewayV2::Stage
     DependsOn: HttpApiDefaultRoute
@@ -491,6 +622,12 @@ Resources:
       ApiId: !Ref HttpApi
       StageName: '$default'
       AutoDeploy: true
+      RouteSettings: !If
+        - WebchatEnabledCondition
+        - 'ANY /api/webchat/v1/bots/{bot_name}/turn':
+            ThrottlingBurstLimit: !Ref WebchatThrottleBurst
+            ThrottlingRateLimit: !Ref WebchatThrottleRate
+        - !Ref AWS::NoValue
       AccessLogSettings:
         DestinationArn: !GetAtt ApiAccessLogGroup.Arn
         Format: '{"requestId":"$context.requestId","status":"$context.status","routeKey":"$context.routeKey","responseLatency":"$context.responseLatency","integrationLatency":"$context.integrationLatency"}'
@@ -509,6 +646,45 @@ Resources:
         Variables:
           XSBOT_APP_MODULE: app:app
           AWS_LWA_READINESS_CHECK_PATH: /healthz
+
+  WebchatFunction:
+    Type: AWS::Serverless::Function
+    Condition: WebchatEnabledCondition
+    DependsOn: WebchatLogGroup
+    Properties:
+      PackageType: Image
+      FunctionName: !Sub '${AWS::StackName}-webchat'
+      ImageUri: !If
+        - WebchatImageSpecifiedCondition
+        - !Ref WebchatImageUri
+        - !Ref ImageUri
+      MemorySize: 1024
+      Timeout: 30
+      Role: !GetAtt WebchatRole.Arn
+      AutoPublishAlias: live
+      AutoPublishAliasAllProperties: true
+      Environment:
+        Variables:
+          XSBOT_APP_MODULE: app_webchat:app
+          AWS_LWA_READINESS_CHECK_PATH: /healthz
+          AWS_LWA_ERROR_STATUS_CODES: '500'
+          XSBOT_AWS_RUNTIME_SECRETS_PARAMETER: ''
+          XSBOT_WEBCHAT_ENABLED: 'true'
+          XSBOT_WEBCHAT_SIGNING_KEY: !Ref WebchatSigningKey
+          XSBOT_WEBCHAT_SCENARIO_URI: !Ref WebchatScenarioUri
+          XSBOT_WEBCHAT_COMPATIBILITY_EPOCH: !Ref WebchatCompatibilityEpoch
+          XSBOT_WEBCHAT_ALLOWED_ORIGINS: !Ref WebchatAllowedOrigins
+          XSBOT_WEBCHAT_EXTERNAL_HTTP_ORIGINS: !Ref WebchatExternalHttpOrigins
+          XSBOT_WEBCHAT_MEDIA_ORIGINS: !Ref WebchatMediaOrigins
+
+  WebchatInvokePermission:
+    Type: AWS::Lambda::Permission
+    Condition: WebchatEnabledCondition
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref WebchatFunction.Alias
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub 'arn:${AWS::Partition}:execute-api:${AWS::Region}:${AWS::AccountId}:${HttpApi}/*'
 
   HttpApiInvokePermission:
     Type: AWS::Lambda::Permission
@@ -781,6 +957,23 @@ Resources:
       ComparisonOperator: GreaterThanOrEqualToThreshold
       TreatMissingData: notBreaching
 
+  WebchatErrorAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Condition: WebchatEnabledCondition
+    Properties:
+      AlarmDescription: Webchat Lambdaでerrorが発生しています
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref WebchatFunction
+      Statistic: Sum
+      Period: 60
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+
 Outputs:
   ApiUrl:
     Description: API GatewayのHTTPS URL
@@ -788,6 +981,9 @@ Outputs:
   MediaUrl:
     Description: 公開メディアのCloudFront URL
     Value: !Sub 'https://${MediaDistribution.DomainName}'
+  WebchatFunctionName:
+    Condition: WebchatEnabledCondition
+    Value: !Ref WebchatFunction
   PrivateBucketName:
     Value: !Ref PrivateBucket
   MediaBucketName:

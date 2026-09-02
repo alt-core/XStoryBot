@@ -11,7 +11,10 @@ def configure(cloud_settings=None):
     global _provider
 
     cloud_settings = cloud_settings or {}
-    provider = cloud_settings.get('provider', 'gcp')
+    provider = cloud_settings.get('provider')
+    if not provider:
+        raise ValueError(
+            'クラウドプロバイダーを明示してから初期化してください')
     if provider not in ('gcp', 'aws'):
         raise ValueError(f'未対応のクラウドプロバイダーです: {provider}')
     if _provider is not None and _provider != provider:
@@ -21,9 +24,10 @@ def configure(cloud_settings=None):
 
 
 def get_provider():
-    """確定済みプロバイダーを返し、未設定ならGCPを選ぶ。"""
+    """明示的に確定済みのプロバイダーを返す。"""
     if _provider is None:
-        return configure()
+        raise RuntimeError(
+            'クラウドプロバイダーが未初期化です。settingsを先に読み込んでください')
     return _provider
 
 

@@ -5,7 +5,7 @@ import re
 import hub
 import commands
 import utility
-from plugin.line import default_commands
+from plugin.line.command_names import REPLY_CMDS
 from utility import safe_list_get
 
 
@@ -39,7 +39,7 @@ def append_quick_reply(builder, quick_reply_guard, replies, sender, retry_messag
         reply_children.append(choice)
         reply_labels.append(label)
 
-    builder.add_command(sender, default_commands.REPLY_CMDS[0], reply_options, reply_children)
+    builder.add_command(sender, REPLY_CMDS[0], reply_options, reply_children)
     builder.add_command(sender, SET_QUICK_REPLY_GUARD_CMDS[0], [quick_reply_guard], None)
 
     # その他の入力が来た時用のラベルを設定
@@ -153,6 +153,7 @@ def load_plugin(params):
         service='line',
         builder=builder,
         runtime=runtime)
+    hub.register_handler(service='webchat', runtime=runtime)
     commands.register_commands([
         commands.CommandEntry(
             names=SET_QUICK_REPLY_GUARD_CMDS,
@@ -164,4 +165,15 @@ def load_plugin(params):
             builder=commands.Default_Builder(),
             runtime=runtime,
             service='line'),
+    ])
+    commands.register_commands([
+        commands.CommandEntry(
+            names=SET_QUICK_REPLY_GUARD_CMDS,
+            options='label',
+            runtime=runtime,
+            service='webchat'),
+        commands.CommandEntry(
+            names=CLEAR_QUICK_REPLY_GUARD_CMDS,
+            runtime=runtime,
+            service='webchat'),
     ])

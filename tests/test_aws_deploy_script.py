@@ -40,7 +40,12 @@ class AwsDeployScriptTest(unittest.TestCase):
                 'SheetId',
                 'GoogleSheetsCredentialParameterName',
                 'AdminAuthParameterName',
-                'RuntimeSecretsParameterName'):
+                'RuntimeSecretsParameterName',
+                'WebchatEnabled',
+                'WebchatImageUri',
+                'WebchatSigningKey',
+                'WebchatScenarioUri',
+                'WebchatCompatibilityEpoch'):
             self.assertIn(f'ParameterKey={name},ParameterValue=', self.source)
 
         self.assertIn('sam validate', self.source)
@@ -67,6 +72,11 @@ class AwsDeployScriptTest(unittest.TestCase):
                 'TWILIO_AUTH_TOKEN',
                 'PUSHER_APP_SECRET'):
             self.assertNotIn(secret_name, self.source)
+
+        self.assertIn(
+            '${XSBOT_WEBCHAT_SIGNING_KEY:?', self.source)
+        self.assertNotIn(
+            'echo "$XSBOT_WEBCHAT_SIGNING_KEY"', self.source)
 
     def test_デプロイファイルをimageとGCP_uploadから除外する(self):
         for ignore_name in ('.dockerignore', '.gcloudignore'):

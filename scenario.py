@@ -9,8 +9,6 @@ import requests
 import json
 
 import utility
-import convert_image
-from models import ImageFileStatDB, MediaFileStatDB
 import hub
 import commands
 from cloud_backend import create_object_store
@@ -972,11 +970,13 @@ class ScenarioBuilder:
                     self._backpatch_fallback_iter(regions, fallback_scene, visited_scenes)
 
     def _make_imagemap_filepath(self, file_digest):
+        import convert_image
         file_format, digest = file_digest.split('_', 1)
         filepath = f'imagemap/{digest}.{convert_image.get_ext_from_format(file_format)}'
         return filepath
 
     def _make_image_filepath(self, file_digest, resize_to):
+        import convert_image
         file_format, digest = file_digest.split('_', 1)
         filepath = f'image/{digest}_{resize_to}.{convert_image.get_ext_from_format(file_format)}'
         return filepath
@@ -995,6 +995,7 @@ class ScenarioBuilder:
         return self.build_image(image_url, 'image')
 
     def build_video(self, video_url):
+        from models import MediaFileStatDB
         key = f'video|{video_url}'
         if key in self.image_file_read_cache:
             return self.image_file_read_cache[key]
@@ -1059,6 +1060,8 @@ class ScenarioBuilder:
         return result
 
     def build_image(self, image_url, kind):
+        import convert_image
+        from models import ImageFileStatDB
         key = f'{kind}|{image_url}'
         if key in self.image_file_read_cache:
             #logging.debug(u'skip load image (read cache): {}, {}'.format(image_url, kind))
@@ -1135,6 +1138,7 @@ class ScenarioBuilder:
         return result, size
 
     def _resize_and_save_image_data(self, orig_data, resize_to, filepath, force_fit_width=False, never_stretch=False):
+        import convert_image
         if filepath in self.image_file_write_cache:
             logging.debug(f'skip save image (write cache): {filepath}, {resize_to}')
             return self.image_file_write_cache[filepath]
@@ -1450,6 +1454,10 @@ class Director:
             else:
                 children = command.children
             if msg.startswith('@'):
+                check_command_policy = getattr(
+                    self.context, 'check_command_policy', None)
+                if check_command_policy is not None:
+                    check_command_policy(msg)
                 result = commands.invoke_runtime_run_command(self.context, sender, msg, options, children)
                 if result == True:
                     # True はコマンド側で処理済み

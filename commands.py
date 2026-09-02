@@ -213,6 +213,10 @@ def parse_command(builder, node):
             cell = ''
         options.append(check_format_and_normalize(builder, cell, entry.options[i]))
         utility.remove_tail_empty_cells(options)
+    if entry.specs.get('reject_extra_options'):
+        extra_options = row[1 + len(entry.options):]
+        if any(str(cell).strip() for cell in extra_options):
+            builder.raise_error('コマンドに未定義の余分な引数があります')
 
     # children のフォーマット確認と事前処理
     n_children = len(node.children)

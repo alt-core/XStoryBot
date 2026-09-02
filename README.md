@@ -22,7 +22,7 @@
 
 ![システム構成図](./docs/system_diagram.png)
 
-この構成図は旧GAE版を基にした概念図です。現行版のGCP構成ではCloud Run、AWS構成ではAPI Gateway、Lambda、Fargateなどが、図中のGoogle App Engineに相当する役割を担います。
+この構成図は旧GAE版を基にした概念図です。現行版のGCP構成ではCloud Run、AWS構成ではAPI Gateway、Lambda、Fargateなどが、図中のGoogle App Engineに相当する役割を担います。Webchatだけは署名付き状態をbrowserへ保存し、図中のユーザ状態DBを利用しません。
 
 ## できること
 
@@ -50,6 +50,9 @@ plugin によって拡張可能な設計になっています。
   - 電話がかかってきたことをトリガーに SMS を送信し、返信の内容によって電話をかける、といったことが可能です。
   - しかし、電話にせよ、SMS にせよ、とにかく[単価が高い](https://twilio.kddi-web.com/price/)ため、大規模な利用は困難です。
 - WebAPI（認証付き action API）
+- Webchat（AWSの署名付きclient state方式）
+  - 導入方法、対応範囲、client組込みは[Webchatガイド](./docs/webchat.md)を参照してください。
+  - API契約は[OpenAPI 3.1](./docs/webchat.openapi.yaml)、表示データは[JSON Schema](./docs/webchat-message-spec.schema.json)で公開しています。
 
 ### IoT 機器などとの連携
 
@@ -90,7 +93,7 @@ Cloud Runへデプロイする場合は、利用するGCPプロジェクトを�
 
     > cp settings.yaml.template settings.yaml
 
-`settings.yaml`を必要に応じて編集し、`.env.template`に列挙された環境変数を実行環境へ設定してください。Dockerイメージでは`settings.yaml`は取り込まず、`settings.yaml.template`をイメージ内の設定として使うため、コンテナ用のBot・plugin構成はこちらを編集します。`XSBOT_DEPLOY_ENV`には適用する環境別設定（例: `prod`、`stg`、`dev`、`test`、`local`）を指定します。
+`settings.yaml`を必要に応じて編集し、`.env.template`に列挙された環境変数を実行環境へ設定してください。Dockerイメージでは`settings.yaml`は取り込まず、`settings.yaml.template`をイメージ内の設定として使うため、コンテナ用のBot・plugin構成はこちらを編集します。`XSBOT_DEPLOY_ENV`には適用する環境別設定（例: `prod`、`stg`、`dev`、`test`、`local`）を指定します。`XSBOT_CLOUD_PROVIDER`は`gcp`または`aws`を必ず明示し、未設定時は誤ったbackendへ接続せず起動を停止します。
 
 GCPとGoogle Sheetsで使うサービスアカウントJSONはコンテナイメージへ含めず、Secret Managerから読み取り専用ファイルとしてマウントし、それぞれのコンテナ内パスを`GOOGLE_APPLICATION_CREDENTIALS`と`SHEETS_SERVICE_ACCOUNT`へ指定してください。同じサービスアカウントを使う場合は、両方に同じパスを指定できます。
 
@@ -111,14 +114,14 @@ AWS CLI、AWS SAM CLI、DockerとAWS認証情報、既存のECR repositoryを準
 
 管理者認証JSONは`python3 tools/generate_admin_auth.py`で生成できます。
 
-`AWS_REGION`、`XSBOT_AWS_STACK_NAME`、`XSBOT_AWS_ECR_REPOSITORY`、`XSBOT_AWS_ENVIRONMENT`、`XSBOT_AWS_SHEET_ID`、`XSBOT_AWS_SHEETS_CREDENTIAL_PARAMETER`、`XSBOT_AWS_ADMIN_AUTH_PARAMETER`、`XSBOT_AWS_RUNTIME_SECRETS_PARAMETER`を環境変数に設定し、`./deploy_aws.sh`を実行します。秘密値そのものはスクリプトへ渡しません。
+`AWS_REGION`、`XSBOT_AWS_STACK_NAME`、`XSBOT_AWS_ECR_REPOSITORY`、`XSBOT_AWS_ENVIRONMENT`、`XSBOT_AWS_SHEET_ID`、`XSBOT_AWS_SHEETS_CREDENTIAL_PARAMETER`、`XSBOT_AWS_ADMIN_AUTH_PARAMETER`、`XSBOT_AWS_RUNTIME_SECRETS_PARAMETER`を環境変数に設定し、`./deploy_aws.sh`を実行します。通常のruntime秘密値そのものはスクリプトへ渡しません。Webchatを有効にする場合は、`XSBOT_WEBCHAT_ENABLED=true`、`XSBOT_WEBCHAT_SIGNING_KEY`、`XSBOT_WEBCHAT_SCENARIO_URI`も必要です。詳細は[Webchatガイド](./docs/webchat.md)を参照してください。
 
 API、2つのworker、Fargateで同じECR imageを共用するため、スクリプトはDockerで一度だけ`linux/amd64` imageをbuild/pushし、`ImageUri`をSAMへ渡します。同一imageの再buildを避けるため`sam build`は実行しません。
 
 ## シナリオの作成
 
 Google Sheets 上でシナリオを作成します。
-詳細は、シナリオフォーマットのドキュメント（未作成）を参照してください。
+基本的なSheet構成、scene、message、主要commandは[Scenario作成ガイド](./docs/scenario-authoring.md)を参照してください。
 
 ## ダッシュボードからシナリオ読み込み
 
@@ -128,7 +131,7 @@ Google Sheets 上でシナリオを作成します。
 
 ダッシュボードにある「シナリオ修正の反映」のボタンを押すことで、Google Sheets からシナリオを読み込み、選択したクラウドプロバイダーのオブジェクトストレージ上に中間ファイルを生成します。
 
-この時、シナリオで指定された画像等のリソースファイルも全て同じオブジェクトストレージ上にコピーされますので、安定したサービス提供が可能です。
+この時、build処理の対象となる画像等のリソースファイルも同じオブジェクトストレージ上にコピーされますので、安定したサービス提供が可能です。
 
 ## ログ
 

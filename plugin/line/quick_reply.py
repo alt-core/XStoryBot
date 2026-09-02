@@ -6,10 +6,8 @@ import json
 import hub
 import commands
 import utility
-from plugin.line import default_commands
+from plugin.line.command_names import REPLY_CMDS
 from utility import safe_list_get
-
-from linebot.models import QuickReply
 
 
 SET_QUICK_REPLY_GUARD_CMDS = ['@@set_quick_reply_guard']
@@ -43,7 +41,7 @@ def append_quick_reply(builder, quick_reply_base_label, choices, sender, please_
         reply_children.append(choice)
         reply_labels.append(label)
 
-    builder.add_command(sender, default_commands.REPLY_CMDS[0], reply_options, reply_children)
+    builder.add_command(sender, REPLY_CMDS[0], reply_options, reply_children)
 
     builder.add_command(sender, SET_QUICK_REPLY_GUARD_CMDS[0], [quick_reply_base_label, please_select_quick_retry_label, json.dumps(reply_children), str(guard_flag) ], None)
 
@@ -223,6 +221,7 @@ def load_plugin(params):
         service='line',
         builder=builder,
         runtime=runtime)
+    hub.register_handler(service='webchat', runtime=runtime)
     commands.register_commands([
         commands.CommandEntry(
             names=SET_QUICK_REPLY_GUARD_CMDS,
@@ -240,4 +239,20 @@ def load_plugin(params):
             builder=commands.Default_Builder(),
             runtime=runtime,
             service='line'),
+    ])
+    commands.register_commands([
+        commands.CommandEntry(
+            names=SET_QUICK_REPLY_GUARD_CMDS,
+            options='label label text text',
+            runtime=runtime,
+            service='webchat'),
+        commands.CommandEntry(
+            names=SHOW_QUICK_REPLY_CHOICES_CMDS,
+            runtime=runtime,
+            service='webchat'),
+        commands.CommandEntry(
+            names=CLEAR_QUICK_REPLY_GUARD_CMDS,
+            options='[label]',
+            runtime=runtime,
+            service='webchat'),
     ])

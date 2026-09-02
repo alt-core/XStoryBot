@@ -7,7 +7,7 @@ import time
 # import urllib3
 
 from linebot import LineBotApi, WebhookParser
-from linebot.models import MessageEvent, PostbackEvent, BeaconEvent, FollowEvent, UnfollowEvent, JoinEvent, LeaveEvent, MemberJoinedEvent, MemberLeftEvent, TextMessage, ImageMessage, VideoMessage, AudioMessage, FileMessage, LocationMessage, StickerMessage, TextSendMessage, ImageSendMessage, VideoSendMessage, TemplateSendMessage, \
+from linebot.models import MessageEvent, PostbackEvent, VideoPlayCompleteEvent, BeaconEvent, FollowEvent, UnfollowEvent, JoinEvent, LeaveEvent, MemberJoinedEvent, MemberLeftEvent, TextMessage, ImageMessage, VideoMessage, AudioMessage, FileMessage, LocationMessage, StickerMessage, TextSendMessage, ImageSendMessage, VideoSendMessage, AudioSendMessage, TemplateSendMessage, \
     CarouselColumn, ImagemapSendMessage, ImagemapArea, MessageImagemapAction, Sender
 
 # # SSL 警告を抑制
@@ -15,7 +15,7 @@ from linebot.models import MessageEvent, PostbackEvent, BeaconEvent, FollowEvent
 
 from requests import RequestException
 
-from common_commands import IMAGE_CMDS, VIDEO_CMDS, RAWIMAGE_CMDS
+from common_commands import AUDIO_CMDS, IMAGE_CMDS, VIDEO_CMDS, RAWIMAGE_CMDS
 from context import ActionContext
 from users import User
 import hub
@@ -108,6 +108,16 @@ class LinePlugin_Interface(object):
             action, token_attrs = utility.decode_action_string(event.postback.data)
             attrs.update(token_attrs)
             return action, attrs
+        elif isinstance(event, VideoPlayCompleteEvent):
+            try:
+                action, token_attrs = utility.decode_line_video_tracking_id(
+                    event.video_play_complete.tracking_id)
+            except (AttributeError, ValueError):
+                # 旧形式や外部生成値は本文を記録せず、従来どおり無視する。
+                logging.warning('[LINE] 動画完了tracking IDが不正です')
+                return None, attrs
+            attrs.update(token_attrs)
+            return action, attrs
         elif isinstance(event, BeaconEvent):
             return f":LINE_BEACON:{event.beacon.type},{event.beacon.hwid}", attrs
         elif isinstance(event, (FollowEvent, UnfollowEvent, JoinEvent, LeaveEvent)):
@@ -175,11 +185,23 @@ class LinePlugin_Interface(object):
                 thumb_url = options[0]
                 video_url = options[1]
                 video_action = options[2] if len(options) > 2 else None
-                response.append(VideoSendMessage(original_content_url=video_url, preview_image_url=thumb_url, tracking_id=video_action, sender=self._make_sender(sender)))
+                tracking_id = None
+                if video_action and context.source_type == 'user':
+                    tracking_id = utility.encode_line_video_tracking_id(
+                        video_action, context.status.action_token)
+                elif video_action:
+                    logging.warning(
+                        '[LINE] group／roomでは動画完了actionを利用できません')
+                response.append(VideoSendMessage(original_content_url=video_url, preview_image_url=thumb_url, tracking_id=tracking_id, sender=self._make_sender(sender)))
             elif msg in RAWIMAGE_CMDS:
                 image_url = options[0]
                 preview_url = options[1]
                 response.append(ImageSendMessage(image_url, preview_url, sender=self._make_sender(sender)))
+            elif msg in AUDIO_CMDS:
+                response.append(AudioSendMessage(
+                    original_content_url=options[0],
+                    duration=int(options[1]),
+                    sender=self._make_sender(sender)))
             else:
                 response.append(TextSendMessage(text=msg, sender=self._make_sender(sender)))
         return response

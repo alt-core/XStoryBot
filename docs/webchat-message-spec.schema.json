@@ -1,0 +1,133 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "XStoryBot Webchat MessageSpec v1",
+  "type": "object",
+  "required": ["id", "role", "sender", "type"],
+  "properties": {
+    "id": { "type": "string" },
+    "role": { "const": "assistant" },
+    "sender": {
+      "type": ["object", "null"],
+      "properties": {
+        "name": { "type": "string" },
+        "icon_url": { "type": ["string", "null"], "format": "uri" }
+      },
+      "required": ["name", "icon_url"],
+      "additionalProperties": false
+    },
+    "type": {
+      "enum": ["text", "image", "audio", "video", "button", "imagemap"]
+    },
+    "text": { "type": "string" },
+    "title": { "type": ["string", "null"] },
+    "image_url": { "type": ["string", "null"], "format": "uri" },
+    "original_url": { "type": "string", "format": "uri" },
+    "preview_url": { "type": "string", "format": "uri" },
+    "url": { "type": "string", "format": "uri" },
+    "poster_url": { "type": "string", "format": "uri" },
+    "completion_action": {
+      "allOf": [
+        { "$ref": "#/$defs/action" },
+        {
+          "properties": { "type": { "const": "postback" } },
+          "required": ["type"]
+        }
+      ]
+    },
+    "mime_type": { "type": ["string", "null"] },
+    "duration_ms": { "type": "integer", "minimum": 1 },
+    "alt": { "type": "string" },
+    "width": { "type": "integer", "minimum": 1 },
+    "height": { "type": "integer", "minimum": 1 },
+    "sources": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["url", "width"],
+        "properties": {
+          "url": { "type": "string", "format": "uri" },
+          "width": { "type": "integer", "minimum": 1 }
+        },
+        "additionalProperties": false
+      }
+    },
+    "actions": { "type": "array", "items": { "$ref": "#/$defs/action" } },
+    "quick_replies": { "type": "array", "items": { "$ref": "#/$defs/action" } },
+    "areas": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["x", "y", "width", "height", "action"],
+        "properties": {
+          "x": { "type": "integer", "minimum": 0 },
+          "y": { "type": "integer", "minimum": 0 },
+          "width": { "type": "integer", "minimum": 1 },
+          "height": { "type": "integer", "minimum": 1 },
+          "action": { "$ref": "#/$defs/action" }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "type": { "const": "text" } }, "required": ["type"] },
+      "then": { "required": ["text"] }
+    },
+    {
+      "if": { "properties": { "type": { "const": "image" } }, "required": ["type"] },
+      "then": { "required": ["original_url", "preview_url", "alt"] }
+    },
+    {
+      "if": { "properties": { "type": { "const": "audio" } }, "required": ["type"] },
+      "then": { "required": ["url", "duration_ms", "mime_type"] }
+    },
+    {
+      "if": { "properties": { "type": { "const": "video" } }, "required": ["type"] },
+      "then": { "required": ["url", "poster_url"] }
+    },
+    {
+      "if": { "properties": { "type": { "const": "button" } }, "required": ["type"] },
+      "then": {
+        "required": ["text", "title", "image_url", "actions"]
+      }
+    },
+    {
+      "if": { "properties": { "type": { "const": "imagemap" } }, "required": ["type"] },
+      "then": {
+        "required": ["image_url", "sources", "width", "height", "alt", "areas"],
+        "properties": { "image_url": { "type": "string", "format": "uri" } }
+      }
+    }
+  ],
+  "$defs": {
+    "action": {
+      "type": "object",
+      "required": ["type", "label"],
+      "properties": {
+        "type": { "enum": ["message", "postback", "uri"] },
+        "label": { "type": "string" },
+        "text": { "type": "string" },
+        "token": { "type": "string" },
+        "echo_text": { "type": ["string", "null"] },
+        "href": { "type": "string", "format": "uri" }
+      },
+      "oneOf": [
+        {
+          "properties": { "type": { "const": "message" } },
+          "required": ["text"]
+        },
+        {
+          "properties": { "type": { "const": "postback" } },
+          "required": ["token", "echo_text"]
+        },
+        {
+          "properties": { "type": { "const": "uri" } },
+          "required": ["href"]
+        }
+      ],
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

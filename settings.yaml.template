@@ -2,7 +2,7 @@
 "*":
   # クラウドバックエンド設定
   cloud:
-    provider: gcp
+    provider: !env XSBOT_CLOUD_PROVIDER
 
   # 認証設定
   auth:
@@ -85,7 +85,9 @@
   options:
     api_token: !env XSBOT_API_TOKEN
     admins: []
-    reset_keyword: "!!強制リセット!!"
+    # 送った本人の会話状態を初期化する合言葉。利用者に推測されない
+    # 独自の値へ必ず変更してください。
+    reset_keyword: "!!ここを独自のリセット用合言葉に変更!!"
     timezone: "Asia/Tokyo"
     scenario_version: 3
     group_batch_size: 2000
@@ -172,6 +174,18 @@
 
     plaintext: {}
 
+    webchat:
+      enabled: !env XSBOT_WEBCHAT_ENABLED
+      signing_key: !env XSBOT_WEBCHAT_SIGNING_KEY
+      scenario_uri: !env XSBOT_WEBCHAT_SCENARIO_URI
+      scenario_compatibility_epoch: !env XSBOT_WEBCHAT_COMPATIBILITY_EPOCH
+      self_origin: !env XSBOT_APP_BASE_URL
+      allowed_origins: !env XSBOT_WEBCHAT_ALLOWED_ORIGINS
+      external_http_origins: !env XSBOT_WEBCHAT_EXTERNAL_HTTP_ORIGINS
+      media_origins: !env XSBOT_WEBCHAT_MEDIA_ORIGINS
+      start_action: "##line.follow"
+      sender_icon_urls: {}
+
   # Bot設定
   bots:
     bot:
@@ -183,6 +197,8 @@
             line_access_token: !env LINE_ACCESS_TOKEN
             line_channel_secret: !env LINE_CHANNEL_SECRET
         - type: liff
+          params:
+        - type: webchat
           params:
       scenario:
         type: google_sheets

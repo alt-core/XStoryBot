@@ -9,16 +9,16 @@ import json
 import hub
 import commands
 import utility
-
-
-BUTTON_CMDS = ('@button', '@ボタン')
-CONFIRM_CMDS = ('@confirm', '@確認')
-PANEL_CMDS = ('@carousel', '@カルーセル', '@panel', '@パネル')
-IMAGEMAP_CMDS = ('@imagemap', '@イメージマップ')
-FLEX_CMDS = ('@flex', '@フレックス')
-REPLY_CMDS = ('@reply', '@リプライ')
-RICHMENU_CMDS = (u'@richmenu', u'@リッチメニュー')
-ALL_TEMPLATE_CMDS = BUTTON_CMDS + CONFIRM_CMDS + PANEL_CMDS + IMAGEMAP_CMDS + REPLY_CMDS + RICHMENU_CMDS
+from plugin.line.command_names import (
+    ALL_TEMPLATE_CMDS,
+    BUTTON_CMDS,
+    CONFIRM_CMDS,
+    FLEX_CMDS,
+    IMAGEMAP_CMDS,
+    PANEL_CMDS,
+    REPLY_CMDS,
+    RICHMENU_CMDS,
+)
 
 
 class LineDefaultCommandsPlugin_Builder(object):

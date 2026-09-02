@@ -19,6 +19,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 class SettingsTemplateTest(unittest.TestCase):
     def setUp(self):
         self.environment = {
+            'XSBOT_CLOUD_PROVIDER': 'gcp',
             'XSBOT_API_TOKEN': 'value',
             'GOOGLE_CLOUD_PROJECT': 'test-project',
             'GOOGLE_CLOUD_PROJECT_NUMBER': '1234567890',
@@ -74,6 +75,13 @@ class SettingsTemplateTest(unittest.TestCase):
             'PUSHER_APP_KEY': 'value',
             'PUSHER_APP_SECRET': 'value',
             'PUSHER_APP_CLUSTER': 'ap3',
+            'XSBOT_WEBCHAT_ENABLED': '',
+            'XSBOT_WEBCHAT_SIGNING_KEY': '',
+            'XSBOT_WEBCHAT_SCENARIO_URI': '',
+            'XSBOT_WEBCHAT_COMPATIBILITY_EPOCH': 'webchat-v1',
+            'XSBOT_WEBCHAT_ALLOWED_ORIGINS': '',
+            'XSBOT_WEBCHAT_EXTERNAL_HTTP_ORIGINS': '',
+            'XSBOT_WEBCHAT_MEDIA_ORIGINS': '',
         }
 
     def load_template(self):
@@ -91,6 +99,17 @@ class SettingsTemplateTest(unittest.TestCase):
         self.assertTrue(default['plugins']['chatgpt']['log_conversation'])
         self.assertEqual('bot', default['bots']['bot']['state_namespace'])
         self.assertEqual('gcp', default['cloud']['provider'])
+        self.assertFalse(bool(default['plugins']['webchat']['enabled']))
+        self.assertEqual(
+            'https://app.example.invalid',
+            default['plugins']['webchat']['self_origin'])
+        self.assertIn(
+            'webchat',
+            [
+                item['type']
+                for item in default['bots']['bot']['interfaces']
+            ],
+        )
 
         quick_reply_ignore = re.compile(
             default['plugins']['line.quick_reply']['ignore_pattern'])
@@ -221,6 +240,7 @@ class SettingsModuleTest(unittest.TestCase):
                 with patch.dict(
                     os.environ,
                     {
+                        'XSBOT_CLOUD_PROVIDER': 'gcp',
                         'XSBOT_DEPLOY_ENV': 'dev',
                         'XSBOT_STORAGE_BUCKET': 'test-storage-bucket',
                         'XSBOT_APP_BASE_URL': 'https://app.example.invalid',
@@ -305,7 +325,44 @@ class SettingsModuleTest(unittest.TestCase):
             module.SERVICE_SETTINGS['app']['base_url'])
         cloud_backend.configure.assert_called_once_with(
             {'provider': 'aws'})
-        runtime_secrets.load_runtime_secrets.assert_called_once_with()
+        runtime_secrets.load_runtime_secrets.assert_not_called()
+
+    def test_provider未指定ならmodule_loadを拒否する(self):
+        module_path = PROJECT_ROOT / 'settings.py'
+        cloud_backend = types.ModuleType('cloud_backend')
+        cloud_backend.configure = Mock()
+        config = {
+            '*': {
+                'auth': {},
+                'bots': {},
+            },
+        }
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            Path(temp_dir, 'settings.yaml').write_text(
+                json.dumps(config), encoding='utf-8')
+            previous_dir = os.getcwd()
+            try:
+                os.chdir(temp_dir)
+                module_name = 'settings_without_provider_under_test'
+                spec = importlib.util.spec_from_file_location(
+                    module_name, module_path)
+                module = importlib.util.module_from_spec(spec)
+                with (
+                    patch.dict(os.environ, {}, clear=True),
+                    patch.dict(sys.modules, {
+                        module_name: module,
+                        'cloud_backend': cloud_backend,
+                    }),
+                ):
+                    with self.assertRaisesRegex(
+                            ValueError, 'クラウドプロバイダー'):
+                        spec.loader.exec_module(module)
+            finally:
+                os.chdir(previous_dir)
+                sys.modules.pop(module_name, None)
+
+        cloud_backend.configure.assert_not_called()
 
 
 class IgnoreConfigurationTest(unittest.TestCase):

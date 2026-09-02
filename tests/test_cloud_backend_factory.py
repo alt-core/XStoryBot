@@ -13,8 +13,15 @@ class CloudBackendFactoryTest(unittest.TestCase):
     def tearDown(self):
         factory._reset_for_test()
 
-    def test_未指定ならgcpを選ぶ(self):
-        self.assertEqual('gcp', factory.get_provider())
+    def test_未指定ならfail_fastする(self):
+        with self.assertRaises(RuntimeError):
+            factory.get_provider()
+        with self.assertRaises(ValueError):
+            factory.configure()
+        with patch.object(factory.importlib, 'import_module') as importer:
+            with self.assertRaises(RuntimeError):
+                factory.create_object_store()
+        importer.assert_not_called()
 
     def test_起動後にproviderを変更しない(self):
         factory.configure({'provider': 'gcp'})

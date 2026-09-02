@@ -1,3 +1,5 @@
+import base64
+import binascii
 import re
 from unicodedata import normalize
 import json
@@ -46,6 +48,48 @@ def decode_action_string(data):
     if len(arr) > 1:
         attrs['action_token'] = arr[1]
     return action, attrs
+
+
+LINE_VIDEO_TRACKING_ID_MAX_LENGTH = 100
+_LINE_VIDEO_TRACKING_ID_PATTERN = re.compile(
+    r'^[a-zA-Z0-9\-.=,+*()%$&;:@{}!?<>\[\]]+$')
+
+
+def encode_line_video_tracking_id(action, action_token):
+    """動画完了actionをLINE trackingIdの許可文字だけで表現する。"""
+    if not isinstance(action, str) or not action:
+        raise ValueError('動画完了actionがありません')
+    if not isinstance(action_token, str) or not action_token:
+        raise ValueError('動画完了action tokenがありません')
+    encoded_action = base64.b64encode(
+        action.encode('utf-8'), altchars=b'+-').decode('ascii').rstrip('=')
+    tracking_id = f'v1.{encoded_action}.{action_token}'
+    if (
+            len(tracking_id) > LINE_VIDEO_TRACKING_ID_MAX_LENGTH
+            or not _LINE_VIDEO_TRACKING_ID_PATTERN.fullmatch(tracking_id)):
+        raise ValueError('動画完了tracking IDがLINEの仕様に収まりません')
+    return tracking_id
+
+
+def decode_line_video_tracking_id(tracking_id):
+    """LINE trackingIdから動画完了actionと世代を復元する。"""
+    if not isinstance(tracking_id, str):
+        raise ValueError('動画完了tracking IDが不正です')
+    parts = tracking_id.split('.')
+    if len(parts) != 3 or parts[0] != 'v1' or not parts[1] or not parts[2]:
+        raise ValueError('動画完了tracking IDが不正です')
+    if not _LINE_VIDEO_TRACKING_ID_PATTERN.fullmatch(tracking_id):
+        raise ValueError('動画完了tracking IDが不正です')
+    try:
+        padding = '=' * (-len(parts[1]) % 4)
+        action = base64.b64decode(
+            (parts[1] + padding).encode('ascii'),
+            altchars=b'+-', validate=True).decode('utf-8')
+    except (UnicodeError, ValueError, binascii.Error) as error:
+        raise ValueError('動画完了tracking IDが不正です') from error
+    if encode_line_video_tracking_id(action, parts[2]) != tracking_id:
+        raise ValueError('動画完了tracking IDが不正です')
+    return action, {'action_token': parts[2]}
 
 
 def is_special_action(action):

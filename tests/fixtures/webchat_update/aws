@@ -1,0 +1,25 @@
+#!/bin/sh
+printf '%s\n' "$*" >>"$MOCK_AWS_CALL_LOG"
+case "$1:$2" in
+    s3api:head-object) exit 0 ;;
+    cloudformation:create-change-set) echo change-set-id ;;
+    cloudformation:wait) exit 0 ;;
+    cloudformation:describe-change-set)
+        case "$*" in
+            *"Changes[].ResourceChange.[LogicalResourceId,ResourceType,Action]"*)
+                if [ "${MOCK_UNEXPECTED_CHANGE:-false}" = true ]; then
+                    printf 'ApiFunction\tAWS::Lambda::Function\tModify\n'
+                else
+                    printf 'WebchatFunction\tAWS::Lambda::Function\tModify\n'
+                    printf 'WebchatFunctionAliaslive\tAWS::Lambda::Alias\tModify\n'
+                    printf 'WebchatFunctionVersion123\tAWS::Lambda::Version\tAdd\n'
+                fi
+                ;;
+            *) echo CHANGE-SET ;;
+        esac
+        ;;
+    cloudformation:delete-change-set) exit 0 ;;
+    cloudformation:execute-change-set) exit 0 ;;
+    cloudformation:describe-stacks) echo UPDATE_COMPLETE ;;
+    *) exit 64 ;;
+esac

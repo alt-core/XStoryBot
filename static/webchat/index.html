@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="color-scheme" content="light dark">
+  <title>Webchat</title>
+  <link rel="stylesheet" href="/static/webchat/style.css">
+</head>
+<body>
+  <div class="chat" aria-labelledby="chat-title">
+    <header class="chat-header">
+      <h1 id="chat-title">Webchat</h1>
+      <button id="reset" type="button" class="header-button">最初から</button>
+    </header>
+    <main id="scroller" class="scroller">
+      <div id="messages" class="messages" role="log" aria-label="会話"></div>
+    </main>
+    <div class="composer-area">
+      <button id="jump" type="button" class="jump" hidden>新しいメッセージ</button>
+      <div id="banner" class="banner" hidden>
+        <p id="notice" class="pill pill-notice" hidden></p>
+        <p id="error" class="pill pill-error" role="alert" hidden></p>
+      </div>
+      <form id="composer" class="composer">
+        <label class="sr-only" for="draft">メッセージ</label>
+        <textarea id="draft" rows="1" placeholder="メッセージを入力"
+                  autocomplete="off"></textarea>
+        <button id="send" type="submit" aria-label="送信" disabled>
+          <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"
+               fill="currentColor">
+            <path d="M3.4 20.6 21.2 12 3.4 3.4l.05 6.6L14 12 3.45 14z"/>
+          </svg>
+        </button>
+      </form>
+    </div>
+    <dialog id="media-viewer" class="media-viewer"
+            aria-label="メディアを拡大表示">
+      <button id="media-viewer-close" type="button"
+              class="media-viewer-close" aria-label="閉じる"
+              autofocus>×</button>
+    </dialog>
+  </div>
+  <script type="module" src="/static/webchat/app.js"></script>
+</body>
+</html>

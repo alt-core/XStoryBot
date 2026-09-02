@@ -43,6 +43,8 @@ venv/
 ENV/
 
 # 文書
+.planning/
+/outputs/
 *.md
 docs/
 
@@ -50,6 +52,7 @@ docs/
 tools/
 deploy.sh
 deploy_aws.sh
+update_webchat_scenario.sh
 template.aws.yaml
 
 # 設定

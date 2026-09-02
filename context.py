@@ -1,7 +1,17 @@
 # coding: utf-8
 
-from models import PlayerStatusDB
 from utility import safe_list_get
+
+
+_player_status_class = None
+
+
+def _get_player_status_class():
+    global _player_status_class
+    if _player_status_class is None:
+        from models import PlayerStatusDB
+        _player_status_class = PlayerStatusDB
+    return _player_status_class
 
 
 class ActionContext(object):
@@ -70,7 +80,8 @@ class ActionContext(object):
 
     def load_status(self):
         user_id = self.user.serialize()
-        self.status = PlayerStatusDB(self.state_namespace, user_id)
+        self.status = _get_player_status_class()(
+            self.state_namespace, user_id)
 
     def set_or_del_status_value(self, key, value):
         if value is None:

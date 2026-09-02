@@ -1,0 +1,200 @@
+openapi: 3.1.0
+info:
+  title: XStoryBot Webchat API
+  version: 1.0.0
+  description: 署名付きclient stateを使う同期Webchat API。
+paths:
+  /api/webchat/v1/bots/{bot}/turn:
+    options:
+      summary: CORS preflight
+      parameters:
+        - $ref: '#/components/parameters/Bot'
+        - $ref: '#/components/parameters/Origin'
+      responses:
+        '204':
+          description: 許可済みorigin
+        '403':
+          $ref: '#/components/responses/Problem'
+    post:
+      summary: 会話を1 turn進める
+      parameters:
+        - $ref: '#/components/parameters/Bot'
+        - $ref: '#/components/parameters/Origin'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TurnRequest'
+      responses:
+        '200':
+          description: 次stateと表示message
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TurnResponse'
+        '400':
+          $ref: '#/components/responses/Problem'
+        '401':
+          $ref: '#/components/responses/Problem'
+        '403':
+          $ref: '#/components/responses/Problem'
+        '409':
+          $ref: '#/components/responses/Problem'
+        '413':
+          description: providerがrequest上限超過を直接返す場合がある
+        '415':
+          $ref: '#/components/responses/Problem'
+        '422':
+          $ref: '#/components/responses/Problem'
+        '429':
+          description: API Gatewayがrate limitを直接返す場合がある
+        '500':
+          $ref: '#/components/responses/Problem'
+        '503':
+          $ref: '#/components/responses/Problem'
+        '502':
+          description: proxyまたは外部HTTPのgateway error。非JSONの場合がある
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '504':
+          description: proxyまたは外部HTTPのtimeout。非JSONの場合がある
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+components:
+  parameters:
+    Bot:
+      name: bot
+      in: path
+      required: true
+      schema:
+        type: string
+        pattern: '^[-_a-zA-Z0-9]+$'
+    Origin:
+      name: Origin
+      in: header
+      required: true
+      schema:
+        type: string
+        format: uri
+      description: Bot設定のHTTPS origin allowlistと完全一致させる。
+  responses:
+    Problem:
+      description: 固定codeを持つproblem response
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+  schemas:
+    TurnRequest:
+      type: object
+      required: [input]
+      properties:
+        state_token:
+          type: string
+          description: start以外で必須。opaqueな署名token。
+        input:
+          oneOf:
+            - $ref: '#/components/schemas/StartInput'
+            - $ref: '#/components/schemas/TextInput'
+            - $ref: '#/components/schemas/PostbackInput'
+      additionalProperties: false
+      allOf:
+        - if:
+            properties:
+              input:
+                properties:
+                  type:
+                    const: start
+                required: [type]
+          then:
+            not:
+              required: [state_token]
+          else:
+            required: [state_token]
+    StartInput:
+      type: object
+      required: [type]
+      properties:
+        type:
+          const: start
+      additionalProperties: false
+    TextInput:
+      type: object
+      required: [type, text]
+      properties:
+        type:
+          const: text
+        text:
+          type: string
+      additionalProperties: false
+    PostbackInput:
+      type: object
+      required: [type, postback_token]
+      properties:
+        type:
+          const: postback
+        postback_token:
+          type: string
+      additionalProperties: false
+    TurnResponse:
+      type: object
+      required: [schema_version, request_id, state, state_token, echo_message, messages]
+      properties:
+        schema_version:
+          const: 1
+        request_id:
+          type: string
+        state:
+          type: object
+          required: [id, revision]
+          properties:
+            id:
+              type: string
+              pattern: '^[0-9a-f]{64}$'
+            revision:
+              type: integer
+          additionalProperties: false
+        state_token:
+          type: string
+        echo_message:
+          type: [string, 'null']
+        messages:
+          type: array
+          items:
+            $ref: './webchat-message-spec.schema.json'
+      additionalProperties: false
+    Problem:
+      type: object
+      required: [type, title, status, code, request_id]
+      properties:
+        type:
+          const: about:blank
+        title:
+          type: string
+        status:
+          type: integer
+        code:
+          type: string
+          enum:
+            - internal-error
+            - service-unavailable
+            - invalid-state
+            - incompatible-state
+            - action-not-active
+            - bot-not-web-compatible
+            - bot-response-too-large
+            - turn-timeout
+            - external-http-error
+            - external-http-timeout
+            - invalid-origin
+            - invalid-request
+            - unsupported-media-type
+            - unsupported-input
+        request_id:
+          type: string
+      additionalProperties: false

@@ -247,19 +247,21 @@ class AwsTemplateTest(unittest.TestCase):
                 'SecurityGroupIngress'],
         )
 
-    def test_秘密値をtemplateへ受け取らない(self):
+    def test_秘密値をNoEchoで受け取り公開値と分離する(self):
         parameters = self.template['Parameters']
-        self.assertEqual(
-            {
-                'ImageUri',
-                'EnvironmentName',
-                'SheetId',
-                'GoogleSheetsCredentialParameterName',
-                'AdminAuthParameterName',
-                'RuntimeSecretsParameterName',
-            },
-            set(parameters),
-        )
+        expected = {
+            'ImageUri', 'WebchatImageUri', 'EnvironmentName', 'SheetId',
+            'GoogleSheetsCredentialParameterName',
+            'AdminAuthParameterName', 'RuntimeSecretsParameterName',
+            'WebchatEnabled', 'WebchatSigningKey',
+            'WebchatScenarioUri', 'WebchatCompatibilityEpoch',
+            'WebchatAllowedOrigins', 'WebchatExternalHttpOrigins',
+            'WebchatMediaOrigins',
+            'WebchatThrottleRate', 'WebchatThrottleBurst',
+        }
+        self.assertEqual(expected, set(parameters))
+        self.assertTrue(parameters['WebchatSigningKey']['NoEcho'])
+        self.assertEqual('', parameters['WebchatSigningKey']['Default'])
         self.assertNotIn('Default', parameters['SheetId'])
         self.assertEqual(1, parameters['SheetId']['MinLength'])
         self.assertNotIn('{{resolve:ssm-secure:', self.source)
@@ -278,6 +280,59 @@ class AwsTemplateTest(unittest.TestCase):
             )
             self.assertIn(
                 f'parameter${{{name}}}', self.source)
+
+    def test_Webchat専用Lambdaはalias固定Scenarioと最小権限を使う(self):
+        self.assertEqual(
+            ['AWS::LanguageExtensions', 'AWS::Serverless-2016-10-31'],
+            self.template['Transform'])
+        function = self.resources['WebchatFunction']['Properties']
+        self.assertEqual('Image', function['PackageType'])
+        self.assertEqual(
+            {
+                'If': [
+                    'WebchatImageSpecifiedCondition',
+                    {'Ref': 'WebchatImageUri'},
+                    {'Ref': 'ImageUri'},
+                ],
+            },
+            function['ImageUri'])
+        self.assertEqual('live', function['AutoPublishAlias'])
+        self.assertTrue(function['AutoPublishAliasAllProperties'])
+        self.assertEqual({'GetAtt': 'WebchatRole.Arn'}, function['Role'])
+        environment = function['Environment']['Variables']
+        self.assertEqual('app_webchat:app', environment['XSBOT_APP_MODULE'])
+        self.assertEqual('500', environment['AWS_LWA_ERROR_STATUS_CODES'])
+        self.assertEqual('', environment['XSBOT_AWS_RUNTIME_SECRETS_PARAMETER'])
+        self.assertEqual({'Ref': 'WebchatSigningKey'},
+                         environment['XSBOT_WEBCHAT_SIGNING_KEY'])
+        self.assertEqual({'Ref': 'WebchatScenarioUri'},
+                         environment['XSBOT_WEBCHAT_SCENARIO_URI'])
+        self.assertEqual({'Ref': 'WebchatMediaOrigins'},
+                         environment['XSBOT_WEBCHAT_MEDIA_ORIGINS'])
+
+        statements = self.resources['WebchatRole']['Properties'][
+            'Policies'][0]['PolicyDocument']['Statement']
+        actions = {
+            action
+            for statement in statements
+            for action in (statement['Action']
+                           if isinstance(statement['Action'], list)
+                           else [statement['Action']])
+        }
+        self.assertEqual({'s3:GetObject'}, actions)
+        self.assertFalse(any(action.startswith('dynamodb:') for action in actions))
+        self.assertNotIn('ssm:GetParameter', actions)
+
+        integration = self.resources['WebchatHttpApiIntegration']['Properties']
+        _uri, substitutions = integration['IntegrationUri']['Sub']
+        self.assertEqual({'Ref': 'WebchatFunction.Alias'},
+                         substitutions['FunctionArn'])
+        permission = self.resources['WebchatInvokePermission']['Properties']
+        self.assertEqual({'Ref': 'WebchatFunction.Alias'},
+                         permission['FunctionName'])
+        self.assertEqual(
+            'ANY /api/webchat/v1/bots/{bot_name}/turn',
+            self.resources['WebchatTurnRoute']['Properties']['RouteKey'])
 
     def test_API_access_logへ入力値を含めない(self):
         access_log = self.resources['HttpApiStage']['Properties'][

@@ -42,11 +42,14 @@ venv/
 ENV/
 
 # 文書とデプロイツール
+.planning/
+/outputs/
 *.md
 docs/
 tools/
 deploy.sh
 deploy_aws.sh
+update_webchat_scenario.sh
 template.aws.yaml
 
 # デプロイ用設定

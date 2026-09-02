@@ -12,6 +12,8 @@ GAE用のデプロイ設定は含まれていません。GCPではAPI用・ビ�
 
 `settings.yaml.template`と`.env.template`を基に、Bot、plugin、環境変数を設定します。実環境の設定ファイルや認証情報をリポジトリまたはDockerイメージへコピーしないでください。
 
+`XSBOT_CLOUD_PROVIDER`には`gcp`または`aws`を必ず明示してください。未指定時にGCPへfallbackする挙動はなく、誤接続を避けるため起動時に失敗します。
+
 既存シナリオでDSL version 1または2を利用している場合は、`options.scenario_version`へ同じversionを明示します。設定テンプレートの既定値は3です。
 
 状態を共有するBotには同じ`state_namespace`を設定します。省略した場合はBot名がnamespaceになります。
@@ -21,6 +23,11 @@ GAE用のデプロイ設定は含まれていません。GCPではAPI用・ビ�
 Google Sheetsを新環境のサービスアカウントへ共有し、管理画面からシナリオをビルドします。ビルド済みpickleや変換済みメディアを手作業で移す必要はありません。
 
 シナリオビルドに成功し、主要actionが期待どおり動くことを確認してからWebhookや利用者を切り替えます。
+
+media commandを利用する既存Scenarioでは、次の現行構文も確認してください。
+
+- `@audio`はURLと正整数のduration millisecondsを指定します。
+- `@video`の第三引数は、再生完了時に実行する内部actionです。LINEの完成`trackingId`がprovider上限へ収まらない場合はbuild errorになり、完了eventを利用できないLINE group／roomではactionを付けません。
 
 ## 4. 状態データを移行する
 

@@ -47,6 +47,7 @@ def load_runtime_module():
         'commands': commands,
     }):
         spec.loader.exec_module(module)
+        module._director_class = scenario.Director
     return module
 
 
@@ -69,6 +70,7 @@ def load_context_module():
         'utility': utility,
     }):
         spec.loader.exec_module(module)
+        module._player_status_class = models.PlayerStatusDB
     return module, models
 
 

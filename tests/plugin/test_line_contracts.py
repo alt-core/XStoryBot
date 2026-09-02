@@ -15,6 +15,9 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, call, patch
 
+from cloud_backend import factory as backend_factory
+import utility as utility_module
+
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 _MISSING = object()
@@ -84,6 +87,8 @@ def _linebot_stubs():
     classes = {
         'MessageEvent': _model_class('MessageEvent', 'message'),
         'PostbackEvent': _model_class('PostbackEvent', 'postback'),
+        'VideoPlayCompleteEvent': _model_class(
+            'VideoPlayCompleteEvent', 'videoPlayComplete'),
         'BeaconEvent': _model_class('BeaconEvent', 'beacon'),
         'FollowEvent': _model_class('FollowEvent', 'follow'),
         'UnfollowEvent': _model_class('UnfollowEvent', 'unfollow'),
@@ -103,7 +108,8 @@ def _linebot_stubs():
         'MessageAction': _MessageAction,
     }
     for name in (
-            'ImageSendMessage', 'VideoSendMessage', 'TemplateSendMessage',
+            'ImageSendMessage', 'VideoSendMessage', 'AudioSendMessage',
+            'TemplateSendMessage',
             'CarouselColumn', 'ImagemapSendMessage', 'ImagemapArea',
             'MessageImagemapAction', 'Sender', 'ButtonsTemplate',
             'ConfirmTemplate', 'CarouselTemplate', 'PostbackAction',
@@ -145,6 +151,10 @@ def _base_stubs():
         parse_url=lambda value: re.match(r'^(https?|tel):', value or ''),
         encode_action_string=lambda value, **_kwargs: value,
         decode_action_string=lambda value: (value, {}),
+        encode_line_video_tracking_id=(
+            utility_module.encode_line_video_tracking_id),
+        decode_line_video_tracking_id=(
+            utility_module.decode_line_video_tracking_id),
         sanitize_action=lambda value: (
             ' ' + value if value.startswith(('*', '＊', '#', '＃', ':', '：')) else value),
     )
@@ -264,7 +274,8 @@ class LineInterfaceContractTest(unittest.TestCase):
             **linebot,
             **_base_stubs(),
             'common_commands': _module(
-                'common_commands', IMAGE_CMDS=('@image',), VIDEO_CMDS=('@video',),
+                'common_commands', AUDIO_CMDS=('@audio',),
+                IMAGE_CMDS=('@image',), VIDEO_CMDS=('@video',),
                 RAWIMAGE_CMDS=('@rawimage',)),
             'context': _module('context', ActionContext=object),
             'users': _module('users', User=_model_class('User')),
@@ -277,9 +288,72 @@ class LineInterfaceContractTest(unittest.TestCase):
         self.interface = object.__new__(self.interface_module.LinePlugin_Interface)
         self.interface.allow_special_action_text_for_debug = False
         self.interface.line_bot_api = Mock()
+        self.interface.sender_icon_urls = {}
 
     def _message_event(self, message):
         return self.types.MessageEvent(message=message)
+
+    def test_audio_reactionをLINE送信messageへ変換する(self):
+        context = SimpleNamespace(response=None)
+        messages = self.interface._construct_responses(
+            context,
+            [([None, '@audio', 'https://media.example/audio.mp3',
+               1234, 'audio/mpeg'], None)],
+        )
+        self.assertEqual(1, len(messages))
+        self.assertIsInstance(messages[0], self.types.AudioSendMessage)
+        self.assertEqual(
+            'https://media.example/audio.mp3',
+            messages[0].original_content_url,
+        )
+        self.assertEqual(1234, messages[0].duration)
+
+    def test_video完了actionを世代付きtracking_IDへ変換する(self):
+        context = SimpleNamespace(
+            response=None,
+            source_type='user',
+            status=SimpleNamespace(action_token='Generation'),
+        )
+        messages = self.interface._construct_responses(
+            context,
+            [([None, '@video', 'https://media.example/poster.png',
+               'https://media.example/video.mp4', '*完了'], None)],
+        )
+        expected = utility_module.encode_line_video_tracking_id(
+            '*完了', 'Generation')
+        self.assertLessEqual(len(expected), 100)
+        self.assertRegex(
+            expected, r'^[a-zA-Z0-9\-.=,+*()%$&;:@{}!?<>\[\]]+$')
+        self.assertEqual(expected, messages[0].tracking_id)
+
+        event = self.types.VideoPlayCompleteEvent(
+            video_play_complete=SimpleNamespace(tracking_id=expected))
+        action, attrs = self.interface._construct_action(event)
+        self.assertEqual('*完了', action)
+        self.assertEqual('Generation', attrs['action_token'])
+
+    def test_group動画では完了actionを付けない(self):
+        context = SimpleNamespace(
+            response=None,
+            source_type='group',
+            status=SimpleNamespace(action_token='Generation'),
+        )
+        with patch.object(self.interface_module.logging, 'warning') as warning:
+            messages = self.interface._construct_responses(
+                context,
+                [([None, '@video', 'https://media.example/poster.png',
+                   'https://media.example/video.mp4', '*完了'], None)],
+            )
+        self.assertIsNone(messages[0].tracking_id)
+        warning.assert_called_once()
+
+    def test_不正な旧video_tracking_IDは本文を出さず無視する(self):
+        event = self.types.VideoPlayCompleteEvent(
+            video_play_complete=SimpleNamespace(tracking_id='旧形式'))
+        with patch.object(self.interface_module.logging, 'warning') as warning:
+            action, _attrs = self.interface._construct_action(event)
+        self.assertIsNone(action)
+        self.assertNotIn('旧形式', str(warning.call_args_list))
 
     def test_all_scenario_versions_use_same_latest_internal_action_mapping(self):
         provider = SimpleNamespace(type='line')
@@ -370,6 +444,16 @@ def _plugin_packages(default_commands=None, more=None, quick_reply=None):
     line.__path__ = []
     plugin.line = line
     replacements = {'plugin': plugin, 'plugin.line': line}
+    if default_commands is not None:
+        command_names = _module(
+            'plugin.line.command_names',
+            IMAGEMAP_CMDS=getattr(
+                default_commands, 'IMAGEMAP_CMDS', ('@imagemap',)),
+            REPLY_CMDS=getattr(
+                default_commands, 'REPLY_CMDS', ('@reply',)),
+        )
+        line.command_names = command_names
+        replacements['plugin.line.command_names'] = command_names
     for name, value in (
             ('default_commands', default_commands), ('more', more),
             ('quick_reply', quick_reply)):
@@ -404,26 +488,30 @@ class FirestoreAndImageTextContractTest(unittest.TestCase):
             'google': google, 'google.cloud': cloud,
             'google.cloud.firestore': firestore,
         }
-        models_module = _load_module(
-            '_line_contract_models', 'models.py', common)
-        more_module = _load_module(
-            '_line_contract_more', 'plugin/line/more.py', common)
+        with patch.object(backend_factory, '_provider', 'gcp'):
+            models_module = _load_module(
+                '_line_contract_models', 'models.py', common)
+            more_module = _load_module(
+                '_line_contract_more', 'plugin/line/more.py', common)
 
-        renderer = _module('plugin.render_text.renderer', render_text_to_png=Mock())
-        render_text = _module('plugin.render_text', renderer=renderer)
-        packages = _plugin_packages(
-            default_commands=default_commands, more=more_module,
-            quick_reply=_module('plugin.line.quick_reply', append_quick_reply=Mock()))
-        packages['plugin'].render_text = render_text
-        image_replacements = {
-            **base, **packages,
-            'plugin.render_text': render_text,
-            'plugin.render_text.renderer': renderer,
-            'google': google, 'google.cloud': cloud,
-            'google.cloud.firestore': firestore,
-        }
-        image_module = _load_module(
-            '_line_contract_image_text', 'plugin/line/image_text.py', image_replacements)
+            renderer = _module(
+                'plugin.render_text.renderer', render_text_to_png=Mock())
+            render_text = _module('plugin.render_text', renderer=renderer)
+            packages = _plugin_packages(
+                default_commands=default_commands, more=more_module,
+                quick_reply=_module(
+                    'plugin.line.quick_reply', append_quick_reply=Mock()))
+            packages['plugin'].render_text = render_text
+            image_replacements = {
+                **base, **packages,
+                'plugin.render_text': render_text,
+                'plugin.render_text.renderer': renderer,
+                'google': google, 'google.cloud': cloud,
+                'google.cloud.firestore': firestore,
+            }
+            image_module = _load_module(
+                '_line_contract_image_text',
+                'plugin/line/image_text.py', image_replacements)
         return models_module, more_module, image_module, renderer
 
     def test_each_module_owns_an_import_time_firestore_client(self):

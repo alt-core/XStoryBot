@@ -1,8 +1,5 @@
 # coding: utf-8
 
-from models import GroupMembersDB
-
-
 class User(object):
     def __init__(self, service_name, user_id):
         self.service_name = str(service_name)
@@ -26,23 +23,28 @@ class User(object):
 
 
 def get_group_members(group):
+    from models import GroupMembersDB
     members = GroupMembersDB.get_members(group)
     return [User.deserialize(member) for member in members]
 
 
 def append_group_member(group, user):
+    from models import GroupMembersDB
     member = user.serialize()
     GroupMembersDB.append_member(group, member)
 
 
 def remove_group_member(group, user):
+    from models import GroupMembersDB
     member = user.serialize()
     GroupMembersDB.remove_member(group, member)
 
 
 def clear_group(group):
+    from models import GroupMembersDB
     GroupMembersDB.clear(group)
 
 
 def get_all_groups():
+    from models import GroupMembersDB
     return GroupMembersDB.get_all_groups()

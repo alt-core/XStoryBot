@@ -1,16 +1,17 @@
 # coding: utf-8
 import logging
+import re
 import requests
 import datetime
 import pytz
 import json
+from urllib.parse import urlsplit
 
 import task_client
 
-import main
 import hub
 import commands
-import users
+import utility
 from expression import Expression
 
 
@@ -18,6 +19,7 @@ IMAGE_CMDS = ('@image', '@画像')
 VIDEO_CMDS = ('@video', '@動画')
 
 RAWIMAGE_CMDS = ('@rawimage', '@生画像')
+AUDIO_CMDS = ('@audio', '@音声')
 
 OR_CMDS = ('@or', '@または')
 RESET_CMDS = ('@reset', '@リセット')
@@ -53,7 +55,7 @@ ERROR_CMDS = ('@error', '@Error')
 
 RAISE_CMDS = ('@raise', '@例外')
 
-ALL_COMMON_CMDS = IMAGE_CMDS + VIDEO_CMDS + RAWIMAGE_CMDS + OR_CMDS + RESET_CMDS + SET_CMDS + FORWARD_CMDS + DELAY_CMDS + IF_CMDS + SEQ_CMDS + LOOP_CMDS + RANDOM_CMDS + CALL_CMDS + RETURN_CMDS + RESET_NODES_CMDS + NEW_CHAPTER_CMDS + GROUP_ADD_CMDS + GROUP_DEL_CMDS + GROUP_CLEAR_CMDS + WEBHOOK_CMDS + LOG_CMDS + ERROR_CMDS + RAISE_CMDS + ELSE_CMDS + ELIF_CMDS + END_CMDS + DEFER_CMDS + POSTJSON_CMDS + GETJSON_CMDS
+ALL_COMMON_CMDS = IMAGE_CMDS + VIDEO_CMDS + RAWIMAGE_CMDS + AUDIO_CMDS + OR_CMDS + RESET_CMDS + SET_CMDS + FORWARD_CMDS + DELAY_CMDS + IF_CMDS + SEQ_CMDS + LOOP_CMDS + RANDOM_CMDS + CALL_CMDS + RETURN_CMDS + RESET_NODES_CMDS + NEW_CHAPTER_CMDS + GROUP_ADD_CMDS + GROUP_DEL_CMDS + GROUP_CLEAR_CMDS + WEBHOOK_CMDS + LOG_CMDS + ERROR_CMDS + RAISE_CMDS + ELSE_CMDS + ELIF_CMDS + END_CMDS + DEFER_CMDS + POSTJSON_CMDS + GETJSON_CMDS
 
 COMMON_OBJECT = ('core',)
 
@@ -96,6 +98,7 @@ class CommonCommands_Builder(object):
                 builder.raise_error('@imageの第一引数は画像のURLである必要があります')
             image_url, _ = builder.build_image_for_image_command(orig_url)
             builder.add_command(sender, IMAGE_CMDS[0], [image_url,], None)
+            builder.msg_count += 1
             return True
 
         if msg in VIDEO_CMDS:
@@ -114,11 +117,54 @@ class CommonCommands_Builder(object):
             thumb_url, _ = builder.build_image_for_image_command(orig_thumb_url)
             video_url = builder.build_video(orig_video_url)
             command_options = [thumb_url, video_url]
-            if len(options) > 2:
+            if len(options) > 2 and options[2]:
                 # 動画視聴完了後のアクション
-                video_action = options[2]
+                video_action = str(options[2])
+                if not re.match(r'^[#*]', video_action):
+                    builder.raise_error(
+                        '@videoの第三引数は内部actionである必要があります')
+                try:
+                    utility.encode_line_video_tracking_id(
+                        video_action, 'A' * 8)
+                except ValueError:
+                    builder.raise_error(
+                        '@videoの第三引数がLINE trackingIdの上限を超えます')
                 command_options.append(video_action)
             builder.add_command(sender, VIDEO_CMDS[0], command_options, None)
+            builder.msg_count += 1
+            return True
+
+        if msg in AUDIO_CMDS:
+            if len(options) != 2:
+                builder.raise_error('@audioにはURLとduration_msが必要です')
+            url = requests.utils.requote_uri(str(options[0]))
+            parsed = urlsplit(url)
+            if (
+                    parsed.scheme.lower() != 'https'
+                    or not parsed.hostname
+                    or parsed.username is not None
+                    or parsed.password is not None):
+                builder.raise_error('@audioのURLはHTTPSで指定してください')
+            if len(url) > 2000:
+                builder.raise_error('@audioのURLがLINEの上限を超えています')
+            try:
+                duration_ms = int(options[1])
+            except (TypeError, ValueError):
+                builder.raise_error('@audioのduration_msは正の整数で指定してください')
+            if duration_ms <= 0:
+                builder.raise_error('@audioのduration_msは正の整数で指定してください')
+            path = parsed.path.lower()
+            if path.endswith('.mp3'):
+                mime_type = 'audio/mpeg'
+            elif path.endswith('.m4a'):
+                mime_type = 'audio/mp4'
+            else:
+                mime_type = None
+            builder.add_command(
+                sender, AUDIO_CMDS[0], [
+                    url, str(duration_ms), mime_type or '',
+                ], None)
+            builder.msg_count += 1
             return True
 
         if msg in IF_CMDS:
@@ -181,6 +227,8 @@ class CommonCommands_Builder(object):
             return True
 
         builder.add_command(sender, msg, options, children)
+        if msg in RAWIMAGE_CMDS:
+            builder.msg_count += 1
         return True
 
 
@@ -208,7 +256,7 @@ class CommonCommands_Runtime(object):
         self.lastContext = None
         self.reset_keyword = params['reset_keyword']
         self.timezone = pytz.timezone(params.get('timezone', 'utc'))
-        self.cmds_not_handle_here = (IMAGE_CMDS + VIDEO_CMDS + RAWIMAGE_CMDS + OR_CMDS + IF_CMDS + ELSE_CMDS + ELIF_CMDS + END_CMDS + SEQ_CMDS + LOOP_CMDS + RANDOM_CMDS + CALL_CMDS + RETURN_CMDS + DEFER_CMDS)
+        self.cmds_not_handle_here = (IMAGE_CMDS + VIDEO_CMDS + RAWIMAGE_CMDS + AUDIO_CMDS + OR_CMDS + IF_CMDS + ELSE_CMDS + ELIF_CMDS + END_CMDS + SEQ_CMDS + LOOP_CMDS + RANDOM_CMDS + CALL_CMDS + RETURN_CMDS + DEFER_CMDS)
 
     def modify_incoming_action(self, context, action):
         if action == self.reset_keyword:
@@ -248,6 +296,7 @@ class CommonCommands_Runtime(object):
                     value = value.eval(context.env, context.env.matches, set_var, set_list, set_dict)
                 context.status[options[0]] = value
         elif msg in FORWARD_CMDS:
+            import main
             bot_name = options[0]
             action = options[1]
             to_bot = main.get_bot(bot_name)
@@ -257,6 +306,7 @@ class CommonCommands_Runtime(object):
                 return True
             send_request(bot_name, context.user, action)
         elif msg in DELAY_CMDS:
+            import main
             delay_secs = int(options[0])
             if len(options) > 2:
                 bot_name = options[1]
@@ -288,12 +338,15 @@ class CommonCommands_Runtime(object):
                     if key.startswith('$$'):
                         del context.status[key]
         elif msg in GROUP_ADD_CMDS:
+            import users
             group_name = options[0]
             users.append_group_member(group_name, context.user)
         elif msg in GROUP_DEL_CMDS:
+            import users
             group_name = options[0]
             users.remove_group_member(group_name, context.user)
         elif msg in GROUP_CLEAR_CMDS:
+            import users
             group_name = options[0]
             users.clear_group(group_name)
         elif msg in WEBHOOK_CMDS:
@@ -303,7 +356,11 @@ class CommonCommands_Runtime(object):
                 data = dict(zip(options[1:-1:2], options[2::2]))
             else:
                 data = None
-            requests.post(url, data=data)
+            request_external = getattr(context, 'request_external', None)
+            if request_external is None:
+                requests.post(url, data=data)
+            else:
+                request_external('POST', url, data=data)
         elif msg in POSTJSON_CMDS:
             url = options[0]
             data_str = options[1]
@@ -314,24 +371,42 @@ class CommonCommands_Runtime(object):
             try:
                 data = json.loads(data_str)
             except json.JSONDecodeError:
-                logging.error(f'Invalid JSON format for @postjson: {data_str}')
+                if context.service_name == 'webchat':
+                    logging.error('Invalid JSON format for @postjson')
+                else:
+                    logging.error(f'Invalid JSON format for @postjson: {data_str}')
                 context.status[POSTJSON_RESULT_VARIABLE] = False
                 return True
             try:
-                response = requests.post(
-                    url,
-                    headers={'Content-Type': 'application/json; charset=UTF-8'},
-                    data=json.dumps(data, ensure_ascii=False).encode('utf-8'),
-                    timeout=120
-                )
+                request_external = getattr(context, 'request_external', None)
+                request_options = {
+                    'headers': {'Content-Type': 'application/json; charset=UTF-8'},
+                    'data': json.dumps(data, ensure_ascii=False).encode('utf-8'),
+                }
+                if request_external is None:
+                    response = requests.post(
+                        url, timeout=120, **request_options)
+                else:
+                    response = request_external(
+                        'POST', url, **request_options)
                 if response.status_code == 200:
                     response_data = response.json()
                 else:
-                    logging.error(f'Failed to request @postjson: {response.status_code} {response.text}')
+                    if context.service_name == 'webchat':
+                        logging.error(
+                            'Failed to request @postjson: status=%s',
+                            response.status_code)
+                    else:
+                        logging.error(f'Failed to request @postjson: {response.status_code} {response.text}')
                     context.status[POSTJSON_RESULT_VARIABLE] = False
                     return True
             except requests.RequestException as e:
-                logging.error(f'Failed to request @postjson: {e}')
+                if context.service_name == 'webchat':
+                    logging.error(
+                        'Failed to request @postjson: error_type=%s',
+                        type(e).__name__)
+                else:
+                    logging.error(f'Failed to request @postjson: {e}')
                 context.status[POSTJSON_RESULT_VARIABLE] = False
                 return True
             context.status[POSTJSON_RESPONSE_VARIABLE] = response_data
@@ -352,24 +427,42 @@ class CommonCommands_Runtime(object):
             try:
                 data = json.loads(data_str)
             except json.JSONDecodeError:
-                logging.error(f'Invalid JSON format for @postjson: {data_str}')
+                if context.service_name == 'webchat':
+                    logging.error('Invalid JSON format for @getjson')
+                else:
+                    logging.error(f'Invalid JSON format for @postjson: {data_str}')
                 context.status[POSTJSON_RESULT_VARIABLE] = False
                 return True
             try:
-                response = requests.get(
-                    url,
-                    headers={'Content-Type': 'application/json; charset=UTF-8'},
-                    params=data,
-                    timeout=120
-                )
+                request_external = getattr(context, 'request_external', None)
+                request_options = {
+                    'headers': {'Content-Type': 'application/json; charset=UTF-8'},
+                    'params': data,
+                }
+                if request_external is None:
+                    response = requests.get(
+                        url, timeout=120, **request_options)
+                else:
+                    response = request_external(
+                        'GET', url, **request_options)
                 if response.status_code == 200:
                     response_data = response.json()
                 else:
-                    logging.error(f'Failed to request @getjson: {response.status_code} {response.text}')
+                    if context.service_name == 'webchat':
+                        logging.error(
+                            'Failed to request @getjson: status=%s',
+                            response.status_code)
+                    else:
+                        logging.error(f'Failed to request @getjson: {response.status_code} {response.text}')
                     context.status[POSTJSON_RESULT_VARIABLE] = False
                     return True
             except requests.RequestException as e:
-                logging.error(f'Failed to request @getjson: {e}')
+                if context.service_name == 'webchat':
+                    logging.error(
+                        'Failed to request @getjson: error_type=%s',
+                        type(e).__name__)
+                else:
+                    logging.error(f'Failed to request @getjson: {e}')
                 context.status[POSTJSON_RESULT_VARIABLE] = False
                 return True
             context.status[POSTJSON_RESPONSE_VARIABLE] = response_data
@@ -443,6 +536,13 @@ def setup(params):
             builder=builder,
             runtime=runtime,
             service='*'),
+        commands.CommandEntry(
+            names=AUDIO_CMDS,
+            options='raw number',
+            builder=builder,
+            runtime=runtime,
+            service='*',
+            specs={'reject_extra_options': True}),
         commands.CommandEntry(
             names=OR_CMDS,
             builder=builder,

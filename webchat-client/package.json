@@ -1,0 +1,25 @@
+{
+  "name": "@xstorybot/webchat-client",
+  "version": "0.1.0",
+  "private": true,
+  "description": "XStoryBot Webchatのframework非依存headless client",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/alt-core/XStoryBot.git"
+  },
+  "type": "module",
+  "sideEffects": false,
+  "files": [
+    "index.js",
+    "index.d.ts",
+    "examples"
+  ],
+  "exports": {
+    ".": {
+      "types": "./index.d.ts",
+      "import": "./index.js"
+    }
+  },
+  "types": "./index.d.ts"
+}

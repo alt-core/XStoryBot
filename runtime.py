@@ -2,12 +2,19 @@ import logging
 import datetime
 import json
 
-import build_cache
-
 import settings
-from models import GlobalBotVariablesDB
-from scenario import Scenario, Director, ScenarioBuilder, ScenarioSyntaxError
 import commands
+
+
+_director_class = None
+
+
+def _get_director_class():
+    global _director_class
+    if _director_class is None:
+        from scenario import Director
+        _director_class = Director
+    return _director_class
 
 
 def now_str():
@@ -30,6 +37,9 @@ class BotRuntime:
         return self.interfaces.get(service_name, None)
 
     def build_scenario(self, task_id="local", options=None, version=1):
+        import build_cache
+        from models import GlobalBotVariablesDB
+        from scenario import ScenarioBuilder, ScenarioSyntaxError
         try:
             tables, constants = self.scenario_loader.load_scenario()
             self.scenario = ScenarioBuilder.build_from_tables(tables, constants, options=options, version=version)
@@ -68,6 +78,8 @@ class BotRuntime:
         return self.check_reload(force=True)
 
     def check_reload(self, force=False):
+        from models import GlobalBotVariablesDB
+        from scenario import Scenario, ScenarioSyntaxError
         global_bot_variables = GlobalBotVariablesDB.get_by_bot_name(self.name)
         if global_bot_variables is None:
             # 変換済みのシナリオが存在していない
@@ -109,15 +121,22 @@ class BotRuntime:
 
         interface = self.get_interface(context.service_name)
         retry_count = int(interface.get_retry_count()) + 1
+        raise_exceptions = bool(
+            getattr(interface, 'should_raise_exceptions', lambda: False)())
 
         while retry_count > 0:
             try:
                 context.reactions = []
                 context.load_status()
-                director = Director(self.scenario, context)
+                director = _get_director_class()(self.scenario, context)
                 director.plan_reactions()
                 context.save_status()
             except Exception as e:
+                if raise_exceptions:
+                    logging.error(
+                        'Webchat handle_actionで例外が発生しました: '
+                        'error_type=%s', type(e).__name__)
+                    raise
                 logging.error(f"handle_action で例外が発生しました: {e}")
                 retry_count -= 1
                 continue
@@ -126,8 +145,13 @@ class BotRuntime:
                 result = interface.respond_reaction(context, context.reactions)
                 return result
             except Exception as e:
-                logging.error(f"interface.respond_reaction で例外が発生しました: {e}")
                 context.rollback_status()
+                if raise_exceptions:
+                    logging.error(
+                        'Webchat response生成で例外が発生しました: '
+                        'error_type=%s', type(e).__name__)
+                    raise
+                logging.error(f"interface.respond_reaction で例外が発生しました: {e}")
                 retry_count -= 1
                 continue
 

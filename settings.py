@@ -21,19 +21,25 @@ settings = load_settings()
 _provider_from_environment = os.getenv('XSBOT_CLOUD_PROVIDER')
 _configured_provider = (
     _provider_from_environment
-    or settings.get('cloud', {}).get('provider', 'gcp')
+    or settings.get('cloud', {}).get('provider')
 )
+if _configured_provider not in ('gcp', 'aws'):
+    raise ValueError(
+        'クラウドプロバイダーをXSBOT_CLOUD_PROVIDERまたは'
+        'cloud.providerへgcp／awsで明示してください')
 
 # AWSではSecureString展開後に!envを解決し直す。GCPは一度だけ読む。
-if _configured_provider == 'aws':
+if (
+        _configured_provider == 'aws'
+        and os.getenv('XSBOT_AWS_RUNTIME_SECRETS_PARAMETER')):
     from cloud_backend.aws.runtime_secrets import load_runtime_secrets
     load_runtime_secrets()
     settings = load_settings()
 
-CLOUD_SETTINGS = dict(settings.get('cloud', {'provider': 'gcp'}))
+CLOUD_SETTINGS = dict(settings.get('cloud', {}))
 if _provider_from_environment:
     CLOUD_SETTINGS['provider'] = _provider_from_environment
-_cloud_provider = CLOUD_SETTINGS.get('provider', 'gcp')
+_cloud_provider = CLOUD_SETTINGS.get('provider')
 
 # GCP選択時はgcp設定を必須とし、他provider選択時だけ省略を許す。
 if _cloud_provider == 'gcp':

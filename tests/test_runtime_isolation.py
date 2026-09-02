@@ -6,6 +6,8 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
+from cloud_backend import factory as backend_factory
+
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
@@ -62,12 +64,15 @@ def load_models(fake_db):
         module_name, PROJECT_ROOT / 'models.py'
     )
     module = importlib.util.module_from_spec(spec)
-    with patch.dict(sys.modules, {
-        'google': google,
-        'google.cloud': cloud,
-        'google.cloud.firestore': firestore,
-        'utility': utility,
-    }):
+    with (
+        patch.object(backend_factory, '_provider', 'gcp'),
+        patch.dict(sys.modules, {
+            'google': google,
+            'google.cloud': cloud,
+            'google.cloud.firestore': firestore,
+            'utility': utility,
+        }),
+    ):
         spec.loader.exec_module(module)
     return module
 
