@@ -66,10 +66,27 @@ plugin によって拡張可能な設計になっています。
 
 ## インストール手順
 
-このリポジトリを clone した上で、Python 3.11 環境へ必要なパッケージをインストールします。
+このリポジトリを clone した上で、Python 3.11 環境へ必要なパッケージをインストールします。依存は接続先ごとに分かれています。
 
     > git clone https://github.com/alt-core/XStoryBot.git
-    > python3 -m pip install -r requirements.txt
+    > python3 -m pip install -r requirements-gcp.txt      # GCP に接続する場合
+    > python3 -m pip install -r requirements-aws.txt      # AWS に接続する場合
+    > python3 -m pip install -r requirements-optional.txt # Twilio／Pusher plugin を使う場合だけ
+
+`requirements.txt`は両者に共通の依存で、単独では使いません。開発・テストには`requirements-dev.txt`（全部入り）を使います。
+
+Twilio と Pusher は任意 plugin です。使う場合は`requirements-optional.txt`を追加で install し、`settings.yaml`の`plugins`に次のように書きます（値は環境変数から渡します）。Docker では`--build-arg XSBOT_EXTRA_REQUIREMENTS=requirements-optional.txt`を付けます。
+
+    plugins:
+      twilio:
+        sid: !env TWILIO_SID
+        auth_token: !env TWILIO_AUTH_TOKEN
+        phone_number: !env TWILIO_PHONE_NUMBER
+      pusher:
+        app_id: !env PUSHER_APP_ID
+        key: !env PUSHER_APP_KEY
+        secret: !env PUSHER_APP_SECRET
+        cluster: !env PUSHER_APP_CLUSTER
 
 Cloud Runへデプロイする場合は、利用するGCPプロジェクトを準備してください。
 
@@ -105,7 +122,7 @@ api_token は、WebAPI などでの認証のために使われる情報です。
 
 利用するpluginとBot interfaceは`settings.yaml`で設定します。`settings.yaml.template`は記入例として維持します。
 
-設定後、`Dockerfile`からコンテナイメージを一度ビルドし、同じイメージをCloud RunのAPI用サービスとビルダー用サービスへデプロイします。API用は既定の`app:app`を使い、ビルダー用だけ`XSBOT_APP_MODULE=app_builder:app`を設定します。それぞれのURLを`XSBOT_APP_BASE_URL`と`XSBOT_BUILDER_BASE_URL`へ指定し、Cloud Tasksには同じプロジェクト・リージョンで`build-queue`、`action-queue`、`group-message-queue`の3キューを作成します。現行のTaskQueueはOIDCトークンを付けないため、両サービスはCloud IAMで未認証HTTP呼び出しを許可し、保護が必要なrouteはWebhook署名、フォーム認証、または`X-API-Token`で保護します。
+設定後、`Dockerfile`からコンテナイメージを一度ビルドし、同じイメージをCloud RunのAPI用サービスとビルダー用サービスへデプロイします。イメージには接続先の依存だけが入ります（`--build-arg XSBOT_CLOUD_PROVIDER=gcp`、既定はgcp）。Twilio／Pusher pluginを使う場合は`--build-arg XSBOT_EXTRA_REQUIREMENTS=requirements-optional.txt`を付けます。`XSBOT_CLOUD_PROVIDER`はイメージの環境変数として焼き込まれるため、Cloud Run側で別途設定する必要はありません（設定する場合は同じ値にしてください）。API用は既定の`app:app`を使い、ビルダー用だけ`XSBOT_APP_MODULE=app_builder:app`を設定します。それぞれのURLを`XSBOT_APP_BASE_URL`と`XSBOT_BUILDER_BASE_URL`へ指定し、Cloud Tasksには同じプロジェクト・リージョンで`build-queue`、`action-queue`、`group-message-queue`の3キューを作成します。現行のTaskQueueはOIDCトークンを付けないため、両サービスはCloud IAMで未認証HTTP呼び出しを許可し、保護が必要なrouteはWebhook署名、フォーム認証、または`X-API-Token`で保護します。
 
 Cloud RunのCPU、メモリ、最小・最大インスタンス数は、Cloud Runサービス側で設定してください。
 
@@ -125,7 +142,7 @@ AWS CLI、AWS SAM CLI、DockerとAWS認証情報、既存のECR repositoryを準
 
 `.env.template`のAWSデプロイ入力を設定すれば、table、queue、subnetなどのruntime値はSAMが各実行環境へ供給します。これらを手入力するのはローカルからAWS backendを直接使う場合です。`.env`ファイルは自動では読み込まれないため、必要な値を環境変数としてexportしてから実行してください。
 
-API、2つのworker、Fargateで同じECR imageを共用するため、スクリプトはDockerで一度だけ`linux/amd64` imageをbuild/pushし、`ImageUri`をSAMへ渡します。同一imageの再buildを避けるため`sam build`は実行しません。
+API、2つのworker、Fargateで同じECR imageを共用するため、スクリプトはDockerで一度だけ`linux/amd64` imageをbuild/pushし、`ImageUri`をSAMへ渡します。同一imageの再buildを避けるため`sam build`は実行しません。imageにはAWS向けの依存だけが入り、Twilio／Pusher pluginを使う場合は`XSBOT_EXTRA_REQUIREMENTS=requirements-optional.txt`を設定してから実行します。
 
 ## シナリオの作成
 

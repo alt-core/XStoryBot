@@ -136,17 +136,6 @@
       sheet_id: !env SHEETS_ID
       service_account: !env SHEETS_SERVICE_ACCOUNT
 
-    twilio:
-      sid: !env TWILIO_SID
-      auth_token: !env TWILIO_AUTH_TOKEN
-      phone_number: !env TWILIO_PHONE_NUMBER
-
-    pusher:
-      app_id: !env PUSHER_APP_ID
-      key: !env PUSHER_APP_KEY
-      secret: !env PUSHER_APP_SECRET
-      cluster: !env PUSHER_APP_CLUSTER
-
     timestamp:
       timezone: "Asia/Tokyo"
 

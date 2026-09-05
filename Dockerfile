@@ -12,8 +12,14 @@ WORKDIR /app
 RUN groupadd --system --gid 10001 xstorybot \
     && useradd --system --uid 10001 --gid xstorybot --home-dir /app xstorybot
 
-COPY requirements.txt ./
-RUN pip install --no-cache-dir -r requirements.txt
+# provider ごとの依存だけを入れる。任意 plugin の依存は XSBOT_EXTRA_REQUIREMENTS で追加する
+ARG XSBOT_CLOUD_PROVIDER=gcp
+ARG XSBOT_EXTRA_REQUIREMENTS=
+COPY requirements*.txt ./
+RUN case "$XSBOT_CLOUD_PROVIDER" in gcp|aws) ;; *) echo "XSBOT_CLOUD_PROVIDER は gcp か aws を指定してください" >&2; exit 1 ;; esac \
+    && pip install --no-cache-dir -r "requirements-${XSBOT_CLOUD_PROVIDER}.txt" \
+    && if [ -n "$XSBOT_EXTRA_REQUIREMENTS" ]; then pip install --no-cache-dir -r "$XSBOT_EXTRA_REQUIREMENTS"; fi
+ENV XSBOT_CLOUD_PROVIDER=${XSBOT_CLOUD_PROVIDER}
 
 COPY --chown=xstorybot:xstorybot . ./
 RUN test -s settings.yaml || { echo "settings.yamlを作成してからビルドしてください" >&2; exit 1; }

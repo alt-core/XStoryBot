@@ -21,6 +21,12 @@ class ContainerConfigurationTest(unittest.TestCase):
         ])
         self.assertIn('USER xstorybot', dockerfile)
         self.assertIn('test -s settings.yaml', dockerfile)
+        # provider ごとの依存だけを入れ、任意 plugin は build 引数で追加する
+        self.assertIn('ARG XSBOT_CLOUD_PROVIDER=gcp', dockerfile)
+        self.assertIn('-r "requirements-${XSBOT_CLOUD_PROVIDER}.txt"', dockerfile)
+        self.assertIn('ARG XSBOT_EXTRA_REQUIREMENTS=', dockerfile)
+        self.assertIn('ENV XSBOT_CLOUD_PROVIDER=${XSBOT_CLOUD_PROVIDER}', dockerfile)
+        self.assertNotIn('pip install --no-cache-dir -r requirements.txt', dockerfile)
         self.assertNotIn('cp settings.yaml.template settings.yaml', dockerfile)
         self.assertIn('${XSBOT_APP_MODULE:-app:app}', dockerfile)
         self.assertIn('/healthz', dockerfile)

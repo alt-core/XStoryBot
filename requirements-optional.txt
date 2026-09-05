@@ -1,0 +1,4 @@
+# 任意 plugin の依存。settings.yaml の plugins に twilio / pusher を書く場合だけ必要。
+# Docker では --build-arg XSBOT_EXTRA_REQUIREMENTS=requirements-optional.txt で追加する。
+twilio~=9.4.4
+pusher~=3.3.3

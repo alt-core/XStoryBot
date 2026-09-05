@@ -1,0 +1,6 @@
+# GCP（Cloud Run／Firestore／Cloud Storage／Cloud Tasks／Cloud Logging）で動かすときの依存
+-r requirements.txt
+google-cloud-firestore~=2.20.0
+google-cloud-storage~=3.0.0
+google-cloud-tasks~=2.18.0
+google-cloud-logging~=3.11.4

@@ -1,12 +1,8 @@
+# 共通の runtime 依存。provider 固有のものは requirements-gcp.txt / requirements-aws.txt、
+# 任意 plugin のものは requirements-optional.txt にある。開発は requirements-dev.txt を使う。
 bottle~=0.13.2
-google-cloud-firestore~=2.20.0
-google-cloud-storage~=3.0.0
-google-cloud-tasks~=2.18.0
-google-cloud-logging~=3.11.4
 google-api-python-client~=2.160.0
 requests~=2.34.2
-twilio~=9.4.4
-pusher~=3.3.3
 argon2-cffi~=25.1.0
 itsdangerous~=2.2.0
 Pillow~=12.3.0
@@ -14,4 +10,3 @@ Arpeggio~=2.0.2
 PyYAML~=6.0.2
 pytz~=2025.1
 gunicorn~=23.0.0
-boto3~=1.43.53

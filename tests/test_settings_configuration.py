@@ -417,24 +417,44 @@ class IgnoreConfigurationTest(unittest.TestCase):
 
 
 class DependencyConfigurationTest(unittest.TestCase):
-    def test_approved_dependency_versions_are_preserved(self):
-        requirements = (
-            PROJECT_ROOT / 'requirements.txt'
-        ).read_text(encoding='utf-8').splitlines()
+    @staticmethod
+    def _requirements(filename):
+        lines = (PROJECT_ROOT / filename).read_text(encoding='utf-8').splitlines()
+        return [line for line in lines if line and not line.startswith('#')]
 
+    @staticmethod
+    def _names(lines):
+        return {line.split('~=')[0].split('==')[0].split('>=')[0] for line in lines if not line.startswith('-r')}
+
+    def test_共通依存にprovider固有と任意pluginのpackageを含めない(self):
+        core = self._requirements('requirements.txt')
         # LINE は plugin/line/api.py が requests で直接呼ぶ。SDK は runtime 依存に含めない
-        self.assertFalse(any(line.startswith('line-bot-sdk') for line in requirements))
-        self.assertIn('requests~=2.34.2', requirements)
-        self.assertIn('Pillow~=12.3.0', requirements)
-        self.assertIn('gunicorn~=23.0.0', requirements)
-        self.assertIn('boto3~=1.43.53', requirements)
-        self.assertIn('argon2-cffi~=25.1.0', requirements)
-        self.assertIn('itsdangerous~=2.2.0', requirements)
-        self.assertFalse(any(
-            line.startswith('firebase-admin') for line in requirements))
-        self.assertFalse(
-            any(line.startswith('google-cloud-memcache') for line in requirements)
-        )
+        self.assertIn('requests~=2.34.2', core)
+        self.assertIn('Pillow~=12.3.0', core)
+        self.assertIn('gunicorn~=23.0.0', core)
+        self.assertIn('argon2-cffi~=25.1.0', core)
+        self.assertIn('itsdangerous~=2.2.0', core)
+        self.assertIn('google-api-python-client~=2.160.0', core)  # Sheets は両 provider の builder が使う
+        names = self._names(core)
+        for excluded in ('line-bot-sdk', 'boto3', 'google-cloud-firestore', 'google-cloud-storage',
+                         'google-cloud-tasks', 'google-cloud-logging', 'twilio', 'pusher',
+                         'firebase-admin', 'google-cloud-memcache'):
+            self.assertNotIn(excluded, names)
+
+    def test_provider別と任意pluginの依存ファイル(self):
+        gcp = self._requirements('requirements-gcp.txt')
+        aws = self._requirements('requirements-aws.txt')
+        optional = self._requirements('requirements-optional.txt')
+        dev = self._requirements('requirements-dev.txt')
+        self.assertIn('-r requirements.txt', gcp)
+        self.assertIn('-r requirements.txt', aws)
+        self.assertEqual(
+            {'google-cloud-firestore', 'google-cloud-storage', 'google-cloud-tasks', 'google-cloud-logging'},
+            self._names(gcp))
+        self.assertEqual({'boto3'}, self._names(aws))
+        self.assertEqual({'twilio', 'pusher'}, self._names(optional))
+        for included in ('-r requirements-gcp.txt', '-r requirements-aws.txt', '-r requirements-optional.txt'):
+            self.assertIn(included, dev)
 
 
 if __name__ == '__main__':

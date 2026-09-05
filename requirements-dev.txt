@@ -1,4 +1,6 @@
--r requirements.txt
+-r requirements-gcp.txt
+-r requirements-aws.txt
+-r requirements-optional.txt
 WebTest~=3.0.0
 # テスト専用: LINE 送信 JSON を公式 SDK v3 のモデルと比較する oracle（tests/plugin/test_line_wire.py）
 line-bot-sdk>=3.25,<4

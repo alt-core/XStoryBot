@@ -90,7 +90,7 @@ class AwsDeployScriptTest(unittest.TestCase):
             self.assertIn('deploy_aws.sh', entries)
             self.assertIn('template.aws.yaml', entries)
 
-    def _run_deploy(self, extra_env=None, settings_content='default: {}\n'):
+    def _run_deploy(self, extra_env=None, settings_content='default: {}\n', extra_files=None):
         env = {
             'PATH': '/usr/bin:/bin',
             'AWS_REGION': 'ap-northeast-1',
@@ -117,6 +117,7 @@ aws() {
 }
 docker() {
     printf 'call:docker:%s\n' "$1" >&2
+    if [ "$1" = buildx ]; then printf 'buildx-args:%s\n' "$*" >&2; fi
     if [ "$1" = login ]; then IFS= read -r mock_password; fi
     return 0
 }
@@ -138,6 +139,8 @@ sam() {
             if settings_content is not None:
                 (root / 'settings.yaml').write_text(
                     settings_content, encoding='utf-8')
+            for name, content in (extra_files or {}).items():
+                (root / name).write_text(content, encoding='utf-8')
             return subprocess.run(
                 ['/bin/sh', '-c', shell, str(script)],
                 cwd=root, env=env, capture_output=True,
@@ -178,7 +181,7 @@ sam() {
             'call:docker:buildx',
             'call:sam:deploy',
             'call:aws:cloudformation:describe-stacks',
-        ], result.stderr.splitlines())
+        ], [line for line in result.stderr.splitlines() if line.startswith('call:')])
         self.assertLess(
             result.stderr.index('call:docker:buildx'),
             result.stderr.index('call:sam:deploy'))
@@ -268,6 +271,25 @@ sam() {
                 self.assertNotEqual(0, result.returncode)
                 self.assertNotIn('call:', result.stderr)
                 self.assertEqual('', result.stdout)
+
+    def test_imageはAWS向け依存だけを入れ任意pluginは指定時だけ追加する(self):
+        result = self._run_deploy()
+        self.assertEqual(0, result.returncode, result.stderr)
+        buildx = [line for line in result.stderr.splitlines() if line.startswith('buildx-args:')][0]
+        self.assertIn('--build-arg XSBOT_CLOUD_PROVIDER=aws', buildx)
+        self.assertIn('--build-arg XSBOT_EXTRA_REQUIREMENTS= ', buildx)
+
+        result = self._run_deploy(
+            extra_env={'XSBOT_EXTRA_REQUIREMENTS': 'requirements-optional.txt'},
+            extra_files={'requirements-optional.txt': 'twilio~=9.4.4\n'})
+        self.assertEqual(0, result.returncode, result.stderr)
+        buildx = [line for line in result.stderr.splitlines() if line.startswith('buildx-args:')][0]
+        self.assertIn('--build-arg XSBOT_EXTRA_REQUIREMENTS=requirements-optional.txt', buildx)
+
+        result = self._run_deploy(extra_env={'XSBOT_EXTRA_REQUIREMENTS': 'missing.txt'})
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn('XSBOT_EXTRA_REQUIREMENTS', result.stderr)
+        self.assertNotIn('call:', result.stderr)
 
     def test_settings欠落と空はCLI呼出し前に停止する(self):
         for content in (None, ''):

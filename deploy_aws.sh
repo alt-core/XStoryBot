@@ -75,6 +75,13 @@ if [ ! -s "$script_directory/settings.yaml" ]; then
     exit 1
 fi
 
+# 任意 plugin（twilio／pusher）を使う場合だけ、追加 requirements を image に入れる
+extra_requirements=${XSBOT_EXTRA_REQUIREMENTS:-}
+if [ -n "$extra_requirements" ] && [ ! -s "$script_directory/$extra_requirements" ]; then
+    echo "XSBOT_EXTRA_REQUIREMENTS のファイルが見つかりません: $extra_requirements" >&2
+    exit 1
+fi
+
 # ECRへ書き込む前にtemplateの構文とresource定義を検査する。
 sam validate \
     --lint \
@@ -111,6 +118,8 @@ aws ecr get-login-password --region "$AWS_REGION" \
 docker buildx build \
     --platform linux/amd64 \
     --provenance=false \
+    --build-arg XSBOT_CLOUD_PROVIDER=aws \
+    --build-arg "XSBOT_EXTRA_REQUIREMENTS=$extra_requirements" \
     --tag "$image_uri" \
     --push \
     "$script_directory"
