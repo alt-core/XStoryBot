@@ -3,18 +3,17 @@ import time
 import logging
 import uuid
 from requests import RequestException
-from linebot.exceptions import LineBotApiError
-from linebot.models import Error
 
 from context import ActionContext
 from users import User
 import hub
 import utility
+from plugin.line.api import LineApiError
 
 
 def _api_error(status_code, message):
-    # 実SDK (line-bot-sdk 2.x) の LineBotApiError は error.message を要求する
-    return LineBotApiError(status_code=status_code, headers={}, error=Error(message=message))
+    # 実 LINE plugin と同じく、HTTP エラーは LineApiError で表す
+    return LineApiError(status_code, message)
 
 
 class MockLinePlugin_ActionContext(ActionContext):
@@ -108,7 +107,7 @@ class MockLinePlugin_Interface:
             elif error_type == 'server_error':
                 if self.logging_enabled:
                     logging.warning("[MOCK] Simulating server error")
-                # 実SDK (line-bot-sdk) は HTTP エラーを LineBotApiError で投げる
+                # HTTP エラーは LineApiError、通信断は RequestException
                 raise _api_error(500, 'mock server error')
             else:  # client_error
                 if self.logging_enabled:

@@ -45,6 +45,7 @@ plugin によって拡張可能な設計になっています。
 
 - LINE@ のボットシステム（[LINE Messaging API](https://developers.line.me/ja/services/messaging-api/)）
   - ボタン・カルーセル・イメージマップなど、一部の特殊表示に対応しています。
+  - 送受信は`requests`で直接行い、LINEのSDKには依存しません（[移行ガイド](./docs/migration.md)を参照）。
   - WebHook などを契機にした Push messages にも対応していますが、友だちが50人を越えると[月額32400円が必要](https://at.line.me/jp/plan)です。
 - [Twilio](https://twilio.kddi-web.com/) （電話・SMS）
   - 電話がかかってきたことをトリガーに SMS を送信し、返信の内容によって電話をかける、といったことが可能です。

@@ -422,8 +422,9 @@ class DependencyConfigurationTest(unittest.TestCase):
             PROJECT_ROOT / 'requirements.txt'
         ).read_text(encoding='utf-8').splitlines()
 
-        self.assertIn('line-bot-sdk==2.4.3', requirements)
-        self.assertIn('requests==2.31.0', requirements)
+        # LINE は plugin/line/api.py が requests で直接呼ぶ。SDK は runtime 依存に含めない
+        self.assertFalse(any(line.startswith('line-bot-sdk') for line in requirements))
+        self.assertIn('requests~=2.34.2', requirements)
         self.assertIn('Pillow~=12.3.0', requirements)
         self.assertIn('gunicorn~=23.0.0', requirements)
         self.assertIn('boto3~=1.43.53', requirements)

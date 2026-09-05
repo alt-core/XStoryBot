@@ -50,6 +50,15 @@ action APIはGETとPOSTに対応しています。APIトークンは`X-API-Token
 
 LINE Webhookを`/line/callback/<bot_name>`へ、Twilio Webhookを対応する`/twilio/`配下のURLへ設定します。切り替え後に、署名付きWebhook、状態更新、返信、遅延action、グループ配信を確認します。
 
+### LINEの送受信はSDKを使わない
+
+LINEとのやりとりは`plugin/line/api.py`（reply／push／rich menu紐付けの3 API）、`plugin/line/webhook.py`（署名検証とevent取り出し）、`plugin/line/messages.py`（送信JSONの組み立て）が`requests`だけで行います。`line-bot-sdk`はruntimeの依存から外し、Python更新やSDKの版上げで自分のコードを書き直す必要をなくしました。
+
+- 送信JSONは、旧SDKを使っていた実装の出力を記録した`tests/fixtures/line/wire_golden.json`と一致することをテストで固定しています
+- 開発環境に`line-bot-sdk`（v3、`requirements-dev.txt`）があれば、公式SDKのモデルが作るJSONとも比較します。LINEの仕様変更はこの比較の差分として検出します
+- 旧実装との意図した差は4つです。replyTokenを持たないevent（unfollow／leave、standby modeのevent）はログだけ残して送信しない。`X-Line-Retry-Key`はpushだけに付く。`User-Agent`が`python-requests`になる。旧SDKが知らないmessage typeを受けたときは、500ではなく`:LINE_ETC:<type>`のactionとしてScenarioへ渡す（旧実装が意図していた挙動）
+- 新しいメッセージ項目やeventを使うときは、[公式リファレンス](https://developers.line.biz/ja/reference/messaging-api/)のkey名で`messages.py`に引数を足し、`_construct_action`に分岐を足します。SDKの版上げを待つ必要はありません
+
 ## 7. 切り替えを完了する
 
 次を確認してから旧環境への新規入力を停止します。

@@ -3,12 +3,12 @@ import logging
 import re
 from unicodedata import normalize
 
-from linebot.models import MessageEvent, PostbackEvent, FollowEvent, UnfollowEvent, JoinEvent, LeaveEvent, TextMessage, LocationMessage, StickerMessage, TextSendMessage, ImageSendMessage, TemplateSendMessage, ButtonsTemplate, ConfirmTemplate, CarouselTemplate, CarouselColumn, MessageAction, PostbackAction, URIAction, ImagemapSendMessage, ImagemapArea, MessageImagemapAction, URIImagemapAction, BaseSize, Sender, QuickReply, QuickReplyButton, FlexSendMessage
 import json
 
 import hub
 import commands
 import utility
+from plugin.line import messages as line_messages
 from plugin.line.command_names import (
     ALL_TEMPLATE_CMDS,
     BUTTON_CMDS,
@@ -164,89 +164,75 @@ class LineDefaultCommandsPlugin_Runtime(object):
             self.sender_icon_urls = {}
         self.reply_fallback_message = params.get('reply_fallback_message', '...')
 
-    def _build_template_actions(self, choices, action_token):
+    def _build_actions(self, choices, action_token):
+        """選択肢 [label, 値, ジャンプ先] の list を LINE の action object の list にする。"""
         results = []
         if choices is None: return results
         for choice in choices:
-            if len(choice) == 0:
-                continue
-            elif len(choice) == 1:
-                results.append(MessageAction(choice[0], choice[0]))
-            elif len(choice) == 2:
-                if re.match(r'^(https?|tel):', choice[1]):
-                    results.append(URIAction(choice[0], choice[1]))
-                elif re.match(r'^[#*]', choice[1]):
-                    results.append(PostbackAction(label=choice[0], display_text=choice[0], data=utility.encode_action_string(choice[1], action_token=action_token)))
-                else:
-                    results.append(MessageAction(choice[0], choice[1]))
-            elif len(choice) >= 3:
-                if choice[1]:
-                    results.append(PostbackAction(label=choice[0], display_text=choice[1], data=utility.encode_action_string(choice[2], action_token=action_token)))
-                else:
-                    results.append(PostbackAction(label=choice[0], data=utility.encode_action_string(choice[2], action_token=action_token)))
+            action = self._build_action(choice, action_token)
+            if action is not None:
+                results.append(action)
         return results
 
-    def _build_quick_reply_actions(self, choices, action_token):
-        results = []
-        if choices is None: return results
-        for choice in choices:
-            action = None
-            if len(choice) == 0:
-                continue
-            elif len(choice) == 1:
-                action = MessageAction(choice[0], choice[0])
-            elif len(choice) == 2:
-                if re.match(r'^(https?|tel):', choice[1]):
-                    action = URIAction(choice[0], choice[1])
-                elif re.match(r'^[#*]', choice[1]):
-                    action = PostbackAction(label=choice[0], display_text=choice[0], data=utility.encode_action_string(choice[1], action_token=action_token))
-                else:
-                    action = MessageAction(choice[0], choice[1])
-            elif len(choice) >= 3:
-                if choice[1]:
-                    action = PostbackAction(label=choice[0], display_text=choice[1], data=utility.encode_action_string(choice[2], action_token=action_token))
-                else:
-                    action = PostbackAction(label=choice[0], data=utility.encode_action_string(choice[2], action_token=action_token))
-            if action is not None:
-                results.append(QuickReplyButton(action=action))
-        return results
+    @staticmethod
+    def _build_action(choice, action_token):
+        if len(choice) == 0:
+            return None
+        label = choice[0]
+        if len(choice) == 1:
+            return line_messages.message_action(label, label)
+        if len(choice) == 2:
+            if re.match(r'^(https?|tel):', choice[1]):
+                return line_messages.uri_action(label, choice[1])
+            if re.match(r'^[#*]', choice[1]):
+                return line_messages.postback_action(
+                    label, utility.encode_action_string(choice[1], action_token=action_token),
+                    display_text=label)
+            return line_messages.message_action(label, choice[1])
+        # 3要素以上: [label, 表示テキスト（空なら表示なし）, ジャンプ先]
+        return line_messages.postback_action(
+            label, utility.encode_action_string(choice[2], action_token=action_token),
+            display_text=choice[1] or None)
 
     def _make_sender(self, sender):
         if sender is None:
             return None
         else:
-            return Sender(name=sender, icon_url=self.sender_icon_urls.get(sender, None))
+            return line_messages.sender(sender, self.sender_icon_urls.get(sender, None))
 
     def _template_message(self, template, sender):
-        return TemplateSendMessage(self.alt_text, template, sender=self._make_sender(sender))
+        return line_messages.template(self.alt_text, template, sender=self._make_sender(sender))
 
     def construct_response(self, context, sender, msg, options, children=[]):
         if msg == '@confirm' or msg == '@確認':
             if len(options) > 0:
-                context.response.append(self._template_message(ConfirmTemplate(text=options[0], actions=self._build_template_actions(children, context.status.action_token)), sender))
+                context.response.append(self._template_message(
+                    line_messages.confirm_template(options[0], self._build_actions(children, context.status.action_token)),
+                    sender))
             else:
                 logging.error("invalid format: @confirm")
-                context.response.append(TextSendMessage(text="<<@confirmを解釈できませんでした>>"))
+                context.response.append(line_messages.text("<<@confirmを解釈できませんでした>>"))
         elif msg == '@button' or msg == '@ボタン':
             if len(options) > 0:
                 title = utility.safe_list_get(options, 1, None)
                 image_url = options[2] if len(options) > 2 else None
-                send_message = self._template_message(ButtonsTemplate(text=options[0], title=title, thumbnail_image_url=image_url, actions=self._build_template_actions(children, context.status.action_token)), sender)
-                #logging.warning(json.dumps(children))
-                #logging.warning(json.dumps(send_message.as_json_dict()))
-                context.response.append(send_message)
+                context.response.append(self._template_message(
+                    line_messages.buttons_template(
+                        options[0], self._build_actions(children, context.status.action_token),
+                        title=title, thumbnail_image_url=image_url),
+                    sender))
             else:
                 logging.error("invalid format: @button")
-                context.response.append(TextSendMessage(text="<<@buttonを解釈できませんでした>>"))
+                context.response.append(line_messages.text("<<@buttonを解釈できませんでした>>"))
         elif msg == '@carousel' or msg == '@カルーセル' or msg == '@panel' or msg == '@パネル':
-            panel_templates = []
+            columns = []
             for panel, choices in children:
                 title = utility.safe_list_get(panel, 1, None)
                 image_url = panel[2] if len(panel) > 2 else None
-                panel_templates.append(
-                    CarouselColumn(text=panel[0], title=title, thumbnail_image_url=image_url, actions=self._build_template_actions(choices, context.status.action_token))
-                )
-            context.response.append(self._template_message(CarouselTemplate(panel_templates), sender))
+                columns.append(line_messages.carousel_column(
+                    panel[0], self._build_actions(choices, context.status.action_token),
+                    title=title, thumbnail_image_url=image_url))
+            context.response.append(self._template_message(line_messages.carousel_template(columns), sender))
         elif msg == '@imagemap' or msg == '@イメージマップ':
             try:
                 url = options[0]
@@ -262,19 +248,17 @@ class LineDefaultCommandsPlugin_Runtime(object):
                 imagemap_actions = []
                 for arg in children:
                     coord = list(map(int, arg[0].split(',')))
-                    area = ImagemapArea(coord[0], coord[1], coord[2], coord[3])
-
+                    area = line_messages.imagemap_area(coord[0], coord[1], coord[2], coord[3])
                     if re.match(r'^(https?|tel):', arg[1]):
-                        imagemap_action = URIImagemapAction(arg[1], area)
+                        imagemap_actions.append(line_messages.imagemap_uri_action(arg[1], area))
                     else:
-                        imagemap_action = MessageImagemapAction(arg[1], area)
-                    imagemap_actions.append(imagemap_action)
-                send_message = ImagemapSendMessage(base_url=url, alt_text=self.alt_text, base_size=BaseSize(width, height), actions=imagemap_actions, sender=self._make_sender(sender))
-                #logging.warning(json.dumps(send_message.as_json_dict()))
-                context.response.append(send_message)
+                        imagemap_actions.append(line_messages.imagemap_message_action(arg[1], area))
+                context.response.append(line_messages.imagemap(
+                    url, self.alt_text, width, height, imagemap_actions,
+                    sender=self._make_sender(sender)))
             except (ValueError, IndexError):
                 logging.error("invalid format: @imagemap")
-                context.response.append(TextSendMessage(text="<<@imagemapを解釈できませんでした>>"))
+                context.response.append(line_messages.text("<<@imagemapを解釈できませんでした>>"))
         elif msg in FLEX_CMDS:
             try:
                 flex_data = json.loads(options[0]) if len(options) > 0 else {}
@@ -302,23 +286,23 @@ class LineDefaultCommandsPlugin_Runtime(object):
                             rewrite_action_data(item)
                 rewrite_action_data(flex_data)
 
-                send_message = FlexSendMessage(alt_text=self.alt_text, sender=self._make_sender(sender))
-                # 無理矢理 FlexSendMessage の中身を書き換える
-                send_message.contents = flex_data
-                context.response.append(send_message)
+                # contents は作者の JSON をそのまま送る（未知の項目も保持する）
+                context.response.append(line_messages.flex(
+                    self.alt_text, flex_data, sender=self._make_sender(sender)))
             except json.JSONDecodeError:
                 logging.error("invalid format: @flex")
-                context.response.append(TextSendMessage(text="<<@flexを解釈できませんでした>>"))
+                context.response.append(line_messages.text("<<@flexを解釈できませんでした>>"))
         elif msg in REPLY_CMDS:
             if len(context.response) == 0:
                 logging.warning("@reply: no preceding message, using fallback (possible duplicate quick_reply in scenario)")
-                context.response.append(TextSendMessage(text=self.reply_fallback_message))
-            context.response[-1].quick_reply = QuickReply(items=self._build_quick_reply_actions(children, context.status.action_token))
+                context.response.append(line_messages.text(self.reply_fallback_message))
+            context.response[-1]['quickReply'] = line_messages.quick_reply(
+                self._build_actions(children, context.status.action_token))
         elif msg in RICHMENU_CMDS:
             richmenu_id = options[0]
             interface = context.get_interface('line')
-            if interface and interface.line_bot_api:
-                interface.line_bot_api.link_rich_menu_to_user(context.source_id, richmenu_id)
+            if interface:
+                interface.api.link_rich_menu(context.source_id, richmenu_id)
             else:
                 logging.error("invalid interface: @menu")
         # 解釈はここで終了

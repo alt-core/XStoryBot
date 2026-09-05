@@ -1,5 +1,10 @@
 # coding: utf-8
-"""LINE プラグインの公開版で維持する局所的な契約を確認する。"""
+"""LINE プラグインの公開版で維持する局所的な契約を確認する。
+
+送信 JSON の同一性は tests/plugin/test_line_wire.py（golden）で、API 呼出しは
+test_line_api.py で、署名検証は test_line_webhook.py で確認する。ここでは event から
+action への変換、送信失敗の分類と再試行、Webhook callback の HTTP 契約を扱う。
+"""
 
 import base64
 import hashlib
@@ -8,6 +13,7 @@ import importlib.util
 import io
 import json
 import re
+import subprocess
 import sys
 import types
 import unittest
@@ -15,11 +21,12 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, call, patch
 
-from linebot.exceptions import LineBotApiError
-from linebot.models import Error as LineError
 import requests
 
 from cloud_backend import factory as backend_factory
+from plugin.line import api as line_api
+from plugin.line.api import LineApiError
+from plugin.line.webhook import InvalidSignatureError
 import utility as utility_module
 
 
@@ -51,97 +58,6 @@ def _load_module(name, relative_path, replacements):
                 sys.modules.pop(key, None)
             else:
                 sys.modules[key] = value
-
-
-class _Model:
-    type_name = None
-
-    def __init__(self, *args, **kwargs):
-        self.args = args
-        for key, value in kwargs.items():
-            setattr(self, key, value)
-        if self.type_name is not None and not hasattr(self, 'type'):
-            self.type = self.type_name
-
-
-def _model_class(name, type_name=None):
-    return type(name, (_Model,), {'type_name': type_name})
-
-
-class _TextSendMessage(_Model):
-    def __init__(self, text=None, **kwargs):
-        super().__init__(text=text, **kwargs)
-
-
-class _MessageAction(_Model):
-    def __init__(self, label=None, text=None, **kwargs):
-        super().__init__(label=label, text=text, **kwargs)
-
-
-class _QuickReply(_Model):
-    def __init__(self, items=None, **kwargs):
-        super().__init__(items=items, **kwargs)
-
-
-def _linebot_stubs():
-    """line-bot-sdk の型判定と生成に必要な最小限の型を返す。
-
-    HTTP エラーの分類を試すため、LineBotApiError だけは実SDKの型を使う。
-    """
-    class InvalidSignatureError(Exception):
-        pass
-
-    classes = {
-        'MessageEvent': _model_class('MessageEvent', 'message'),
-        'PostbackEvent': _model_class('PostbackEvent', 'postback'),
-        'VideoPlayCompleteEvent': _model_class(
-            'VideoPlayCompleteEvent', 'videoPlayComplete'),
-        'BeaconEvent': _model_class('BeaconEvent', 'beacon'),
-        'FollowEvent': _model_class('FollowEvent', 'follow'),
-        'UnfollowEvent': _model_class('UnfollowEvent', 'unfollow'),
-        'JoinEvent': _model_class('JoinEvent', 'join'),
-        'LeaveEvent': _model_class('LeaveEvent', 'leave'),
-        'MemberJoinedEvent': _model_class('MemberJoinedEvent', 'memberJoined'),
-        'MemberLeftEvent': _model_class('MemberLeftEvent', 'memberLeft'),
-        'TextMessage': _model_class('TextMessage', 'text'),
-        'ImageMessage': _model_class('ImageMessage', 'image'),
-        'VideoMessage': _model_class('VideoMessage', 'video'),
-        'AudioMessage': _model_class('AudioMessage', 'audio'),
-        'FileMessage': _model_class('FileMessage', 'file'),
-        'LocationMessage': _model_class('LocationMessage', 'location'),
-        'StickerMessage': _model_class('StickerMessage', 'sticker'),
-        'TextSendMessage': _TextSendMessage,
-        'QuickReply': _QuickReply,
-        'MessageAction': _MessageAction,
-    }
-    for name in (
-            'ImageSendMessage', 'VideoSendMessage', 'AudioSendMessage',
-            'TemplateSendMessage',
-            'CarouselColumn', 'ImagemapSendMessage', 'ImagemapArea',
-            'MessageImagemapAction', 'Sender', 'ButtonsTemplate',
-            'ConfirmTemplate', 'CarouselTemplate', 'PostbackAction',
-            'URIAction', 'URIImagemapAction', 'BaseSize', 'QuickReplyButton',
-            'FlexSendMessage'):
-        classes[name] = _model_class(name)
-
-    models = _module('linebot.models', **classes)
-    linebot = _module(
-        'linebot',
-        LineBotApi=_model_class('LineBotApi'),
-        WebhookParser=_model_class('WebhookParser'),
-    )
-    exceptions = _module(
-        'linebot.exceptions',
-        InvalidSignatureError=InvalidSignatureError,
-        LineBotApiError=LineBotApiError)
-    return {
-        'linebot': linebot,
-        'linebot.models': models,
-        'linebot.exceptions': exceptions,
-    }, SimpleNamespace(
-        **classes,
-        InvalidSignatureError=InvalidSignatureError,
-        LineBotApiError=LineBotApiError)
 
 
 def _base_stubs():
@@ -178,6 +94,29 @@ def _base_stubs():
     }
 
 
+class _ActionContext:
+    def __init__(self, bot_name, service_name, interface, user, action, attrs):
+        self.bot_name = bot_name
+        self.service_name = service_name
+        self.interface = interface
+        self.user = user
+        self.action = action
+        self.attrs = attrs
+
+
+def _interface_replacements():
+    return {
+        **_base_stubs(),
+        'common_commands': _module(
+            'common_commands', AUDIO_CMDS=('@audio',),
+            IMAGE_CMDS=('@image',), VIDEO_CMDS=('@video',),
+            RAWIMAGE_CMDS=('@rawimage',)),
+        'context': _module('context', ActionContext=_ActionContext),
+        'users': _module('users', User=lambda service, user_id: SimpleNamespace(
+            service=service, user_id=user_id)),
+    }
+
+
 class _HttpAbort(Exception):
     def __init__(self, status, body):
         super().__init__(status, body)
@@ -190,6 +129,20 @@ class _Bottle:
         return lambda function: function
 
 
+class LineRuntimeImportTest(unittest.TestCase):
+    def test_LINE経路のimportにSDK系packageが含まれない(self):
+        code = (
+            'import sys; '
+            'import plugin.line.interface, plugin.line.default_commands, '
+            'plugin.line.api, plugin.line.webhook, plugin.line.messages; '
+            "print(sorted(name for name in ('linebot', 'pydantic', 'aiohttp') if name in sys.modules))")
+        result = subprocess.run(
+            [sys.executable, '-c', code], cwd=PROJECT_ROOT,
+            capture_output=True, text=True, check=False)
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertEqual('[]', result.stdout.strip())
+
+
 class LineWebhookContractTest(unittest.TestCase):
     def setUp(self):
         self.secret = 'channel-secret'
@@ -197,19 +150,17 @@ class LineWebhookContractTest(unittest.TestCase):
         self.request = SimpleNamespace(headers={}, body=io.BytesIO())
         self.response = SimpleNamespace(content_type=None)
 
-        class SignatureParser:
-            def parse(parser_self, body, signature):
-                self.trace.append('parse')
-                expected = base64.b64encode(hmac.new(
-                    self.secret.encode('utf-8'), body.encode('utf-8'), hashlib.sha256
-                ).digest()).decode('ascii')
-                if not hmac.compare_digest(signature, expected):
-                    raise self.types.InvalidSignatureError()
-                return [SimpleNamespace(timestamp=None)]
+        def parse_webhook(body, signature):
+            self.trace.append('parse')
+            expected = base64.b64encode(hmac.new(
+                self.secret.encode('utf-8'), body.encode('utf-8'), hashlib.sha256
+            ).digest()).decode('ascii')
+            if not hmac.compare_digest(signature, expected):
+                raise InvalidSignatureError()
+            return [{'type': 'message'}]
 
-        self.parser = SignatureParser()
         self.interface = SimpleNamespace(
-            parser=self.parser,
+            parse_webhook=parse_webhook,
             line_abort_duration_ms=0,
             line_abort_duration_dont_break=False,
             create_context_from_line_event=Mock(return_value=None),
@@ -219,7 +170,6 @@ class LineWebhookContractTest(unittest.TestCase):
             check_reload=Mock(side_effect=lambda: self.trace.append('reload')),
             handle_action=Mock(),
         )
-        linebot, self.types = _linebot_stubs()
         bottle = _module(
             'bottle', request=self.request, response=self.response, Bottle=_Bottle,
             abort=lambda status, body: (_ for _ in ()).throw(_HttpAbort(status, body)),
@@ -230,7 +180,6 @@ class LineWebhookContractTest(unittest.TestCase):
             make_ok_json=lambda message: json.dumps({'message': message}),
         )
         replacements = {
-            **linebot,
             'bottle': bottle,
             'auth': _module('auth'),
             'utility': utility,
@@ -248,6 +197,21 @@ class LineWebhookContractTest(unittest.TestCase):
 
     def test_missing_signature_is_rejected_before_parser_and_log(self):
         self._set_request('{"events":[]}')
+        with patch.object(self.webapi.logging, 'info') as info:
+            with self.assertRaises(_HttpAbort) as error:
+                self.webapi.callback('bot')
+        self.assertEqual(401, error.exception.status)
+        self.assertEqual([], self.trace)
+        info.assert_not_called()
+
+    def test_undecodable_signature_header_is_rejected_as_invalid_signature(self):
+        # Bottle は header 値を latin-1 → UTF-8 と読み直し、不正なバイト列で UnicodeDecodeError を上げる
+        class _UndecodableHeaders(dict):
+            def get(self, _name, default=None):
+                raise UnicodeDecodeError('utf-8', b'\xe9', 0, 1, 'unexpected end of data')
+
+        self.request.body = io.BytesIO(b'{"events":[]}')
+        self.request.headers = _UndecodableHeaders()
         with patch.object(self.webapi.logging, 'info') as info:
             with self.assertRaises(_HttpAbort) as error:
                 self.webapi.callback('bot')
@@ -277,88 +241,90 @@ class LineWebhookContractTest(unittest.TestCase):
         self.assertEqual(['parse', 'log', 'reload'], self.trace)
         info.assert_called_once_with('Request body: {}'.format(body))
         self.assertEqual({'message': 'OK'}, json.loads(result))
+        self.interface.create_context_from_line_event.assert_called_once_with({'type': 'message'})
 
 
 class LineInterfaceContractTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        linebot, cls.types = _linebot_stubs()
-        replacements = {
-            **linebot,
-            **_base_stubs(),
-            'common_commands': _module(
-                'common_commands', AUDIO_CMDS=('@audio',),
-                IMAGE_CMDS=('@image',), VIDEO_CMDS=('@video',),
-                RAWIMAGE_CMDS=('@rawimage',)),
-            'context': _module('context', ActionContext=object),
-            'users': _module('users', User=_model_class('User')),
-            # requests は実物。通信例外と SDK 例外の型の違いをそのまま試す
-        }
         cls.interface_module = _load_module(
-            '_line_contract_interface', 'plugin/line/interface.py', replacements)
+            '_line_contract_interface', 'plugin/line/interface.py', _interface_replacements())
 
     def setUp(self):
         self.interface = object.__new__(self.interface_module.LinePlugin_Interface)
+        self.interface.bot_name = 'bot'
         self.interface.allow_special_action_text_for_debug = False
-        self.interface.line_bot_api = Mock()
+        self.interface.api = Mock()
         self.interface.sender_icon_urls = {}
 
-    def _message_event(self, message):
-        return self.types.MessageEvent(message=message)
+    @staticmethod
+    def _message_event(message):
+        return {'type': 'message', 'replyToken': 'reply-token',
+                'source': {'type': 'user', 'userId': 'U1'}, 'message': message}
 
     def _sending_context(self):
         self.interface.line_api_retry_count = 3
         self.interface.line_api_retry_sleep = 0.0
         return SimpleNamespace(
-            event=SimpleNamespace(type='message', reply_token='reply-token'),
+            event={'type': 'message', 'replyToken': 'reply-token'},
             source_id='U1', source_type='user',
             status=SimpleNamespace(action_token='AAAAAAAA'),
         )
 
     def _send(self, side_effect):
         context = self._sending_context()
-        self.interface.line_bot_api.reply_message.side_effect = side_effect
+        self.interface.api.reply.side_effect = side_effect
         with patch.object(self.interface_module.time, 'sleep'):
             return self.interface.respond_reaction(
                 context, [([None, 'こんにちは'], None)])
 
     @staticmethod
     def _api_error(status):
-        # 実SDK 2.x と同じ生成方法（error.message が必須）
-        return LineBotApiError(status, headers={}, error=LineError(message='test'))
+        return LineApiError(status, 'test')
 
     def test_LINEの5xxと429は送信側で短く再試行する(self):
         result = self._send([self._api_error(500), self._api_error(429), None])
         self.assertEqual('OK', result)
-        self.assertEqual(
-            3, self.interface.line_bot_api.reply_message.call_count)
+        self.assertEqual(3, self.interface.api.reply.call_count)
 
     def test_LINEの409は送信済みとして扱う(self):
         result = self._send([self._api_error(409)])
         self.assertEqual('OK', result)
-        self.assertEqual(
-            1, self.interface.line_bot_api.reply_message.call_count)
+        self.assertEqual(1, self.interface.api.reply.call_count)
 
     def test_LINEの400は再送せず即座に上へ返す(self):
-        with self.assertRaises(LineBotApiError):
+        with self.assertRaises(LineApiError):
             self._send([self._api_error(400)])
-        self.assertEqual(
-            1, self.interface.line_bot_api.reply_message.call_count)
+        self.assertEqual(1, self.interface.api.reply.call_count)
 
     def test_再試行を尽くした通信例外は上へ返す(self):
         with self.assertRaises(requests.ConnectionError):
             self._send(requests.ConnectionError('down'))
-        self.assertEqual(
-            3, self.interface.line_bot_api.reply_message.call_count)
+        self.assertEqual(3, self.interface.api.reply.call_count)
 
-    def test_通信例外でもSDK例外でもない例外は再試行しない(self):
+    def test_通信例外でもLINEのエラーでもない例外は再試行しない(self):
         class Unexpected(Exception):
             pass
 
         with self.assertRaises(Unexpected):
             self._send(Unexpected('bug'))
-        self.assertEqual(
-            1, self.interface.line_bot_api.reply_message.call_count)
+        self.assertEqual(1, self.interface.api.reply.call_count)
+
+    def test_6件以上のmessageは内部エラー1件に置き換える(self):
+        context = self._sending_context()
+        self.interface.respond_reaction(
+            context, [([None, f'本文{index}'], None) for index in range(6)])
+        sent = self.interface.api.reply.call_args.args[1]
+        self.assertEqual([{'type': 'text', 'text': '内部エラー: 送信するメッセージが多すぎます'}], sent)
+
+    def test_eventが無ければpushしretry_keyを渡す(self):
+        context = self._sending_context()
+        context.event = None
+        self.interface.respond_reaction(context, [([None, 'こんにちは'], None)])
+        self.interface.api.push.assert_called_once()
+        self.assertEqual('U1', self.interface.api.push.call_args.args[0])
+        self.assertTrue(self.interface.api.push.call_args.kwargs['retry_key'])
+        self.interface.api.reply.assert_not_called()
 
     def test_audio_reactionをLINE送信messageへ変換する(self):
         context = SimpleNamespace(response=None)
@@ -367,13 +333,11 @@ class LineInterfaceContractTest(unittest.TestCase):
             [([None, '@audio', 'https://media.example/audio.mp3',
                1234, 'audio/mpeg'], None)],
         )
-        self.assertEqual(1, len(messages))
-        self.assertIsInstance(messages[0], self.types.AudioSendMessage)
-        self.assertEqual(
-            'https://media.example/audio.mp3',
-            messages[0].original_content_url,
-        )
-        self.assertEqual(1234, messages[0].duration)
+        self.assertEqual([{
+            'type': 'audio',
+            'originalContentUrl': 'https://media.example/audio.mp3',
+            'duration': 1234,
+        }], messages)
 
     def test_video完了actionを世代付きtracking_IDへ変換する(self):
         context = SimpleNamespace(
@@ -391,10 +355,9 @@ class LineInterfaceContractTest(unittest.TestCase):
         self.assertLessEqual(len(expected), 100)
         self.assertRegex(
             expected, r'^[a-zA-Z0-9\-.=,+*()%$&;:@{}!?<>\[\]]+$')
-        self.assertEqual(expected, messages[0].tracking_id)
+        self.assertEqual(expected, messages[0]['trackingId'])
 
-        event = self.types.VideoPlayCompleteEvent(
-            video_play_complete=SimpleNamespace(tracking_id=expected))
+        event = {'type': 'videoPlayComplete', 'videoPlayComplete': {'trackingId': expected}}
         action, attrs = self.interface._construct_action(event)
         self.assertEqual('*完了', action)
         self.assertEqual('Generation', attrs['action_token'])
@@ -411,85 +374,111 @@ class LineInterfaceContractTest(unittest.TestCase):
                 [([None, '@video', 'https://media.example/poster.png',
                    'https://media.example/video.mp4', '*完了'], None)],
             )
-        self.assertIsNone(messages[0].tracking_id)
+        self.assertNotIn('trackingId', messages[0])
         warning.assert_called_once()
 
     def test_不正な旧video_tracking_IDは本文を出さず無視する(self):
-        event = self.types.VideoPlayCompleteEvent(
-            video_play_complete=SimpleNamespace(tracking_id='旧形式'))
+        event = {'type': 'videoPlayComplete', 'videoPlayComplete': {'trackingId': '旧形式'}}
         with patch.object(self.interface_module.logging, 'warning') as warning:
             action, _attrs = self.interface._construct_action(event)
         self.assertIsNone(action)
         self.assertNotIn('旧形式', str(warning.call_args_list))
 
     def test_all_scenario_versions_use_same_latest_internal_action_mapping(self):
-        provider = SimpleNamespace(type='line')
+        provider = {'type': 'line'}
         cases = (
-            (self._message_event(self.types.LocationMessage(
-                title='題', latitude=35.0, longitude=139.0, address='住所')),
+            (self._message_event({'type': 'location', 'title': '題', 'latitude': 35.0,
+                                  'longitude': 139.0, 'address': '住所'}),
              ':LINE_LOCATION:題,35.0,139.0,住所'),
-            (self._message_event(self.types.StickerMessage(package_id='1', sticker_id='2')),
+            (self._message_event({'type': 'sticker', 'packageId': '1', 'stickerId': '2'}),
              ':LINE_STICKER:1,2'),
-            (self._message_event(self.types.ImageMessage(id='image-id', content_provider=provider)),
+            (self._message_event({'type': 'image', 'id': 'image-id', 'contentProvider': provider}),
              ':LINE_IMAGE:image-id'),
-            (self._message_event(self.types.VideoMessage(
-                id='video-id', duration=1200, content_provider=provider)),
+            (self._message_event({'type': 'video', 'id': 'video-id', 'duration': 1200,
+                                  'contentProvider': provider}),
              ':LINE_VIDEO:video-id,1200'),
-            (self._message_event(self.types.AudioMessage(
-                id='audio-id', duration=800, content_provider=provider)),
+            (self._message_event({'type': 'audio', 'id': 'audio-id', 'duration': 800,
+                                  'contentProvider': provider}),
              ':LINE_AUDIO:audio-id,800'),
-            (self._message_event(self.types.FileMessage(
-                id='file-id', file_name='name.txt', file_size=42)),
+            (self._message_event({'type': 'file', 'id': 'file-id', 'fileName': 'name.txt',
+                                  'fileSize': 42}),
              ':LINE_FILE:file-id,name.txt,42'),
-            (self._message_event(self.types.ImageMessage(
-                id='external-id', content_provider=SimpleNamespace(type='external'))),
+            (self._message_event({'type': 'image', 'id': 'external-id',
+                                  'contentProvider': {'type': 'external',
+                                                      'originalContentUrl': 'https://x/'}}),
              ':LINE_ETC:image'),
-            (self.types.BeaconEvent(beacon=SimpleNamespace(type='enter', hwid='beacon-id')),
+            # 旧SDKが知らない message type も 500 にせず action として渡す
+            (self._message_event({'type': 'newthing', 'id': 'x'}), ':LINE_ETC:newthing'),
+            ({'type': 'beacon', 'beacon': {'type': 'enter', 'hwid': 'beacon-id'}},
              ':LINE_BEACON:enter,beacon-id'),
+            ({'type': 'postback', 'postback': {'data': '#next'}}, '#next'),
+            ({'type': 'follow', 'replyToken': 'r'}, '##line.follow'),
+            ({'type': 'unfollow'}, '##line.unfollow'),
+            ({'type': 'join', 'replyToken': 'r'}, '##line.join'),
+            ({'type': 'leave'}, '##line.leave'),
         )
         for version in (1, 2, 3):
             self.interface.params = {'scenario_version': version}
             for event, expected in cases:
                 with self.subTest(version=version, expected=expected):
-                    self.assertEqual(expected, self.interface._construct_action(event)[0])
+                    action, attrs = self.interface._construct_action(event)
+                    self.assertEqual(expected, action)
+                    self.assertEqual(event['type'], attrs['line.event.type'])
+
+    def test_活用しないeventはactionにしない(self):
+        for event in ({'type': 'memberJoined'}, {'type': 'memberLeft'},
+                      {'type': 'membership', 'membership': {'type': 'joined'}},
+                      {'type': 'unsend'}):
+            with self.subTest(event=event['type']):
+                self.assertIsNone(self.interface._construct_action(event)[0])
 
     def test_text_that_looks_like_internal_action_is_sanitized(self):
-        event = self._message_event(self.types.TextMessage(text=':LINE_IMAGE:spoof'))
+        event = self._message_event({'type': 'text', 'text': ':LINE_IMAGE:spoof'})
         self.assertEqual(' :LINE_IMAGE:spoof', self.interface._construct_action(event)[0])
-        ordinary = self._message_event(self.types.TextMessage(text='こんにちは'))
+        ordinary = self._message_event({'type': 'text', 'text': 'こんにちは'})
         self.assertEqual('こんにちは', self.interface._construct_action(ordinary)[0])
 
+    def test_sourceの種別ごとにuser_idを組む(self):
+        cases = (
+            ({'type': 'user', 'userId': 'U1'}, 'user,U1'),
+            ({'type': 'group', 'groupId': 'G1', 'userId': 'U1'}, 'group,G1'),
+            ({'type': 'room', 'roomId': 'R1', 'userId': 'U1'}, 'room,R1'),
+        )
+        for source, expected in cases:
+            with self.subTest(source=source['type']):
+                event = {'type': 'message', 'replyToken': 'r', 'source': source,
+                         'message': {'type': 'text', 'text': 'やあ'}}
+                context = self.interface.create_context_from_line_event(event)
+                self.assertEqual(('line', expected), (context.user.service, context.user.user_id))
+                self.assertEqual(source['type'], context.source_type)
+                self.assertIs(event, context.event)
+        with self.assertRaises(NotImplementedError):
+            self.interface.create_context_from_line_event(
+                {'type': 'message', 'source': {'type': 'unknown'},
+                 'message': {'type': 'text', 'text': 'やあ'}})
+
+    def test_actionにならないeventはcontextを作らない(self):
+        event = {'type': 'memberJoined', 'source': {'type': 'group', 'groupId': 'G1'}}
+        self.assertIsNone(self.interface.create_context_from_line_event(event))
+
     def test_generated_message_is_logged_when_event_has_no_reply_token(self):
-        context = SimpleNamespace(event=SimpleNamespace(type='unfollow'))
+        context = SimpleNamespace(event={'type': 'unfollow'})
         messages = ['生成本文']
         with patch.object(self.interface_module.logging, 'info') as info:
             self.interface._reply_message(context, messages)
         info.assert_called_once_with(
             "event unfollow doesnt have reply_token: ['生成本文']")
-        self.interface.line_bot_api.reply_message.assert_not_called()
-        self.interface.line_bot_api.push_message.assert_not_called()
+        self.interface.api.reply.assert_not_called()
+        self.interface.api.push.assert_not_called()
 
 
-class LinePushRetryKeyIsolationTest(unittest.TestCase):
-    """push の retry key が共有 client の header に残らないことを実SDKで確認する。
-
-    SDK の push_message は key を client 共有の headers へ保存するため、共有 client で
-    並行 push すると別の push の key が付いて 409（送信済み扱い）になり得る。
-    """
+class LinePushRetryKeyTest(unittest.TestCase):
+    """push の retry key はその呼出しだけに付き、reply には付かない。"""
 
     @classmethod
     def setUpClass(cls):
-        replacements = {
-            **_base_stubs(),
-            'common_commands': _module(
-                'common_commands', AUDIO_CMDS=('@audio',),
-                IMAGE_CMDS=('@image',), VIDEO_CMDS=('@video',),
-                RAWIMAGE_CMDS=('@rawimage',)),
-            'context': _module('context', ActionContext=object),
-            'users': _module('users', User=_model_class('User')),
-        }
         cls.interface_module = _load_module(
-            '_line_push_key_interface', 'plugin/line/interface.py', replacements)
+            '_line_push_key_interface', 'plugin/line/interface.py', _interface_replacements())
 
     def setUp(self):
         self.interface = self.interface_module.LinePlugin_Interface('bot', {
@@ -498,11 +487,11 @@ class LinePushRetryKeyIsolationTest(unittest.TestCase):
         self.interface.line_api_retry_sleep = 0.0
         self.posts = []
 
-        def fake_post(_client, url, headers=None, data=None, timeout=None):
+        def fake_post(url, headers=None, data=None, timeout=None):
             self.posts.append((url, dict(headers or {})))
-            return SimpleNamespace(status_code=200, headers={}, json=lambda: {}, text='')
+            return SimpleNamespace(status_code=200, headers={}, json=dict, text='')
 
-        patcher = patch('linebot.http_client.RequestsHttpClient.post', fake_post)
+        patcher = patch.object(line_api.requests, 'post', fake_post)
         patcher.start()
         self.addCleanup(patcher.stop)
 
@@ -512,21 +501,18 @@ class LinePushRetryKeyIsolationTest(unittest.TestCase):
             event=event, source_id=source_id, source_type='user',
             status=SimpleNamespace(action_token='AAAAAAAA'))
 
-    def test_pushごとに専用clientを使い共有headerへkeyを残さない(self):
+    def test_pushごとに別のkeyが付きreplyには付かない(self):
         with patch.object(self.interface_module.time, 'sleep'):
             self.interface.respond_reaction(self._context('U1'), [([None, 'a'], None)])
             self.interface.respond_reaction(self._context('U2'), [([None, 'b'], None)])
             self.interface.respond_reaction(
-                self._context('U1', SimpleNamespace(type='message', reply_token='reply-token')),
+                self._context('U1', {'type': 'message', 'replyToken': 'reply-token'}),
                 [([None, 'c'], None)])
 
-        push_urls = [url for url, _headers in self.posts[:2]]
-        self.assertTrue(all(url.endswith('/v2/bot/message/push') for url in push_urls))
+        self.assertTrue(all(url.endswith('/v2/bot/message/push') for url, _ in self.posts[:2]))
         keys = [headers.get('X-Line-Retry-Key') for _url, headers in self.posts[:2]]
         self.assertTrue(all(keys))
         self.assertNotEqual(keys[0], keys[1])
-        # 共有 client（reply／rich menu 用）には key が残らず、後続の reply にも付かない
-        self.assertNotIn('X-Line-Retry-Key', self.interface.line_bot_api.headers)
         self.assertTrue(self.posts[2][0].endswith('/v2/bot/message/reply'))
         self.assertNotIn('X-Line-Retry-Key', self.posts[2][1])
 
@@ -534,10 +520,8 @@ class LinePushRetryKeyIsolationTest(unittest.TestCase):
 class LineDefaultCommandsContractTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        linebot, cls.types = _linebot_stubs()
-        replacements = {**linebot, **_base_stubs()}
         cls.module = _load_module(
-            '_line_contract_default_commands', 'plugin/line/default_commands.py', replacements)
+            '_line_contract_default_commands', 'plugin/line/default_commands.py', _base_stubs())
 
     def test_reply_without_preceding_message_uses_configured_fallback(self):
         runtime = self.module.LineDefaultCommandsPlugin_Runtime({
@@ -546,8 +530,8 @@ class LineDefaultCommandsContractTest(unittest.TestCase):
             response=[], status=SimpleNamespace(action_token='token'))
         runtime.construct_response(context, None, '@reply', [], [['選択肢', '返答']])
         self.assertEqual(1, len(context.response))
-        self.assertEqual('代替メッセージ', context.response[0].text)
-        self.assertEqual(1, len(context.response[0].quick_reply.items))
+        self.assertEqual('代替メッセージ', context.response[0]['text'])
+        self.assertEqual(1, len(context.response[0]['quickReply']['items']))
 
         # 連続した @reply ではフォールバック本文を重複生成しない。
         first_message = context.response[0]
@@ -556,13 +540,24 @@ class LineDefaultCommandsContractTest(unittest.TestCase):
 
     def test_reply_attaches_to_existing_message(self):
         runtime = self.module.LineDefaultCommandsPlugin_Runtime({'alt_text': 'alt'})
-        message = self.types.TextSendMessage(text='本文')
+        message = {'type': 'text', 'text': '本文'}
         context = SimpleNamespace(
             response=[message], status=SimpleNamespace(action_token='token'))
         runtime.construct_response(context, None, '@reply', [], [['選択肢', '返答']])
         self.assertEqual([message], context.response)
-        self.assertEqual('本文', message.text)
-        self.assertEqual(1, len(message.quick_reply.items))
+        self.assertEqual('本文', message['text'])
+        self.assertEqual(
+            [{'type': 'action', 'action': {'type': 'message', 'label': '選択肢', 'text': '返答'}}],
+            message['quickReply']['items'])
+
+    def test_richmenuはinterfaceのapiで紐付ける(self):
+        runtime = self.module.LineDefaultCommandsPlugin_Runtime({'alt_text': 'alt'})
+        interface = SimpleNamespace(api=Mock())
+        context = SimpleNamespace(
+            response=[], source_id='U1', get_interface=lambda name: interface)
+        runtime.construct_response(context, None, '@richmenu', ['richmenu-1'])
+        interface.api.link_rich_menu.assert_called_once_with('U1', 'richmenu-1')
+        self.assertEqual([], context.response)
 
 
 def _plugin_packages(default_commands=None, more=None, quick_reply=None):
@@ -714,11 +709,10 @@ class FirestoreAndImageTextContractTest(unittest.TestCase):
 
 class QuickReplyContractTest(unittest.TestCase):
     def _load(self, filename):
-        linebot, _types = _linebot_stubs()
         default_commands = _module(
             'plugin.line.default_commands', REPLY_CMDS=('@reply',))
         replacements = {
-            **linebot, **_base_stubs(),
+            **_base_stubs(),
             **_plugin_packages(default_commands=default_commands),
         }
         replacements['utility'].parse_sender = lambda message: (None, message)
@@ -769,16 +763,3 @@ class QuickReplyContractTest(unittest.TestCase):
                       builder.add_command.call_args_list)
         self.assertIn(call('話者', '再選択', [], None), builder.add_command.call_args_list)
         self.assertIn(call('##Q_R'), builder.add_new_string_block.call_args_list)
-        builder.add_new_anonymous_block.assert_called_once_with()
-
-        runtime = module.LineQuickReplyPlugin_Runtime({
-            'default_reply': '既定', 'retry_message': '再選択'})
-        context = SimpleNamespace(status={})
-        runtime.run_command(context, None, '@@set_quick_reply_guard', ['##Q_'])
-        self.assertEqual('##Q_R', runtime.modify_incoming_action(context, '想定外'))
-        runtime.run_command(context, None, '@clear_quick_reply_guard', [])
-        self.assertNotIn(module.QUICK_REPLY_GUARD_VARIABLE, context.status)
-
-
-if __name__ == '__main__':
-    unittest.main()

@@ -1,0 +1,892 @@
+{
+ "_meta": {
+  "action_token": "AAAAAAAA",
+  "alt_text": "代替テキスト",
+  "generated": "2026-09-05",
+  "reply_fallback_message": "選択してください",
+  "sender_icon_urls": {
+   "案内人": "https://example.test/icon.png"
+  },
+  "source": "commit 899550d の plugin/line（旧 line-bot-sdk 2.4.3）を _construct_responses / _reply_message に通した出力"
+ },
+ "cases": [
+  {
+   "messages": [
+    {
+     "text": "こんにちは",
+     "type": "text"
+    }
+   ],
+   "name": "text",
+   "reactions": [
+    [
+     [
+      null,
+      "こんにちは"
+     ],
+     null
+    ]
+   ]
+  },
+  {
+   "messages": [
+    {
+     "sender": {
+      "iconUrl": "https://example.test/icon.png",
+      "name": "案内人"
+     },
+     "text": "ようこそ",
+     "type": "text"
+    }
+   ],
+   "name": "text_sender_icon",
+   "reactions": [
+    [
+     [
+      "案内人",
+      "ようこそ"
+     ],
+     null
+    ]
+   ]
+  },
+  {
+   "messages": [
+    {
+     "sender": {
+      "name": "名無し"
+     },
+     "text": "やあ",
+     "type": "text"
+    }
+   ],
+   "name": "text_sender_no_icon",
+   "reactions": [
+    [
+     [
+      "名無し",
+      "やあ"
+     ],
+     null
+    ]
+   ]
+  },
+  {
+   "messages": [
+    {
+     "originalContentUrl": "https://media.example.test/image/abc_1024.png",
+     "previewImageUrl": "https://media.example.test/image/abc_240.png",
+     "type": "image"
+    }
+   ],
+   "name": "image",
+   "reactions": [
+    [
+     [
+      null,
+      "@image",
+      "https://media.example.test/image/abc_1024.png"
+     ],
+     null
+    ]
+   ]
+  },
+  {
+   "messages": [
+    {
+     "originalContentUrl": "https://x.example.test/orig.png",
+     "previewImageUrl": "https://x.example.test/prev.png",
+     "type": "image"
+    }
+   ],
+   "name": "rawimage",
+   "reactions": [
+    [
+     [
+      null,
+      "@rawimage",
+      "https://x.example.test/orig.png",
+      "https://x.example.test/prev.png"
+     ],
+     null
+    ]
+   ]
+  },
+  {
+   "messages": [
+    {
+     "originalContentUrl": "https://x.example.test/v.mp4",
+     "previewImageUrl": "https://x.example.test/thumb.png",
+     "sender": {
+      "iconUrl": "https://example.test/icon.png",
+      "name": "案内人"
+     },
+     "trackingId": "v1.KmRvbmU.AAAAAAAA",
+     "type": "video"
+    }
+   ],
+   "name": "video_with_action",
+   "reactions": [
+    [
+     [
+      "案内人",
+      "@video",
+      "https://x.example.test/thumb.png",
+      "https://x.example.test/v.mp4",
+      "*done"
+     ],
+     null
+    ]
+   ]
+  },
+  {
+   "messages": [
+    {
+     "originalContentUrl": "https://x.example.test/v.mp4",
+     "previewImageUrl": "https://x.example.test/thumb.png",
+     "type": "video"
+    }
+   ],
+   "name": "video_plain",
+   "reactions": [
+    [
+     [
+      null,
+      "@video",
+      "https://x.example.test/thumb.png",
+      "https://x.example.test/v.mp4"
+     ],
+     null
+    ]
+   ]
+  },
+  {
+   "messages": [
+    {
+     "duration": 12345,
+     "originalContentUrl": "https://x.example.test/a.m4a",
+     "type": "audio"
+    }
+   ],
+   "name": "audio",
+   "reactions": [
+    [
+     [
+      null,
+      "@audio",
+      "https://x.example.test/a.m4a",
+      "12345"
+     ],
+     null
+    ]
+   ]
+  },
+  {
+   "messages": [
+    {
+     "altText": "代替テキスト",
+     "template": {
+      "actions": [
+       {
+        "label": "はい",
+        "text": "はい",
+        "type": "message"
+       },
+       {
+        "data": "#no@@AAAAAAAA",
+        "displayText": "いいえ",
+        "label": "いいえ",
+        "type": "postback"
+       }
+      ],
+      "text": "いいですか？",
+      "type": "confirm"
+     },
+     "type": "template"
+    }
+   ],
+   "name": "confirm",
+   "reactions": [
+    [
+     [
+      null,
+      "@confirm",
+      "いいですか？"
+     ],
+     [
+      [
+       "はい"
+      ],
+      [
+       "いいえ",
+       "#no"
+      ]
+     ]
+    ]
+   ]
+  },
+  {
+   "messages": [
+    {
+     "altText": "代替テキスト",
+     "sender": {
+      "iconUrl": "https://example.test/icon.png",
+      "name": "案内人"
+     },
+     "template": {
+      "actions": [
+       {
+        "label": "A",
+        "text": "A",
+        "type": "message"
+       },
+       {
+        "label": "B",
+        "text": "テキストB",
+        "type": "message"
+       },
+       {
+        "label": "C",
+        "type": "uri",
+        "uri": "https://example.test/c"
+       },
+       {
+        "data": "#d@@AAAAAAAA",
+        "displayText": "D",
+        "label": "D",
+        "type": "postback"
+       },
+       {
+        "data": "#e@@AAAAAAAA",
+        "displayText": "表示E",
+        "label": "E",
+        "type": "postback"
+       },
+       {
+        "data": "*f@@AAAAAAAA",
+        "label": "F",
+        "type": "postback"
+       }
+      ],
+      "text": "本文",
+      "thumbnailImageUrl": "https://x.example.test/t.png",
+      "title": "タイトル",
+      "type": "buttons"
+     },
+     "type": "template"
+    }
+   ],
+   "name": "button_full",
+   "reactions": [
+    [
+     [
+      "案内人",
+      "@button",
+      "本文",
+      "タイトル",
+      "https://x.example.test/t.png"
+     ],
+     [
+      [
+       "A"
+      ],
+      [
+       "B",
+       "テキストB"
+      ],
+      [
+       "C",
+       "https://example.test/c"
+      ],
+      [
+       "D",
+       "#d"
+      ],
+      [
+       "E",
+       "表示E",
+       "#e"
+      ],
+      [
+       "F",
+       "",
+       "*f"
+      ]
+     ]
+    ]
+   ]
+  },
+  {
+   "messages": [
+    {
+     "altText": "代替テキスト",
+     "template": {
+      "actions": [
+       {
+        "label": "選ぶ",
+        "text": "選ぶ",
+        "type": "message"
+       }
+      ],
+      "text": "本文だけ",
+      "type": "buttons"
+     },
+     "type": "template"
+    }
+   ],
+   "name": "button_minimal",
+   "reactions": [
+    [
+     [
+      null,
+      "@button",
+      "本文だけ"
+     ],
+     [
+      [
+       "選ぶ"
+      ]
+     ]
+    ]
+   ]
+  },
+  {
+   "messages": [
+    {
+     "altText": "代替テキスト",
+     "template": {
+      "columns": [
+       {
+        "actions": [
+         {
+          "label": "a1",
+          "text": "a1",
+          "type": "message"
+         },
+         {
+          "data": "#b1@@AAAAAAAA",
+          "displayText": "b1",
+          "label": "b1",
+          "type": "postback"
+         }
+        ],
+        "text": "パネル1",
+        "thumbnailImageUrl": "https://x.example.test/p1.png",
+        "title": "タイトル1"
+       },
+       {
+        "actions": [
+         {
+          "label": "a2",
+          "text": "a2",
+          "type": "message"
+         },
+         {
+          "data": "#b2@@AAAAAAAA",
+          "displayText": "b2",
+          "label": "b2",
+          "type": "postback"
+         }
+        ],
+        "text": "パネル2",
+        "thumbnailImageUrl": "https://x.example.test/p2.png",
+        "title": "タイトル2"
+       }
+      ],
+      "type": "carousel"
+     },
+     "type": "template"
+    }
+   ],
+   "name": "carousel",
+   "reactions": [
+    [
+     [
+      null,
+      "@carousel"
+     ],
+     [
+      [
+       [
+        "パネル1",
+        "タイトル1",
+        "https://x.example.test/p1.png"
+       ],
+       [
+        [
+         "a1"
+        ],
+        [
+         "b1",
+         "#b1"
+        ]
+       ]
+      ],
+      [
+       [
+        "パネル2",
+        "タイトル2",
+        "https://x.example.test/p2.png"
+       ],
+       [
+        [
+         "a2"
+        ],
+        [
+         "b2",
+         "#b2"
+        ]
+       ]
+      ]
+     ]
+    ]
+   ]
+  },
+  {
+   "messages": [
+    {
+     "actions": [
+      {
+       "area": {
+        "height": 520,
+        "width": 520,
+        "x": 0,
+        "y": 0
+       },
+       "text": "ひだり",
+       "type": "message"
+      },
+      {
+       "area": {
+        "height": 520,
+        "width": 520,
+        "x": 520,
+        "y": 0
+       },
+       "linkUri": "https://example.test/right",
+       "type": "uri"
+      }
+     ],
+     "altText": "代替テキスト",
+     "baseSize": {
+      "height": 520,
+      "width": 1040
+     },
+     "baseUrl": "https://x.example.test/map",
+     "type": "imagemap"
+    }
+   ],
+   "name": "imagemap",
+   "reactions": [
+    [
+     [
+      null,
+      "@imagemap",
+      "https://x.example.test/map",
+      "1040",
+      "520"
+     ],
+     [
+      [
+       "0,0,520,520",
+       "ひだり"
+      ],
+      [
+       "520,0,520,520",
+       "https://example.test/right"
+      ]
+     ]
+    ]
+   ]
+  },
+  {
+   "messages": [
+    {
+     "altText": "代替テキスト",
+     "contents": {
+      "body": {
+       "contents": [
+        {
+         "action": {
+          "data": "#next@@AAAAAAAA",
+          "type": "postback"
+         },
+         "text": "本文",
+         "type": "text",
+         "wrap": true
+        },
+        {
+         "action": {
+          "text": "ふつうの文",
+          "type": "message"
+         },
+         "text": "発言",
+         "type": "text"
+        },
+        {
+         "action": {
+          "extra": null,
+          "type": "uri",
+          "uri": "https://example.test/"
+         },
+         "text": "URL",
+         "type": "text"
+        }
+       ],
+       "flags": [
+        1,
+        2,
+        3
+       ],
+       "layout": "vertical",
+       "paddingAll": "0px",
+       "type": "box"
+      },
+      "type": "bubble",
+      "xCustom": 1
+     },
+     "sender": {
+      "iconUrl": "https://example.test/icon.png",
+      "name": "案内人"
+     },
+     "type": "flex"
+    }
+   ],
+   "name": "flex",
+   "reactions": [
+    [
+     [
+      "案内人",
+      "@flex",
+      "{\"type\": \"bubble\", \"xCustom\": 1, \"body\": {\"type\": \"box\", \"layout\": \"vertical\", \"contents\": [{\"type\": \"text\", \"text\": \"本文\", \"wrap\": true, \"action\": {\"type\": \"jump\", \"data\": \"＃next\"}}, {\"type\": \"text\", \"text\": \"発言\", \"action\": {\"type\": \"jump\", \"data\": \"ふつうの文\"}}, {\"type\": \"text\", \"text\": \"URL\", \"action\": {\"type\": \"uri\", \"uri\": \"https://example.test/\", \"extra\": null}}], \"paddingAll\": \"0px\", \"flags\": [1, 2, 3]}}"
+     ],
+     null
+    ]
+   ]
+  },
+  {
+   "messages": [
+    {
+     "altText": "代替テキスト",
+     "contents": {
+      "body": {
+       "contents": [
+        {
+         "action": {
+          "data": "#next@@AAAAAAAA",
+          "type": "postback"
+         },
+         "text": "本文",
+         "type": "text",
+         "wrap": true
+        },
+        {
+         "action": {
+          "text": "ふつうの文",
+          "type": "message"
+         },
+         "text": "発言",
+         "type": "text"
+        },
+        {
+         "action": {
+          "extra": null,
+          "type": "uri",
+          "uri": "https://example.test/"
+         },
+         "text": "URL",
+         "type": "text"
+        }
+       ],
+       "flags": [
+        1,
+        2,
+        3
+       ],
+       "layout": "vertical",
+       "paddingAll": "0px",
+       "type": "box"
+      },
+      "type": "bubble",
+      "xCustom": 1
+     },
+     "type": "flex"
+    }
+   ],
+   "name": "flex_double_encoded",
+   "reactions": [
+    [
+     [
+      null,
+      "@flex",
+      "\"{\\\"type\\\": \\\"bubble\\\", \\\"xCustom\\\": 1, \\\"body\\\": {\\\"type\\\": \\\"box\\\", \\\"layout\\\": \\\"vertical\\\", \\\"contents\\\": [{\\\"type\\\": \\\"text\\\", \\\"text\\\": \\\"\\u672c\\u6587\\\", \\\"wrap\\\": true, \\\"action\\\": {\\\"type\\\": \\\"jump\\\", \\\"data\\\": \\\"\\uff03next\\\"}}, {\\\"type\\\": \\\"text\\\", \\\"text\\\": \\\"\\u767a\\u8a00\\\", \\\"action\\\": {\\\"type\\\": \\\"jump\\\", \\\"data\\\": \\\"\\u3075\\u3064\\u3046\\u306e\\u6587\\\"}}, {\\\"type\\\": \\\"text\\\", \\\"text\\\": \\\"URL\\\", \\\"action\\\": {\\\"type\\\": \\\"uri\\\", \\\"uri\\\": \\\"https://example.test/\\\", \\\"extra\\\": null}}], \\\"paddingAll\\\": \\\"0px\\\", \\\"flags\\\": [1, 2, 3]}}\""
+     ],
+     null
+    ]
+   ]
+  },
+  {
+   "messages": [
+    {
+     "quickReply": {
+      "items": [
+       {
+        "action": {
+         "label": "A",
+         "text": "A",
+         "type": "message"
+        },
+        "type": "action"
+       },
+       {
+        "action": {
+         "label": "B",
+         "text": "テキストB",
+         "type": "message"
+        },
+        "type": "action"
+       },
+       {
+        "action": {
+         "label": "C",
+         "type": "uri",
+         "uri": "https://example.test/c"
+        },
+        "type": "action"
+       },
+       {
+        "action": {
+         "data": "#d@@AAAAAAAA",
+         "displayText": "D",
+         "label": "D",
+         "type": "postback"
+        },
+        "type": "action"
+       },
+       {
+        "action": {
+         "data": "#e@@AAAAAAAA",
+         "displayText": "表示E",
+         "label": "E",
+         "type": "postback"
+        },
+        "type": "action"
+       },
+       {
+        "action": {
+         "data": "*f@@AAAAAAAA",
+         "label": "F",
+         "type": "postback"
+        },
+        "type": "action"
+       }
+      ]
+     },
+     "text": "どれにする？",
+     "type": "text"
+    }
+   ],
+   "name": "reply_after_text",
+   "reactions": [
+    [
+     [
+      null,
+      "どれにする？"
+     ],
+     null
+    ],
+    [
+     [
+      null,
+      "@reply"
+     ],
+     [
+      [
+       "A"
+      ],
+      [
+       "B",
+       "テキストB"
+      ],
+      [
+       "C",
+       "https://example.test/c"
+      ],
+      [
+       "D",
+       "#d"
+      ],
+      [
+       "E",
+       "表示E",
+       "#e"
+      ],
+      [
+       "F",
+       "",
+       "*f"
+      ]
+     ]
+    ]
+   ]
+  },
+  {
+   "messages": [
+    {
+     "quickReply": {
+      "items": [
+       {
+        "action": {
+         "label": "A",
+         "text": "A",
+         "type": "message"
+        },
+        "type": "action"
+       },
+       {
+        "action": {
+         "data": "#b@@AAAAAAAA",
+         "displayText": "B",
+         "label": "B",
+         "type": "postback"
+        },
+        "type": "action"
+       }
+      ]
+     },
+     "text": "選択してください",
+     "type": "text"
+    }
+   ],
+   "name": "reply_without_message",
+   "reactions": [
+    [
+     [
+      null,
+      "@reply"
+     ],
+     [
+      [
+       "A"
+      ],
+      [
+       "B",
+       "#b"
+      ]
+     ]
+    ]
+   ]
+  },
+  {
+   "messages": [
+    {
+     "text": "<<@confirmを解釈できませんでした>>",
+     "type": "text"
+    }
+   ],
+   "name": "confirm_invalid",
+   "reactions": [
+    [
+     [
+      null,
+      "@confirm"
+     ],
+     []
+    ]
+   ]
+  },
+  {
+   "messages": [
+    {
+     "text": "<<@buttonを解釈できませんでした>>",
+     "type": "text"
+    }
+   ],
+   "name": "button_invalid",
+   "reactions": [
+    [
+     [
+      null,
+      "@button"
+     ],
+     []
+    ]
+   ]
+  },
+  {
+   "messages": [
+    {
+     "text": "<<@imagemapを解釈できませんでした>>",
+     "type": "text"
+    }
+   ],
+   "name": "imagemap_invalid",
+   "reactions": [
+    [
+     [
+      null,
+      "@imagemap",
+      "https://x.example.test/map"
+     ],
+     []
+    ]
+   ]
+  },
+  {
+   "messages": [
+    {
+     "text": "<<@flexを解釈できませんでした>>",
+     "type": "text"
+    }
+   ],
+   "name": "flex_invalid",
+   "reactions": [
+    [
+     [
+      null,
+      "@flex",
+      "{broken"
+     ],
+     null
+    ]
+   ]
+  }
+ ],
+ "requests": {
+  "/v2/bot/message/push": {
+   "body": {
+    "messages": [
+     {
+      "text": "こんにちは",
+      "type": "text"
+     }
+    ],
+    "notificationDisabled": false,
+    "to": "U1"
+   },
+   "headers": {
+    "Content-Type": "application/json",
+    "User-Agent": "line-bot-sdk-python/2.4.3",
+    "X-Line-Retry-Key": "RETRY-KEY"
+   },
+   "timeout": null
+  },
+  "/v2/bot/message/reply": {
+   "body": {
+    "messages": [
+     {
+      "text": "こんにちは",
+      "type": "text"
+     }
+    ],
+    "notificationDisabled": false,
+    "replyToken": "REPLY-TOKEN"
+   },
+   "headers": {
+    "Content-Type": "application/json",
+    "User-Agent": "line-bot-sdk-python/2.4.3"
+   },
+   "timeout": null
+  }
+ }
+}

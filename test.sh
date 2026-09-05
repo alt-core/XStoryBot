@@ -32,6 +32,9 @@ python3 -m unittest \
     tests.test_webchat_dev_server \
     tests.test_webchat_reference_ui \
     tests.plugin.test_line_contracts \
+    tests.plugin.test_line_api \
+    tests.plugin.test_line_webhook \
+    tests.plugin.test_line_wire \
     tests.test_task_client \
     tests.test_task_queue_contract \
     tests.test_aws_task_queue \

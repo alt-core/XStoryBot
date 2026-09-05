@@ -4,16 +4,12 @@ import time
 import json
 
 from bottle import request, response, Bottle, abort
-from linebot.exceptions import InvalidSignatureError
 
 import auth
 import utility
 import main
 import users
-
-# import hmac
-# import hashlib
-# import base64
+from plugin.line.webhook import InvalidSignatureError
 
 
 app = Bottle()
@@ -35,29 +31,25 @@ def callback(bot_name):
     if interface is None:
         abort_json(404, u'not found')
 
-    signature = request.headers.get('X-Line-Signature')
+    try:
+        signature = request.headers.get('X-Line-Signature')
+    except UnicodeDecodeError:
+        # Bottle は header 値を UTF-8 として読み直す。UTF-8 として不正な値は署名として不正
+        signature = None
     if signature is None:
         abort_json(401, u'invalid signature')
 
     body = request.body.read().decode('utf-8')
-    # logging.info(u"Signature: %s" % signature)
-    # gen_signature = base64.b64encode(hmac.new(
-    #     interface.line_channel_secret,
-    #     body.encode('utf-8'),
-    #     hashlib.sha256
-    # ).digest())
-    # logging.info(u"Gen-Signature: %s" % gen_signature)
-    #logging.info(u'Headers: {}'.format(repr(request.environ)))
 
     try:
-        events = interface.parser.parse(body, signature)
+        events = interface.parse_webhook(body, signature)
         logging.info(u'Request body: {}'.format(body))
 
         bot.check_reload()
 
         if interface.line_abort_duration_ms > 0 and len(events) > 0:
             # Webhook受信が遅れ、ReplyTokenの期限内に応答できない場合は処理を中断する。
-            timestamp = events[0].timestamp
+            timestamp = events[0].get('timestamp')
             if timestamp is not None:
                 current = int(time.time() * 1000)
                 diff = current - timestamp

@@ -7,15 +7,16 @@ import types
 import unittest
 from unittest import mock
 
-from linebot.exceptions import LineBotApiError
 import requests
+
+from plugin.line.api import LineApiError
 
 
 TARGET = Path(__file__).resolve().parents[2] / 'plugin' / 'mock_line' / 'interface.py'
 
 
 def load_mock_line_module():
-    # requests と line-bot-sdk は実物を使い、例外の生成と型の違いをそのまま検証する
+    # requests と plugin.line.api は実物を使い、例外の型の違いをそのまま検証する
     context = types.ModuleType('context')
 
     class ActionContext:
@@ -53,12 +54,12 @@ def load_mock_line_module():
     }):
         spec.loader.exec_module(module)
     module.RequestExceptionForTest = requests.RequestException
-    return module, LineBotApiError, User
+    return module, LineApiError, User
 
 
 class MockLinePluginTest(unittest.TestCase):
     def setUp(self):
-        self.module, self.LineBotApiError, self.User = load_mock_line_module()
+        self.module, self.LineApiError, self.User = load_mock_line_module()
         self.interface = self.module.MockLinePlugin_Interface('testbot', {
             'error_rate': 0,
             'rate_limit_threshold': 3,
@@ -78,7 +79,7 @@ class MockLinePluginTest(unittest.TestCase):
                 self.interface.respond_reaction(self.context, self.reactions), 'OK')
             self.assertEqual(
                 self.interface.respond_reaction(self.context, self.reactions), 'OK')
-            with self.assertRaises(self.LineBotApiError) as captured:
+            with self.assertRaises(self.LineApiError) as captured:
                 self.interface.respond_reaction(self.context, self.reactions)
 
         self.assertEqual(captured.exception.status_code, 429)
@@ -104,19 +105,19 @@ class MockLinePluginTest(unittest.TestCase):
     def test_forced_rate_limit_uses_429_response(self):
         self.interface.set_force_error('rate_limit')
         with mock.patch.object(self.module.time, 'time', return_value=300.0):
-            with self.assertRaises(self.LineBotApiError) as captured:
+            with self.assertRaises(self.LineApiError) as captured:
                 self.interface.respond_reaction(self.context, self.reactions)
         self.assertEqual(captured.exception.status_code, 429)
         self.assertEqual(self.interface.error_count, 1)
 
     def test_api_errors_use_sdk_exception_and_timeout_uses_requests(self):
-        # 実SDKと同じく、HTTPエラーは LineBotApiError、通信断は RequestException
+        # 実 LINE plugin と同じく、HTTPエラーは LineApiError、通信断は RequestException
         self.interface.rate_limit_threshold = 100  # この test ではレート制限を使わない
         for error_type, status in (('server_error', 500), ('client_error', 400)):
             with self.subTest(error_type=error_type):
                 self.interface.set_force_error(error_type)
                 with mock.patch.object(self.module.time, 'time', return_value=300.0):
-                    with self.assertRaises(self.LineBotApiError) as captured:
+                    with self.assertRaises(self.LineApiError) as captured:
                         self.interface.respond_reaction(self.context, self.reactions)
                 self.assertEqual(captured.exception.status_code, status)
         self.interface.set_force_error('timeout')
