@@ -176,6 +176,29 @@ class GoogleSheetsPluginTest(unittest.TestCase):
         self.credential_source.get_google_service_account.assert_called_once_with(
             '/keys/sheets.json')
 
+    def test_一時障害の5xxと429は再試行し4xxは即座に伝播する(self):
+        loader = self.module.GoogleSheetPlugin_Loader({})
+        HttpError = self.module.HttpError
+
+        def http_error(status):
+            error = HttpError()
+            error.resp = types.SimpleNamespace(status=status)
+            return error
+
+        request = mock.Mock()
+        request.execute.side_effect = [http_error(503), http_error(429), 'values']
+        with mock.patch.object(self.module.time, 'sleep') as sleep:
+            self.assertEqual('values', loader._execute_with_retry(request))
+        self.assertEqual(3, request.execute.call_count)
+        self.assertEqual([mock.call(5), mock.call(10)], sleep.call_args_list)
+
+        request = mock.Mock()
+        request.execute.side_effect = [http_error(404)]
+        with mock.patch.object(self.module.time, 'sleep') as sleep:
+            with self.assertRaises(HttpError):
+                loader._execute_with_retry(request)
+        sleep.assert_not_called()
+
     def test_inline_JSONから資格情報を生成する(self):
         self.credential_source.get_google_service_account.return_value = (
             types.SimpleNamespace(

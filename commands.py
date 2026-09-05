@@ -34,9 +34,20 @@ class Default_Builder(object):
         return True
 
 
+class FormatList(list):
+    """引数書式の並び。variadic が真なら最後の書式を残りのセル全てに適用する。"""
+    variadic = False
+
+
 def _convert_format_string(s):
-    result = []
-    for cell_format in (s or '').split():
+    result = FormatList()
+    tokens = (s or '').split()
+    for index, cell_format in enumerate(tokens):
+        if cell_format.endswith('...'):
+            if index != len(tokens) - 1:
+                raise ValueError('可変長の書式 ... は最後の引数にだけ指定できます')
+            cell_format = cell_format[:-3]
+            result.variadic = True
         required = True
         max_len = 0
         if cell_format.startswith('[') and cell_format.endswith(']'):
@@ -55,12 +66,14 @@ class CommandEntry(object):
         """
         :param names: ['@コマンド名', '@Command']
         :param options: 'label|text|expr|image|raw(MAX_LEN) [label|text|expr|image|raw(MAX_LEN)] ...'
+            末尾の書式に ... を付けると（例: 'raw [raw]...'）、その書式を残りのセル全てに適用する
         :param child: 'label|text|expr|raw(MAX_LEN) [label|text|expr|raw(MAX_LEN)] ...'
         :param grandchild: 'label|text|expr|raw(MAX_LEN) [label|text|expr|raw(MAX_LEN)] ...'
         :param builder: SomePlugin_Builder() or None
         :param runtime: SomePlugin_Runtime() or None
         :param service: 'line'
-        :param specs: {'children_min': 1, 'children_max': 4}
+        :param specs: {'children_min': 1, 'children_max': 4, 'reject_extra_options': True, 'keep_empty_cells': True}
+            keep_empty_cells: 引数の途中の空セルを詰めずに '' として残す（@webhook の key/value 用）
         :param min_version: scenario version
         """
         self.command = names
@@ -206,15 +219,24 @@ def parse_command(builder, node):
     grandchildren = []
 
     # options のフォーマット確認と事前処理
-    for i in range(len(entry.options)):
+    n_options = len(entry.options)
+    if getattr(entry.options, 'variadic', False):
+        # 可変長: 最後の書式を残りのセル全てに適用する
+        n_options = max(n_options, len(row) - 1)
+    # 途中の空セルは詰めるのが既定。keep_empty_cells のコマンドだけ位置を保ち、末尾の空セルだけ落とす
+    keep_empty_cells = entry.specs.get('keep_empty_cells', False)
+    for i in range(n_options):
         if len(row) > 1+i:
             cell = row[1+i]
         else:
             cell = ''
-        options.append(check_format_and_normalize(builder, cell, entry.options[i]))
-        utility.remove_tail_empty_cells(options)
+        cell_format = entry.options[min(i, len(entry.options) - 1)]
+        options.append(check_format_and_normalize(builder, cell, cell_format))
+        if not keep_empty_cells:
+            utility.remove_tail_empty_cells(options)
+    utility.remove_tail_empty_cells(options)
     if entry.specs.get('reject_extra_options'):
-        extra_options = row[1 + len(entry.options):]
+        extra_options = row[1 + n_options:]
         if any(str(cell).strip() for cell in extra_options):
             builder.raise_error('コマンドに未定義の余分な引数があります')
 

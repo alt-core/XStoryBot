@@ -1,7 +1,9 @@
 import unittest
 from pathlib import Path
+from unittest.mock import Mock
 
 from tools.webchat_dev_server import (
+    Handler,
     _avatar_svg,
     _map_svg,
     _scene_svg,
@@ -12,6 +14,47 @@ from tools.webchat_dev_server import (
 class WebchatDevServerTest(unittest.TestCase):
     def setUp(self):
         self.base_url = 'http://127.0.0.1:8765'
+
+    def _get(self, path):
+        handler = Handler.__new__(Handler)
+        handler.path = path
+        handler._send = Mock()
+        handler.send_error = Mock()
+        handler.do_GET()
+        return handler
+
+    def test_保存テスト画面は外部moduleを読み込む(self):
+        handler = self._get('/devtest/storage')
+        status, body, content_type = handler._send.call_args.args
+        self.assertEqual(200, status)
+        self.assertEqual('text/html; charset=utf-8', content_type)
+        self.assertIn(b'id="storage-test-result"', body)
+        self.assertIn(
+            b'<script type="module" src="/devtest/storage.mjs"></script>', body)
+        handler.send_error.assert_not_called()
+
+    def test_保存テストrouteは固定ファイルだけを配信する(self):
+        expected = (Path(__file__).parent / 'webchat_storage.browser.test.mjs')
+        for path in ('/devtest/storage.mjs',
+                     '/devtest/storage.mjs?path=settings.yaml'):
+            with self.subTest(path=path):
+                handler = self._get(path)
+                status, body, content_type, _cache = handler._send.call_args.args
+                self.assertEqual(200, status)
+                self.assertEqual(expected.read_bytes(), body)
+                self.assertIn('javascript', content_type)
+                handler.send_error.assert_not_called()
+
+    def test_保存テストrouteは任意pathを配信しない(self):
+        for path in (
+                '/devtest/settings.yaml', '/devtest/../settings.yaml',
+                '/devtest/%2e%2e/settings.yaml',
+                '/devtest/storage.mjs/../settings.yaml',
+                '/tests/webchat_storage.browser.test.mjs'):
+            with self.subTest(path=path):
+                handler = self._get(path)
+                handler.send_error.assert_called_once_with(404)
+                handler._send.assert_not_called()
 
     def test_startと主要messageを生成する(self):
         video_fixture = (

@@ -1,5 +1,7 @@
 # coding: utf-8
 
+from xml.sax.saxutils import escape
+
 import twilio.rest
 
 import hub
@@ -82,13 +84,15 @@ class TwilioPlugin_Interface(object):
                 # コマンド毎の処理メソッドの中で context.response への追加が行われている
                 pass
             elif msg.startswith('<'):
+                # 先頭が < の文字列は TwiML としてそのまま出す（変数展開後の文字列で判定している）
                 context.response.append(msg)
             else:
+                # 台詞や利用者入力の展開結果は XML として無害化する
                 if context.is_voicecall:
-                    context.response.append(f'<Say language="ja-jp" voice="woman">{msg}</Say>')
+                    context.response.append(f'<Say language="ja-jp" voice="woman">{escape(msg)}</Say>')
                 else:
                     text = msg if sender is None else f"{sender}:\n{msg}"
-                    context.response.append(f'<Message>{text}</Message>')
+                    context.response.append(f'<Message>{escape(text)}</Message>')
 
         twiml += ''.join(context.response)
         twiml += '</Response>'

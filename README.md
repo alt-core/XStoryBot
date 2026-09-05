@@ -27,7 +27,7 @@
 ## できること
 
 ユーザからの入力テキストに対して、どんな反応を返すのか、スプレッドシート上で定義します。
-条件は、完全一致、または正規表現で記述できます。
+条件は、入力に含まれる語（部分一致）、または正規表現で記述できます。
 
 シナリオはシーン単位で管理されており、シーン毎にユーザへ異なるリアクションを提供できます。
 ユーザ毎に現在どのシーンに居るかが保存されています。
@@ -77,6 +77,8 @@ Cloud Runへデプロイする場合は、利用するGCPプロジェクトを�
 - https://console.developers.google.com/apis/api/sheets.googleapis.com/overview
   - 展開先のプロジェクトにて、Sheets API を有効化
 - 同様の手順で Google Cloud Storage も有効化
+- Firestore に複合 index を作成（collection `group_message_tasks`、`bot_name` 昇順 + `created_at` 降順）
+  - ダッシュボードのグループ配信履歴で使います。未作成の場合はその一覧だけが失敗し、ログに作成用URLが出ます
 - GCP のダッシュボードでサービスアカウントを作成
   - json 形式でクレデンシャルファイルをダウンロード
 - Google Sheets でシナリオのスプレッドシートを作成
@@ -89,20 +91,22 @@ Cloud Runへデプロイする場合は、利用するGCPプロジェクトを�
   - Twilio の電話番号を取得し、必要な情報をメモ
   - Twilio の webhook に 〜/twilio/callback/＜botname＞ を設定
 
-続いて、設定ファイルと環境変数を準備します。ローカルで直接実行する場合は、次のようにローカル用の設定を作成します。
+続いて、設定ファイルと環境変数を準備します。初回に記入例をコピーし、コンテンツ用の設定を作成します。既存の`settings.yaml`がある場合は上書きしないでください。
 
     > cp settings.yaml.template settings.yaml
 
-`settings.yaml`を必要に応じて編集し、`.env.template`に列挙された環境変数を実行環境へ設定してください。Dockerイメージでは`settings.yaml`は取り込まず、`settings.yaml.template`をイメージ内の設定として使うため、コンテナ用のBot・plugin構成はこちらを編集します。`XSBOT_DEPLOY_ENV`には適用する環境別設定（例: `prod`、`stg`、`dev`、`test`、`local`）を指定します。`XSBOT_CLOUD_PROVIDER`は`gcp`または`aws`を必ず明示し、未設定時は誤ったbackendへ接続せず起動を停止します。
+`settings.yaml`を必要に応じて編集し、`.env.template`に列挙された環境変数を実行環境へ設定してください。ローカル実行とDockerイメージは同じ`settings.yaml`を使います。ファイルが無い場合や空の場合、Dockerビルドは停止します。`settings.yaml`は公開Gitへ追加せず、秘密値は直書きせずに`!env`等で実行環境から渡してください。別コンテンツの設定やバックアップはビルド対象ディレクトリの外に保管します。`XSBOT_DEPLOY_ENV`には適用する環境別設定（例: `prod`、`stg`、`dev`、`test`、`local`）を指定します。`XSBOT_CLOUD_PROVIDER`は`gcp`または`aws`を必ず明示し、未設定時は誤ったbackendへ接続せず起動を停止します。
 
 GCPとGoogle Sheetsで使うサービスアカウントJSONはコンテナイメージへ含めず、Secret Managerから読み取り専用ファイルとしてマウントし、それぞれのコンテナ内パスを`GOOGLE_APPLICATION_CREDENTIALS`と`SHEETS_SERVICE_ACCOUNT`へ指定してください。同じサービスアカウントを使う場合は、両方に同じパスを指定できます。
 
 sheet_id は Google Sheets の編集時に URL に含まれるランダム英数字です。
 api_token は、WebAPI などでの認証のために使われる情報です。必ず独自の値を設定してください。
 
-利用するpluginとBot interfaceは、ローカルでは`settings.yaml`、コンテナでは`settings.yaml.template`で設定します。
+利用するpluginとBot interfaceは`settings.yaml`で設定します。`settings.yaml.template`は記入例として維持します。
 
 設定後、`Dockerfile`からコンテナイメージを一度ビルドし、同じイメージをCloud RunのAPI用サービスとビルダー用サービスへデプロイします。API用は既定の`app:app`を使い、ビルダー用だけ`XSBOT_APP_MODULE=app_builder:app`を設定します。それぞれのURLを`XSBOT_APP_BASE_URL`と`XSBOT_BUILDER_BASE_URL`へ指定し、Cloud Tasksには同じプロジェクト・リージョンで`build-queue`、`action-queue`、`group-message-queue`の3キューを作成します。現行のTaskQueueはOIDCトークンを付けないため、両サービスはCloud IAMで未認証HTTP呼び出しを許可し、保護が必要なrouteはWebhook署名、フォーム認証、または`X-API-Token`で保護します。
+
+Cloud RunのCPU、メモリ、最小・最大インスタンス数は、Cloud Runサービス側で設定してください。
 
 現行GCP実装はシナリオとメディアをオブジェクトACLで公開します。そのため、保存先にはオブジェクト単位の公開を許す専用バケットが必要で、Uniform bucket-level accessとPublic Access Preventionは有効にできません。バケット全体を公開する必要はありません。
 
@@ -114,7 +118,11 @@ AWS CLI、AWS SAM CLI、DockerとAWS認証情報、既存のECR repositoryを準
 
 管理者認証JSONは`python3 tools/generate_admin_auth.py`で生成できます。
 
-`AWS_REGION`、`XSBOT_AWS_STACK_NAME`、`XSBOT_AWS_ECR_REPOSITORY`、`XSBOT_AWS_ENVIRONMENT`、`XSBOT_AWS_SHEET_ID`、`XSBOT_AWS_SHEETS_CREDENTIAL_PARAMETER`、`XSBOT_AWS_ADMIN_AUTH_PARAMETER`、`XSBOT_AWS_RUNTIME_SECRETS_PARAMETER`を環境変数に設定し、`./deploy_aws.sh`を実行します。通常のruntime秘密値そのものはスクリプトへ渡しません。Webchatを有効にする場合は、`XSBOT_WEBCHAT_ENABLED=true`、`XSBOT_WEBCHAT_SIGNING_KEY`、`XSBOT_WEBCHAT_SCENARIO_URI`も必要です。詳細は[Webchatガイド](./docs/webchat.md)を参照してください。
+`AWS_REGION`、`XSBOT_AWS_STACK_NAME`、`XSBOT_AWS_ECR_REPOSITORY`、`XSBOT_AWS_ENVIRONMENT`、`XSBOT_AWS_SHEET_ID`、`XSBOT_AWS_SHEETS_CREDENTIAL_PARAMETER`、`XSBOT_AWS_ADMIN_AUTH_PARAMETER`、`XSBOT_AWS_RUNTIME_SECRETS_PARAMETER`を環境変数に設定し、`./deploy_aws.sh`を実行します。`XSBOT_AWS_ALARM_EMAIL`を設定すると、DLQ・HTTP API 5xx・Webchat errorのalarmがそのアドレスへ通知されます（初回はSNSの購読確認メールを承認してください）。通常のruntime秘密値そのものはスクリプトへ渡しません。Webchatを有効にする場合は、`XSBOT_WEBCHAT_ENABLED=true`、`XSBOT_WEBCHAT_SIGNING_KEY`、`XSBOT_WEBCHAT_SCENARIO_URI`も必要です。詳細は[Webchatガイド](./docs/webchat.md)を参照してください。
+
+更新時に未設定のWebchat設定・通知先は、前回値を維持します。既にWebchatが有効なstackを通常更新する場合は、`XSBOT_WEBCHAT_ENABLED`を未設定にします。明示した`false`は無効化、明示したepochは互換性の変更です。許可origin・通知先は空文字を明示すると消去できます。既存の`.env`に設定が残っている場合も明示値として扱うため、維持したい項目はexportしないでください。Webchatのimageは、有効状態の指定を省略しても更新されます。
+
+`.env.template`のAWSデプロイ入力を設定すれば、table、queue、subnetなどのruntime値はSAMが各実行環境へ供給します。これらを手入力するのはローカルからAWS backendを直接使う場合です。`.env`ファイルは自動では読み込まれないため、必要な値を環境変数としてexportしてから実行してください。
 
 API、2つのworker、Fargateで同じECR imageを共用するため、スクリプトはDockerで一度だけ`linux/amd64` imageをbuild/pushし、`ImageUri`をSAMへ渡します。同一imageの再buildを避けるため`sam build`は実行しません。
 

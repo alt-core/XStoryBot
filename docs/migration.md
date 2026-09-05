@@ -10,7 +10,7 @@ GAE用のデプロイ設定は含まれていません。GCPではAPI用・ビ�
 
 ## 2. 設定を作り直す
 
-`settings.yaml.template`と`.env.template`を基に、Bot、plugin、環境変数を設定します。実環境の設定ファイルや認証情報をリポジトリまたはDockerイメージへコピーしないでください。
+`settings.yaml.template`を初回に`settings.yaml`へコピーし、Botとpluginを設定します。ローカル実行とDockerはこの`settings.yaml`を使います。コンテナ用にtemplateを直接編集していた場合は、その内容を非公開の`settings.yaml`へ移してください。ファイルが無い場合や空の場合はビルドが停止します。秘密値は直書きせず、`.env.template`を参考に実行環境から渡してください。実設定は公開Gitへ追加せず、`.env`や認証情報ファイルはDockerイメージへ含めないでください。
 
 `XSBOT_CLOUD_PROVIDER`には`gcp`または`aws`を必ず明示してください。未指定時にGCPへfallbackする挙動はなく、誤接続を避けるため起動時に失敗します。
 

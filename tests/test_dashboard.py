@@ -47,7 +47,7 @@ def make_error_json(code, message):
     }, ensure_ascii=False)
 
 
-def load_dashboard(initialize_side_effect=None):
+def load_dashboard():
     """外部サービスを初期化せずにdashboard moduleを読み込む。"""
     settings = types.ModuleType('settings')
     settings.DEPLOY_ENV = 'prod'
@@ -72,7 +72,6 @@ def load_dashboard(initialize_side_effect=None):
     settings.SERVICE_SETTINGS = settings.GCP_SETTINGS['services']
 
     auth_middleware = types.ModuleType('auth_middleware')
-    auth_middleware.initialize = Mock(side_effect=initialize_side_effect)
 
     def auth_required(state_changing=False):
         def decorator(func):
@@ -236,7 +235,6 @@ class DashboardTest(unittest.TestCase):
         self.module, self.dependencies = load_dashboard()
 
     def test_認証秘密値を読まずにdashboardをimportする(self):
-        self.dependencies.auth_middleware.initialize.assert_called_once_with()
         self.dependencies.auth_middleware.verify_credentials.assert_not_called()
 
     def test_public_shell_does_not_embed_bot_group_or_private_values(self):
@@ -282,7 +280,6 @@ class DashboardTest(unittest.TestCase):
         info.assert_called_once_with('Dashboard accessed by: admin')
 
     def test_every_management_api_is_authenticated_and_no_duplicate_routes(self):
-        self.dependencies.auth_middleware.initialize.assert_called_once_with()
         expected_rules = {
             '/dashboard/api/config',
             '/dashboard/build_async/<bot_name>',

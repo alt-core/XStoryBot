@@ -19,7 +19,7 @@ Parameters:
   SheetId:
     Type: String
     MinLength: 1
-    Description: settings.yaml.templateの単一Botが参照するGoogle Sheets ID
+    Description: settings.yamlのSHEETS_IDへ渡すGoogle Sheets ID
   GoogleSheetsCredentialParameterName:
     Type: AWS::SSM::Parameter::Name
     Description: Google SheetsサービスアカウントJSONを保存したSecureString名
@@ -68,8 +68,13 @@ Parameters:
     Type: Number
     Default: 20
     MinValue: 1
+  AlarmEmail:
+    Type: String
+    Default: ''
+    Description: alarm通知を受け取るメールアドレス。空なら通知先を作らない（alarm状態だけ残る）
 Conditions:
   WebchatEnabledCondition: !Equals [!Ref WebchatEnabled, 'true']
+  AlarmEmailCondition: !Not [!Equals [!Ref AlarmEmail, '']]
   WebchatImageSpecifiedCondition: !Not [!Equals [!Ref WebchatImageUri, '']]
 Globals:
   Function:
@@ -289,7 +294,9 @@ Resources:
     Type: AWS::SQS::Queue
     Properties:
       MessageRetentionPeriod: 345600
-      VisibilityTimeout: 360
+      # worker の Timeout(300秒)以上が必須。AWS 推奨の6倍(1800)より短くし、
+      # 失敗した task が再配信されるまでの待ち時間を優先する
+      VisibilityTimeout: 600
       SqsManagedSseEnabled: true
       RedrivePolicy:
         deadLetterTargetArn: !GetAtt DeadLetterQueue.Arn
@@ -667,7 +674,6 @@ Resources:
         Variables:
           XSBOT_APP_MODULE: app_webchat:app
           AWS_LWA_READINESS_CHECK_PATH: /healthz
-          AWS_LWA_ERROR_STATUS_CODES: '500'
           XSBOT_AWS_RUNTIME_SECRETS_PARAMETER: ''
           XSBOT_WEBCHAT_ENABLED: 'true'
           XSBOT_WEBCHAT_SIGNING_KEY: !Ref WebchatSigningKey
@@ -702,7 +708,8 @@ Resources:
       FunctionName: !Sub '${AWS::StackName}-action-worker'
       ImageUri: !Ref ImageUri
       MemorySize: 1024
-      Timeout: 60
+      # @delay で非同期化した scene の外部HTTP（既定timeout 120秒）を収める
+      Timeout: 300
       Role: !GetAtt WorkerRole.Arn
       Environment:
         Variables:
@@ -941,6 +948,37 @@ Resources:
               awslogs-region: !Ref AWS::Region
               awslogs-stream-prefix: builder
 
+  AlarmTopic:
+    Type: AWS::SNS::Topic
+
+  AlarmEmailSubscription:
+    Type: AWS::SNS::Subscription
+    Condition: AlarmEmailCondition
+    Properties:
+      TopicArn: !Ref AlarmTopic
+      Protocol: email
+      Endpoint: !Ref AlarmEmail
+
+  ApiServerErrorAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmDescription: XStoryBotのHTTP APIが5xxを返しています
+      Namespace: AWS/ApiGateway
+      MetricName: 5xx
+      Dimensions:
+        - Name: ApiId
+          Value: !Ref HttpApi
+      Statistic: Sum
+      Period: 60
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref AlarmTopic
+      OKActions:
+        - !Ref AlarmTopic
+
   DeadLetterAlarm:
     Type: AWS::CloudWatch::Alarm
     Properties:
@@ -956,6 +994,10 @@ Resources:
       Threshold: 1
       ComparisonOperator: GreaterThanOrEqualToThreshold
       TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref AlarmTopic
+      OKActions:
+        - !Ref AlarmTopic
 
   WebchatErrorAlarm:
     Type: AWS::CloudWatch::Alarm
@@ -973,6 +1015,10 @@ Resources:
       Threshold: 1
       ComparisonOperator: GreaterThanOrEqualToThreshold
       TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref AlarmTopic
+      OKActions:
+        - !Ref AlarmTopic
 
 Outputs:
   ApiUrl:
@@ -1000,6 +1046,9 @@ Outputs:
     Value: !Ref GroupQueue
   DeadLetterQueueUrl:
     Value: !Ref DeadLetterQueue
+  AlarmTopicArn:
+    Description: alarm通知のSNS topic。Slack等を購読させる場合はこのtopicへ
+    Value: !Ref AlarmTopic
   SchedulerRoleArn:
     Value: !GetAtt SchedulerRole.Arn
   BuildClusterArn:

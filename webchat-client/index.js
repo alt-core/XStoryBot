@@ -123,7 +123,7 @@ const makeHead = (key, response) => ({
   stateId: response.state.id,
   stateRevision: response.state.revision,
   stateToken: response.state_token,
-  activeMessageIds: (response.messages || []).map((message) => message.id),
+  activeResponse: response.messages || [],
   updatedAt: Date.now(),
 });
 
@@ -175,10 +175,7 @@ class IndexedDbStorage {
       && typeof stored.head.stateId === 'string'
       && Number.isInteger(stored.head.stateRevision)
       && typeof stored.head.stateToken === 'string'
-      && (
-        Array.isArray(stored.head.activeMessageIds)
-        || Array.isArray(stored.head.activeResponse)
-      )
+      && Array.isArray(stored.head.activeResponse)
     );
     const validTurns = stored.turns.every((turn) => (
       typeof turn.id === 'string'
@@ -249,19 +246,15 @@ class IndexedDbStorage {
 
   async _pruneOldest() {
     await this.open();
-    await new Promise((resolve, reject) => {
-      const tx = this.database.transaction([TURNS], 'readwrite');
-      const store = tx.objectStore(TURNS);
-      tx.oncomplete = () => resolve();
-      tx.onabort = () => reject(tx.error || new Error('IndexedDB transaction aborted'));
-      tx.onerror = () => {};
-      const listRequest = store.index('conversationKey').getAll(this.key);
-      listRequest.onsuccess = () => {
-        const existing = listRequest.result || [];
-        existing.sort((a, b) => a.sequence - b.sequence);
-        if (existing.length) store.delete(existing[0].id);
-      };
-    });
+    const tx = this.database.transaction([TURNS], 'readwrite');
+    const store = tx.objectStore(TURNS);
+    const listRequest = store.index('conversationKey').getAll(this.key);
+    listRequest.onsuccess = () => {
+      const existing = listRequest.result || [];
+      existing.sort((a, b) => a.sequence - b.sequence);
+      if (existing.length) store.delete(existing[0].id);
+    };
+    await transactionAsPromise(tx);
   }
 
   _queueDeleteTurns(transaction) {
@@ -296,24 +289,20 @@ class IndexedDbStorage {
 const snapshotFromStorage = (stored, persistence, overrides = {}) => {
   const turns = stored.turns || [];
   const messages = turns.flatMap((turn) => turn.messages || []);
-  const activeIds = new Set(
-    stored.head?.activeMessageIds
-    || (stored.head?.activeResponse || []).map((message) => message.id),
-  );
-  return immutableSnapshot({
+  return {
     status: stored.head ? 'ready' : 'idle',
     persistence,
     stateId: stored.head?.stateId || null,
     stateRevision: stored.head?.stateRevision ?? null,
     turns,
     messages,
-    activeResponse: messages.filter((message) => activeIds.has(message.id)),
+    activeResponse: stored.head?.activeResponse || [],
     error: null,
     notice: persistence === 'memory'
       ? 'このページを閉じると進行が失われます。'
       : null,
     ...overrides,
-  });
+  };
 };
 
 export function createWebchatClient(options) {
@@ -664,10 +653,23 @@ export function createWebchatClient(options) {
       return transact({ type: 'start' });
     },
     async clearHistory() {
-      await initialize();
-      await runLocked(async () => storage.clearHistory());
-      notify();
-      return refresh();
+      try {
+        await initialize();
+        await runLocked(async () => storage.clearHistory());
+        notify();
+        return await refresh();
+      } catch (error) {
+        if (error instanceof WebchatClientError) throw error;
+        const corrupt = error instanceof CorruptStorageError;
+        const clientError = new WebchatClientError(
+          corrupt
+            ? '保存した進行の形式が不正です。「最初から」で再開してください。'
+            : 'browserの保存領域を更新できませんでした。',
+          { code: corrupt ? 'storage-corrupt' : 'persistence-error' },
+        );
+        emit({ ...snapshot, status: 'error', error: clientError });
+        throw clientError;
+      }
     },
     subscribe(listener) {
       listeners.add(listener);

@@ -16,19 +16,6 @@
     location: !env GOOGLE_CLOUD_LOCATION
     credentials_path: !env GOOGLE_APPLICATION_CREDENTIALS
     storage_bucket: !env XSBOT_STORAGE_BUCKET
-    # Cloud Run設定
-    cloud_run:
-      service: !env GOOGLE_CLOUD_PROJECT
-      region: !env GOOGLE_CLOUD_LOCATION
-      memory: "256Mi"
-      cpu: 1
-      min_instances: 1
-      max_instances: 3
-      builder_service: !format
-        - "{0}-builder"
-        - !env GOOGLE_CLOUD_PROJECT
-      builder_memory: "2Gi"
-      builder_cpu: 1
     # サービスのドメイン設定
     services:
       app:
@@ -162,10 +149,6 @@
 
     timestamp:
       timezone: "Asia/Tokyo"
-
-    render_text:
-      text2image:
-        font_path: "plugin/render_text/font/ipaexg.ttf"
 
     mock_line:
       error_rate: 0

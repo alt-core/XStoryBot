@@ -25,9 +25,9 @@ Webchatは、Player状態を署名付きtokenとしてbrowserへ返す同期inte
 
 新規stackでは、まずWebchat無効のままbucket／builderを作成し、Scenario artifactをbuildしてから、そのURIを指定する二回目のdeployでWebchatを有効にします。
 
-`deploy_aws.sh`を使う場合は、同名の`XSBOT_WEBCHAT_*`環境変数を読み取り、上記parameterへ渡します。追加originと外部HTTP／media originは空のまま省略できます。
+`deploy_aws.sh`を使う場合は、設定された`XSBOT_WEBCHAT_*`環境変数だけを上記parameterへ渡し、更新時の未設定項目は前回値を維持します。既に有効なstackの通常更新では`XSBOT_WEBCHAT_ENABLED`を未設定にします。明示的に`true`を指定するときは鍵とScenario URIも必要で、`false`を指定するとWebchatを無効化します。追加originと外部HTTP／media originは明示した空文字で消去できます。鍵・Scenario URI・epoch・throttleに空文字は指定できません。imageは有効状態の指定を省略しても更新されます。
 
-署名鍵は通常のScenario更新やdeployでは維持します。鍵漏洩時は新しい鍵を注入したLambda versionへaliasを切り替え、旧token全体の失効を受け入れます。Webchat Lambdaは署名鍵を環境変数としてversionへ固定し、起動時やturnごとにParameter StoreまたはDynamoDBを読みません。
+署名鍵は`deploy_aws.sh`の引数として渡すため、`sam deploy`の実行時に操作者の端末へ表示されます。個人の端末で実行する運用を前提にしています。署名鍵は通常のScenario更新やdeployでは維持します。鍵漏洩時は新しい鍵を注入したLambda versionへaliasを切り替え、旧token全体の失効を受け入れます。Webchat Lambdaは署名鍵を環境変数としてversionへ固定し、起動時やturnごとにParameter StoreまたはDynamoDBを読みません。
 
 ## Scenario更新
 
@@ -39,6 +39,8 @@ Webchatは、Player状態を署名付きtokenとしてbrowserへ返す同期inte
 Webchat processは固定URIのdigestを検証してScenarioを読みます。DynamoDB上の最新Scenario pointerは参照しません。
 
 `update_webchat_scenario.sh`は指定したS3 artifactの存在確認、変更内容の表示、確認後のstack更新、完了待ちまでを一度に行います。Webchat Lambda以外の変更を検出した場合はchange setを削除して停止します。compatibility epoch変更とimage build／pushは行いません。非互換更新ではこのscriptを使わず、epoch変更を含むchange setを別途レビューしてください。`deploy_aws.sh`はcodeを含む通常deploy用です。
+
+templateに基盤変更（worker、queue、alarmなど）を含む版を取り込んだ直後は、先に一度`deploy_aws.sh`でstackを更新してください。その前に`update_webchat_scenario.sh`を実行すると、旧stackに無いparameterへ前回値を要求するエラー、またはWebchat以外の変更の検出で停止します。通常のScenario更新のたびに必要な手順ではありません。
 
 ## APIとclient
 
@@ -69,6 +71,8 @@ await client.sendText('こんにちは');
 - React hook: `webchat-client/examples/react/useWebchat.js`
 - plain DOM参照UI: `GET /chat/{bot}`
 
+参照UIとその静的配信（`/chat/{bot}`、`/static/webchat/*`、`/webchat-client/*`）は動作確認用です。本番コンテンツではheadless clientをWebクライアント（SvelteやReactのアプリ）へ組み込み、そのアプリのoriginを`allowed_origins`へ登録して配信する構成を推奨します。参照UIのrouteを公開したままにする場合、その静的配信もWebchat Lambdaの負荷になる点は変わりません。
+
 npm等への公開は別作業です。現時点ではrepository内のpackageをworkspace／file dependencyとして取り込むか、配布物へ同梱してください。
 
 参照UIのモックと回帰テストは[開発用確認手順](./webchat-development.md)へ分けています。
@@ -78,6 +82,8 @@ npm等への公開は別作業です。現時点ではrepository内のpackageを
 headless clientはstateと履歴をIndexedDB transactionで同時に更新します。Web Locksが利用できるbrowserでは同じ会話のnetwork requestも直列化し、利用できない場合はIndexedDBのstate ID比較で先にcommitされた応答だけを採用して履歴破損を防ぎます。
 
 別tabで先に進行していた場合、後から操作したtabは最新の履歴へ更新し、入力の再確認を促します。BroadcastChannelは更新通知にだけ使い、利用できない場合はlocalStorageへ小さな更新beaconだけを書きます。state tokenと履歴本文をlocalStorageへ保存しません。
+
+保存形式は最新応答を含むheadだけを読みます。それより前のclientが保存した進行は「保存した進行の形式が不正」となるため、「最初から」で再開してください。
 
 IndexedDBを利用できない環境ではmemory-onlyへ切り替え、pageを閉じると進行が失われることをsnapshotの`notice`で通知します。private browsingではsession終了時の消去、browserのstorage evictionでは保存内容の消去が起こり得ます。
 

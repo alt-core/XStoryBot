@@ -19,9 +19,6 @@ import auth
 app = Bottle()
 
 
-auth_middleware.initialize()
-
-
 def abort_json(code, msg):
     abort(code, utility.make_error_json(code, msg))
 

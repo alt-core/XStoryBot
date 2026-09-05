@@ -1524,7 +1524,7 @@ class Director:
                             del self.context.status[f'$${i+1}']
                     for i, value in enumerate(options[2:]):
                         if isinstance(value, Expression):
-                            value = expr.eval(self.context.env, self.context.env.matches)
+                            value = value.eval(self.context.env, self.context.env.matches)
                         self.context.status[f'$${i+1}'] = value
                     frame = json.dumps({
                         'return': return_label,

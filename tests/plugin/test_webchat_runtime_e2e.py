@@ -15,8 +15,6 @@ from plugin.line import default_commands, quick_reply
 from plugin.webchat import more as webchat_more
 from plugin.webchat.interface import WebchatInterfaceFactory
 from plugin.webchat import webapi
-import runtime
-from runtime import BotRuntime
 from tests.test_api_endpoints import TestApp
 
 
@@ -24,6 +22,22 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 ORIGIN = 'https://app.example.test'
 SIGNING_KEY = base64.urlsafe_b64encode(
     b'webchat-runtime-e2e-signing-key!').decode('ascii').rstrip('=')
+
+
+def _load_runtime_module():
+    """実設定を読まず、実BotRuntimeを隔離loadする。"""
+    settings = types.ModuleType('settings')
+    settings.CONSTANTS = {}
+    module_name = 'tests._webchat_runtime_e2e_runtime'
+    spec = importlib.util.spec_from_file_location(
+        module_name, PROJECT_ROOT / 'runtime.py')
+    module = importlib.util.module_from_spec(spec)
+    with patch.dict(sys.modules, {
+        'settings': settings,
+        module_name: module,
+    }):
+        spec.loader.exec_module(module)
+    return module
 
 
 def _load_scenario_module():
@@ -54,6 +68,7 @@ def _load_scenario_module():
 class WebchatRuntimeE2ETest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
+        cls.runtime = _load_runtime_module()
         cls._commands = (
             list(commands.catalog),
             {key: list(value) for key, value in commands.catalog_map.items()},
@@ -70,7 +85,6 @@ class WebchatRuntimeE2ETest(unittest.TestCase):
             dict(hub.scenario_loader_factory_map),
             {key: list(value) for key, value in hub.method_cache.items()},
         )
-        cls._director_class = runtime._director_class
         cls._webapi_callback = webapi._get_bot_callback
         cls._expression = (
             expression.EXPRESSION_VERSION,
@@ -196,12 +210,12 @@ class WebchatRuntimeE2ETest(unittest.TestCase):
             (cls.scenario_module.ScenarioBuilder
              .build_video) = original_video_builder
 
-        cls.bot = BotRuntime(
+        cls.bot = cls.runtime.BotRuntime(
             'bot', {'webchat': cls.interface}, scenario_loader=None)
         cls.bot.scenario = cls.scenario
         cls.bot.scenario_uri = cls.interface.scenario_uri
         cls.interface._scenario_loaded = True
-        runtime._director_class = cls.scenario_module.Director
+        cls.runtime._director_class = cls.scenario_module.Director
         webapi.configure(lambda name: cls.bot if name == 'bot' else None)
         cls.app = TestApp(webapi.app)
 
@@ -220,7 +234,6 @@ class WebchatRuntimeE2ETest(unittest.TestCase):
         hub.scenario_loader_factory_map.update(cls._hub[3])
         hub.method_cache.update(cls._hub[4])
 
-        runtime._director_class = cls._director_class
         webapi._get_bot_callback = cls._webapi_callback
         (
             expression.EXPRESSION_VERSION,

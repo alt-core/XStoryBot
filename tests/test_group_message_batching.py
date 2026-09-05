@@ -262,6 +262,31 @@ class GroupBatchBoundaryTest(GroupBatchTestBase):
         self.assertEqual(result['success_count'], total_count)
 
 
+class GroupMemberDeliveryTest(GroupBatchTestBase):
+    def test_handle_actionのNoneは失敗として数える(self):
+        # runtime.handle_action は送信の再試行を尽くすと None を返す
+        self.manager.bot.handle_action.return_value = None
+
+        self.assertEqual(
+            (False, 'handle_action failed'),
+            self.manager._process_member('mock-line:user-1', self.task))
+
+    def test_handle_actionの応答があれば成功に数える(self):
+        self.manager.bot.handle_action.return_value = 'OK'
+
+        self.assertEqual(
+            (True, None),
+            self.manager._process_member('mock-line:user-1', self.task))
+
+    def test_通常taskはグループメンバーを1回だけ取得する(self):
+        self._set_members(3)
+        self.db.process_members_in_parallel.return_value = (3, 0, [], [])
+
+        self.manager.process_batch('message-1', 0, 2000, max_workers=1, max_rate=100)
+
+        self.module.users.get_group_members.assert_called_once_with('test-group')
+
+
 class GroupBatchAccumulationTest(GroupBatchTestBase):
     def test_複数batchの成功失敗数と失敗者を累積する(self):
         self._set_members(500)
@@ -402,7 +427,6 @@ class GroupMessageTaskDBTest(unittest.TestCase):
 
     def test_明示空listはGCSへfallbackしない(self):
         with (
-            patch.object(self.db, 'get_task', return_value=None),
             patch.object(
                 self.db,
                 'get_members_from_storage',
@@ -413,7 +437,6 @@ class GroupMessageTaskDBTest(unittest.TestCase):
                 'create_rate_limiter',
                 return_value=lambda function: function,
             ),
-            patch.object(self.db, 'update_task_status'),
             patch.object(self.db, '_store_successful_members'),
             patch.object(self.db, '_store_error_logs'),
         ):
@@ -426,12 +449,12 @@ class GroupMessageTaskDBTest(unittest.TestCase):
             )
 
         get_members.assert_not_called()
+        self.assertEqual(self.state_store.mock_calls, [])
         self.assertEqual(result, (0, 0, [], []))
 
     def test_NoneだけがGCSへfallbackする(self):
         processed = []
         with (
-            patch.object(self.db, 'get_task', return_value=None),
             patch.object(
                 self.db,
                 'get_members_from_storage',
@@ -442,7 +465,6 @@ class GroupMessageTaskDBTest(unittest.TestCase):
                 'create_rate_limiter',
                 return_value=lambda function: function,
             ),
-            patch.object(self.db, 'update_task_status'),
             patch.object(self.db, '_store_successful_members'),
             patch.object(self.db, '_store_error_logs'),
         ):
@@ -458,8 +480,48 @@ class GroupMessageTaskDBTest(unittest.TestCase):
             )
 
         get_members.assert_called_once_with('message-1')
+        self.assertEqual(self.state_store.mock_calls, [])
         self.assertEqual(processed, ['mock-line:user-1'])
         self.assertEqual(result[:3], (1, 0, ['mock-line:user-1']))
+
+    def test_並列処理はtaskDBを使わずbatchの成功者とエラーログを保存する(self):
+        processed = []
+
+        def process_member(member_id):
+            processed.append(member_id)
+            if member_id == 'exception':
+                raise ValueError('送信例外')
+            if member_id == 'failure':
+                return False, '送信失敗'
+            return True, None
+
+        with patch.object(
+            self.db, 'create_rate_limiter',
+            return_value=lambda function: function,
+        ):
+            result = self.db.process_members_in_parallel(
+                'message-1_batch_0', process_member,
+                max_workers=1, max_rate=100,
+                member_ids=['success', 'failure', 'exception'],
+            )
+
+        self.assertCountEqual(processed, ['success', 'failure', 'exception'])
+        self.assertEqual(self.state_store.mock_calls, [])
+        self.assertEqual(result[:3], (1, 2, ['success']))
+        self.assertCountEqual(
+            [(member, error) for member, error, _ in result[3]],
+            [('failure', '送信失敗'), ('exception', '送信例外')],
+        )
+        saved = {
+            args[0]: json.loads(args[1])
+            for args, _ in self.object_store.store_private.call_args_list
+        }
+        self.assertEqual(saved, {
+            'group_tasks/message-1_batch_0/successful_members.json': ['success'],
+            'group_tasks/message-1_batch_0/error_logs.json': [
+                list(error) for error in result[3]
+            ],
+        })
 
     def test_499人成功1人失敗なら再送対象は失敗者だけになる(self):
         failed_member = 'mock-line:user-499'

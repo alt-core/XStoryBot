@@ -7,6 +7,7 @@ import time
 # import urllib3
 
 from linebot import LineBotApi, WebhookParser
+from linebot.exceptions import LineBotApiError
 from linebot.models import MessageEvent, PostbackEvent, VideoPlayCompleteEvent, BeaconEvent, FollowEvent, UnfollowEvent, JoinEvent, LeaveEvent, MemberJoinedEvent, MemberLeftEvent, TextMessage, ImageMessage, VideoMessage, AudioMessage, FileMessage, LocationMessage, StickerMessage, TextSendMessage, ImageSendMessage, VideoSendMessage, AudioSendMessage, TemplateSendMessage, \
     CarouselColumn, ImagemapSendMessage, ImagemapArea, MessageImagemapAction, Sender
 
@@ -28,6 +29,14 @@ LINE_API_RETRY_SLEEP = 0.1 # リトライ時のスリープ時間
 LINE_ABORT_DURATION = 0 # timestamp からこれ以上遅れていると実行を諦める / 0 は無効を表す
 
 
+def _error_status_code(error):
+    # LineBotApiError は status_code を持つ。requests 系の例外は response 経由で持つことがある
+    status = getattr(error, 'status_code', None)
+    if status is None:
+        status = getattr(getattr(error, 'response', None), 'status_code', None)
+    return status
+
+
 class LinePlugin_ActionContext(ActionContext):
     def __init__(self, bot_name, interface, user, action, attrs, event):
         self.event = event
@@ -43,7 +52,7 @@ class LinePlugin_Interface(object):
         self.params = params
         self.line_access_token = params['line_access_token']
         self.line_channel_secret = params['line_channel_secret']
-        self.line_bot_api = LineBotApi(self.line_access_token, timeout=30)
+        self.line_bot_api = self._new_line_bot_api()
         self.allow_special_action_text_for_debug = params.get('allow_special_action_text_for_debug', False)
         self.parser = WebhookParser(self.line_channel_secret)
         self.sender_icon_urls = params.get('sender_icon_urls', {})
@@ -54,6 +63,9 @@ class LinePlugin_Interface(object):
         self.line_api_retry_sleep = float(params.get('line_api_retry_sleep', LINE_API_RETRY_SLEEP))
         self.line_abort_duration_ms = float(params.get('line_abort_duration', LINE_ABORT_DURATION)) * 1000
         self.line_abort_duration_dont_break = not not params.get('line_abort_duration_dont_break', False)
+
+    def _new_line_bot_api(self):
+        return LineBotApi(self.line_access_token, timeout=30)
 
     def get_service_list(self):
         return {'line': self}
@@ -139,10 +151,15 @@ class LinePlugin_Interface(object):
             try:
                 self._reply_message(context, msgs, retry_key=retry_key)
                 return 'OK' # LINE では respond_reaction の返値は見ていない
-            except RequestException as e:
-                if e.response is not None and e.response.status_code == 409:
+            except (RequestException, LineBotApiError) as e:
+                status = _error_status_code(e)
+                if status == 409:
                     logging.warning('[LINE] Server already processed the request')
                     return 'OK'
+                if status is not None and 400 <= status < 500 and status != 429:
+                    # リクエスト自体の誤り（reply token の期限切れなど）は再送しても直らない
+                    logging.error(f'[LINE] Request rejected: {status} {str(e)}')
+                    raise
                 logging.error(f'[LINE] Failed to reply: {str(e)}')
                 last_e = e
                 time.sleep(retry_sleep)
@@ -159,8 +176,11 @@ class LinePlugin_Interface(object):
                 # unfollow イベントなどは reply_token が存在しない
                 logging.info(f'event {context.event.type} doesnt have reply_token: {messages}')
         else:
-            # API 経由で起動された場合は reply_token がない
-            self.line_bot_api.push_message(context.source_id, messages, retry_key=retry_key)
+            # API 経由で起動された場合は reply_token がない。
+            # SDK の push_message は retry key を client 共有の headers に保存し、以降の全送信に付ける。
+            # グループ配信の並行 push で key が混ざる（同じ key の後発が 409 → 送信済み扱い）のを避けるため、
+            # push は呼出しごとに専用 client を使う
+            self._new_line_bot_api().push_message(context.source_id, messages, retry_key=retry_key)
 
     def _make_sender(self, sender):
         if sender is None:

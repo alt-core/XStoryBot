@@ -20,7 +20,8 @@ class ContainerConfigurationTest(unittest.TestCase):
             '/lambda-adapter /opt/extensions/lambda-adapter',
         ])
         self.assertIn('USER xstorybot', dockerfile)
-        self.assertIn('settings.yaml.template settings.yaml', dockerfile)
+        self.assertIn('test -s settings.yaml', dockerfile)
+        self.assertNotIn('cp settings.yaml.template settings.yaml', dockerfile)
         self.assertIn('${XSBOT_APP_MODULE:-app:app}', dockerfile)
         self.assertIn('/healthz', dockerfile)
         self.assertIn('gunicorn', dockerfile)

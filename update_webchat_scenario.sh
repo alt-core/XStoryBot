@@ -64,7 +64,8 @@ set -- \
     "ParameterKey=WebchatExternalHttpOrigins,UsePreviousValue=true" \
     "ParameterKey=WebchatMediaOrigins,UsePreviousValue=true" \
     "ParameterKey=WebchatThrottleRate,UsePreviousValue=true" \
-    "ParameterKey=WebchatThrottleBurst,UsePreviousValue=true"
+    "ParameterKey=WebchatThrottleBurst,UsePreviousValue=true" \
+    "ParameterKey=AlarmEmail,UsePreviousValue=true"
 
 aws cloudformation create-change-set \
     --region "$AWS_REGION" \

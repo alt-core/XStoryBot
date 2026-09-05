@@ -435,16 +435,14 @@ class GcpStateStore(StateStore):
         def operation():
             from google.cloud.firestore_v1.base_query import FieldFilter
 
+            # bot_name の等値 + created_at 降順の複合 index が必要（README の GCP 準備を参照）
             query = self.client.collection('group_message_tasks').where(
-                filter=FieldFilter('bot_name', '==', bot_name)).limit(limit)
-            documents = list(query.stream())
-
-            def get_created_at(document):
-                return document.to_dict().get('created_at', 0) or 0
-
+                filter=FieldFilter('bot_name', '==', bot_name)
+            ).order_by(
+                'created_at', direction=self._firestore.Query.DESCENDING
+            ).limit(limit)
             tasks = []
-            for document in sorted(
-                    documents, key=get_created_at, reverse=True)[:limit]:
+            for document in query.stream():
                 task = self._normalize_task_datetimes(document.to_dict())
                 task['id'] = document.id
                 tasks.append(task)

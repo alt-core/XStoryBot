@@ -7,20 +7,15 @@ import types
 import unittest
 from unittest import mock
 
+from linebot.exceptions import LineBotApiError
+import requests
+
 
 TARGET = Path(__file__).resolve().parents[2] / 'plugin' / 'mock_line' / 'interface.py'
 
 
 def load_mock_line_module():
-    requests = types.ModuleType('requests')
-
-    class RequestException(Exception):
-        def __init__(self, *args, response=None):
-            super().__init__(*args)
-            self.response = response
-
-    requests.RequestException = RequestException
-
+    # requests と line-bot-sdk は実物を使い、例外の生成と型の違いをそのまま検証する
     context = types.ModuleType('context')
 
     class ActionContext:
@@ -50,7 +45,6 @@ def load_mock_line_module():
     spec = importlib.util.spec_from_file_location(module_name, TARGET)
     module = importlib.util.module_from_spec(spec)
     with mock.patch.dict(sys.modules, {
-        'requests': requests,
         'context': context,
         'users': users,
         'hub': hub,
@@ -58,12 +52,13 @@ def load_mock_line_module():
         module_name: module,
     }):
         spec.loader.exec_module(module)
-    return module, RequestException, User
+    module.RequestExceptionForTest = requests.RequestException
+    return module, LineBotApiError, User
 
 
 class MockLinePluginTest(unittest.TestCase):
     def setUp(self):
-        self.module, self.RequestException, self.User = load_mock_line_module()
+        self.module, self.LineBotApiError, self.User = load_mock_line_module()
         self.interface = self.module.MockLinePlugin_Interface('testbot', {
             'error_rate': 0,
             'rate_limit_threshold': 3,
@@ -83,10 +78,10 @@ class MockLinePluginTest(unittest.TestCase):
                 self.interface.respond_reaction(self.context, self.reactions), 'OK')
             self.assertEqual(
                 self.interface.respond_reaction(self.context, self.reactions), 'OK')
-            with self.assertRaises(self.RequestException) as captured:
+            with self.assertRaises(self.LineBotApiError) as captured:
                 self.interface.respond_reaction(self.context, self.reactions)
 
-        self.assertEqual(captured.exception.response.status_code, 429)
+        self.assertEqual(captured.exception.status_code, 429)
         self.assertEqual(self.interface.request_count, 3)
 
     def test_message_history_and_context_source_are_preserved(self):
@@ -109,10 +104,25 @@ class MockLinePluginTest(unittest.TestCase):
     def test_forced_rate_limit_uses_429_response(self):
         self.interface.set_force_error('rate_limit')
         with mock.patch.object(self.module.time, 'time', return_value=300.0):
-            with self.assertRaises(self.RequestException) as captured:
+            with self.assertRaises(self.LineBotApiError) as captured:
                 self.interface.respond_reaction(self.context, self.reactions)
-        self.assertEqual(captured.exception.response.status_code, 429)
+        self.assertEqual(captured.exception.status_code, 429)
         self.assertEqual(self.interface.error_count, 1)
+
+    def test_api_errors_use_sdk_exception_and_timeout_uses_requests(self):
+        # 実SDKと同じく、HTTPエラーは LineBotApiError、通信断は RequestException
+        self.interface.rate_limit_threshold = 100  # この test ではレート制限を使わない
+        for error_type, status in (('server_error', 500), ('client_error', 400)):
+            with self.subTest(error_type=error_type):
+                self.interface.set_force_error(error_type)
+                with mock.patch.object(self.module.time, 'time', return_value=300.0):
+                    with self.assertRaises(self.LineBotApiError) as captured:
+                        self.interface.respond_reaction(self.context, self.reactions)
+                self.assertEqual(captured.exception.status_code, status)
+        self.interface.set_force_error('timeout')
+        with mock.patch.object(self.module.time, 'time', return_value=300.0):
+            with self.assertRaises(self.module.RequestExceptionForTest):
+                self.interface.respond_reaction(self.context, self.reactions)
 
 
 if __name__ == '__main__':

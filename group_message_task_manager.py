@@ -132,11 +132,7 @@ class GroupMessageTaskManager:
         if task.get('is_retry'):
             members = GroupMessageTaskDB.get_members_from_storage(task_id)
         else:
-            temp_members = users.get_group_members(group_id)
-            if temp_members is None:
-                return {'error': 'グループが見つかりません'}, 404
-
-            members = users.get_group_members(task['group_id'])
+            members = users.get_group_members(group_id)
 
         if not members:
             self._complete_empty_task(task_id, task)
@@ -189,7 +185,10 @@ class GroupMessageTaskManager:
             interface = self.bot.get_interface(member.service_name)
             if interface is not None:
                 context = interface.create_context(member, task['action'], task['attrs'])
-                self.bot.handle_action(context)
+                result = self.bot.handle_action(context)
+                if result is None:
+                    # handle_action は再試行を尽くすと None を返す。送信できなかったので失敗に数える
+                    return False, 'handle_action failed'
                 return True, None
             else:
                 return False, f"インターフェースが見つかりません: {member.service_name}"

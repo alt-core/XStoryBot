@@ -22,6 +22,14 @@ image / audio / video / button / imagemap / long / more / slow / error
 
 `long`は4メッセージごとに「続きを読む」のQuick Replyを表示し、3回に分けて全12メッセージを確認します。これはScenarioで4メッセージごとに`＞`を置き、`line.quick_reply`の`default_reply`を「続きを読む」にする構成に対応します。
 
+## browser保存テスト
+
+モックserverを起動した状態で、[保存テスト画面](http://127.0.0.1:8765/devtest/storage)を開きます。実IndexedDBを使い、履歴削除後の選択肢保持、再読込、transactionの中断、容量不足時のmemory移行を確認します。画面に成功と確認項目が表示されることを確認してください。失敗時は同じ画面へ例外を表示します。
+
+テスト専用の人工Botの記録だけを作成し、終了時に削除します。外部APIやモックのturn APIへの通信は行いません。
+
+`tests/webchat_storage.browser.test.mjs`はbrowser専用です。`node --test`では実行せず、上記の画面から実行してください。Node回帰テストだけの成功では、IndexedDBの動作を確認したことにはなりません。
+
 ## Node回帰テスト
 
 ```sh

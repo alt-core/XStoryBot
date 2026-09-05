@@ -41,11 +41,6 @@ def _auth_error(status_code, message):
     return HTTPError(status_code, message, Cache_Control='no-store')
 
 
-def initialize():
-    """管理画面認証の初期化入口。秘密値は最初の認証時に取得する。"""
-    return None
-
-
 def _source():
     global _credential_source
     if _credential_source is None:

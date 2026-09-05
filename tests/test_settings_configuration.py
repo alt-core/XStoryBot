@@ -213,10 +213,7 @@ class SettingsTemplateTest(unittest.TestCase):
             'plugin/render_text/font/ipaexg_tate.ttf',
             default['plugins']['line.image_text']['frames']['book']['font_path'],
         )
-        self.assertEqual(
-            'plugin/render_text/font/ipaexg.ttf',
-            default['plugins']['render_text']['text2image']['font_path'],
-        )
+        self.assertNotIn('render_text', default['plugins'])
 
     def test_environment_settings_are_deep_merged(self):
         loaded = self.load_template()
@@ -385,10 +382,13 @@ class IgnoreConfigurationTest(unittest.TestCase):
             self.assertIn('.netrc', lines, filename)
             self.assertIn('_netrc', lines, filename)
 
-    def test_local_settings_are_excluded_from_deployment_contexts(self):
+    def test_実設定は公開Gitから除外しデプロイには含める(self):
+        gitignore = (PROJECT_ROOT / '.gitignore').read_text(
+            encoding='utf-8').splitlines()
+        self.assertIn('settings.yaml', gitignore)
         for filename in ('.dockerignore', '.gcloudignore'):
             lines = (PROJECT_ROOT / filename).read_text(encoding='utf-8').splitlines()
-            self.assertIn('settings.yaml', lines, filename)
+            self.assertNotIn('settings.yaml', lines, filename)
 
     def test_common_secret_file_names_are_excluded(self):
         patterns = {

@@ -74,10 +74,11 @@ class ConvertImageTest(unittest.TestCase):
         self.assertEqual((image_format, size), ('PNG', (2, 1)))
         self.assertEqual(convert_image.calc_size(resized), (2, 1))
 
-        self.assertEqual(convert_image.get_image_format(b'broken'), (None, None))
+        self.assertIsNone(convert_image.get_image_format(b'broken'))
+        # 呼出し側 (scenario.py) が3要素で受け取るので、失敗時も3要素で返す
         self.assertEqual(
             convert_image.resize_image(b'broken', 8),
-            (None, None),
+            (None, None, None),
         )
         self.assertIsNone(convert_image.calc_size(b'broken'))
 

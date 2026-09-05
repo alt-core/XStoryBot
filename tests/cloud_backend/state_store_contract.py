@@ -264,6 +264,11 @@ class StateStoreContractMixin:
             'bot-a', 2)
         self.assertCountEqual(
             ['task-new', 'task-old'], [task['id'] for task in recent])
+        # limit は created_at の新しい順に適用される（任意の N 件ではない）
+        self.assertEqual(
+            ['task-new'],
+            [task['id'] for task in
+             self.contract_store.get_recent_group_message_tasks('bot-a', 1)])
         self.assertTrue(all(
             type(task['created_at']) is datetime.datetime
             and task['created_at'].tzinfo == datetime.timezone.utc

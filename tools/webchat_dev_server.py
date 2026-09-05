@@ -357,6 +357,17 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         path = urlsplit(self.path).path
+        if path == '/devtest/storage':
+            body = '''<!doctype html><html lang="ja"><head><meta charset="utf-8">
+<title>Webchat保存テスト</title></head><body>
+<h1>Webchat保存テスト</h1><pre id="storage-test-result">確認中</pre>
+<script type="module" src="/devtest/storage.mjs"></script>
+</body></html>'''.encode('utf-8')
+            self._send(200, body, 'text/html; charset=utf-8')
+            return
+        if path == '/devtest/storage.mjs':
+            self._serve_file('tests/webchat_storage.browser.test.mjs')
+            return
         if path == '/devpage/help':
             body = '''<!doctype html><html lang="ja"><head><meta charset="utf-8">
 <title>チャット内リンク</title></head><body>

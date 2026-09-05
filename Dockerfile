@@ -16,8 +16,7 @@ COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY --chown=xstorybot:xstorybot . ./
-RUN cp settings.yaml.template settings.yaml \
-    && chown xstorybot:xstorybot settings.yaml
+RUN test -s settings.yaml || { echo "settings.yamlを作成してからビルドしてください" >&2; exit 1; }
 
 USER xstorybot
 

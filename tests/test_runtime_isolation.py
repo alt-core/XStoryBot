@@ -1,4 +1,5 @@
 import importlib.util
+import json
 from pathlib import Path
 import sys
 import types
@@ -103,6 +104,83 @@ class RequestRuntimeIsolationTest(unittest.TestCase):
         self.assertEqual(first.scene, 'first-scene')
         self.assertEqual(second.uid, 'line:second-user')
         self.assertEqual(second.scene, 'second-scene')
+
+
+class BuildResultIsolationTest(unittest.TestCase):
+    def setUp(self):
+        self.results = {}
+        self.cache = types.ModuleType('build_cache')
+        self.cache.clear = Mock(side_effect=self.results.clear)
+        self.cache.set_cache = Mock(side_effect=(
+            lambda key, value, sec=None: self.results.__setitem__(
+                key, json.loads(value))))
+        self.models = types.ModuleType('models')
+        self.models.GlobalBotVariablesDB = Mock()
+        self.scenario = types.ModuleType('scenario')
+        self.scenario.ScenarioSyntaxError = type(
+            'ScenarioSyntaxError', (Exception,), {})
+        self.scenario.ScenarioBuilder = Mock()
+        self.built = self.scenario.ScenarioBuilder.build_from_tables.return_value
+        self.built.save_to_storage.return_value = 'scenario-reference'
+
+        modules = patch.dict(sys.modules, {
+            'build_cache': self.cache,
+            'models': self.models,
+            'scenario': self.scenario,
+            'settings': types.ModuleType('settings'),
+            'commands': types.ModuleType('commands'),
+        })
+        modules.start()
+        self.addCleanup(modules.stop)
+        spec = importlib.util.spec_from_file_location(
+            'runtime_for_build_result_test', PROJECT_ROOT / 'runtime.py')
+        self.module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(self.module)
+        self.loader = Mock()
+        self.loader.load_scenario.return_value = ([], {})
+        self.bot_a = self.module.BotRuntime('bot-a', {}, self.loader)
+        self.bot_b = self.module.BotRuntime('bot-b', {}, self.loader)
+
+    def test_別Botの成功結果を残して同じBotだけを上書きする(self):
+        for bot, task_id in (
+            (self.bot_a, 'build-a-1'),
+            (self.bot_b, 'build-b-1'),
+            (self.bot_a, 'build-a-2'),
+        ):
+            self.assertEqual(bot.build_scenario(task_id), (True, None))
+
+        self.assertEqual(set(self.results), {
+            'last_build_result:bot-a', 'last_build_result:bot-b'})
+        self.assertEqual(self.results['last_build_result:bot-a']['task_id'], 'build-a-2')
+        self.assertEqual(self.results['last_build_result:bot-b']['task_id'], 'build-b-1')
+        self.assertTrue(all(value['status'] == 'Success' for value in self.results.values()))
+        self.cache.clear.assert_not_called()
+        self.assertEqual(self.built.save_to_storage.call_count, 3)
+        self.assertEqual(self.models.GlobalBotVariablesDB.save.call_count, 3)
+        self.models.GlobalBotVariablesDB.save.assert_called_with(
+            'bot-a', 'scenario-reference')
+        self.assertTrue(all(
+            kwargs['sec'] == 60 * 60 * 24
+            for _, kwargs in self.cache.set_cache.call_args_list))
+
+    def test_ビルド失敗は対象Botの結果だけを更新する(self):
+        self.bot_a.build_scenario('build-a')
+        self.bot_b.build_scenario('build-b')
+        other_result = dict(self.results['last_build_result:bot-b'])
+        for error in (ValueError('構文エラー'), RuntimeError('取得失敗')):
+            with self.subTest(error_type=type(error).__name__):
+                self.loader.load_scenario.side_effect = error
+                with self.assertLogs(level='ERROR'):
+                    result = self.bot_a.build_scenario('failed-a')
+
+                self.assertEqual(result, (False, str(error)))
+                self.assertEqual(self.results['last_build_result:bot-a']['status'], 'Failure')
+                self.assertEqual(self.results['last_build_result:bot-a']['task_id'], 'failed-a')
+                self.assertEqual(self.results['last_build_result:bot-a']['error'], str(error))
+                self.assertEqual(self.results['last_build_result:bot-b'], other_result)
+
+        self.cache.clear.assert_not_called()
+        self.assertEqual(self.models.GlobalBotVariablesDB.save.call_count, 2)
 
 
 class RollbackSnapshotTest(unittest.TestCase):

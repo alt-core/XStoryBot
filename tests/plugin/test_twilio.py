@@ -449,6 +449,36 @@ class TwilioInterfaceTest(unittest.TestCase):
         )
 
 
+    def test_text_is_xml_escaped_and_raw_twiml_cell_is_kept(self):
+        module, _twilio_rest, _commands = load_twilio_interface()
+        interface = module.TwilioPlugin_Interface('testbot', {})
+        context = interface.create_context_from_twilio_event(
+            '+819000000000', '+815000000000', False, 'x')
+
+        result = interface.respond_reaction(context, [
+            (('案内役', 'a<b&c'), None),
+            ((None, '<Redirect>https://example.test/next</Redirect>'), None),
+        ])
+        self.assertEqual(
+            result,
+            '<?xml version="1.0" encoding="UTF-8"?>'
+            '<Response>'
+            '<Message>案内役:\na&lt;b&amp;c</Message>'
+            '<Redirect>https://example.test/next</Redirect>'
+            '</Response>',
+        )
+
+        context.is_voicecall = True
+        result = interface.respond_reaction(context, [
+            ((None, 'ok</Say><Dial>+819000000000</Dial>'), None),
+        ])
+        self.assertIn(
+            '<Say language="ja-jp" voice="woman">'
+            'ok&lt;/Say&gt;&lt;Dial&gt;+819000000000&lt;/Dial&gt;</Say>',
+            result)
+        self.assertNotIn('<Dial>', result)
+
+
 class TwilioDefaultCommandsTest(unittest.TestCase):
     def setUp(self):
         self.module = load_twilio_default_commands()

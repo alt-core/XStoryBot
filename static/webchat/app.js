@@ -622,7 +622,14 @@ const appendTurn = (turn) => {
 };
 
 const syncHistory = (snapshot) => {
-  const turns = snapshot.turns;
+  const displayedIds = new Set(snapshot.messages.map((message) => message.id));
+  const activeOnly = snapshot.activeResponse.filter(
+    (message) => !displayedIds.has(message.id));
+  const turns = activeOnly.length
+    ? [...snapshot.turns, {
+      id: `active:${snapshot.stateId}`, requestId: '', messages: activeOnly,
+    }]
+    : snapshot.turns;
   const rendered = historyState.signatures;
   const isPrefix = rendered.length <= turns.length && rendered.every(
     (signature, index) => signature === turnSignature(turns[index]));

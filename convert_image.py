@@ -28,7 +28,7 @@ def get_image_format(content):
         image = Image.open(data)
     except (IOError, SyntaxError, ValueError):
         data.close()
-        return None, None
+        return None
     image_format = image.format or DEFAULT_FORMAT
     if image_format not in CONTENT_TYPES:
         image_format = DEFAULT_FORMAT
@@ -45,7 +45,8 @@ def resize_image(content, resize_to, force_fit_width=False, never_stretch=False)
         image = Image.open(data)
     except (IOError, SyntaxError, ValueError):
         data.close()
-        return None, None
+        # 呼出し側は (data, format, size) の3要素で受け取る
+        return None, None, None
     image_format = image.format or DEFAULT_FORMAT
     if image_format not in CONTENT_TYPES:
         image_format = DEFAULT_FORMAT

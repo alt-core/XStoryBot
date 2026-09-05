@@ -18,12 +18,16 @@ _QUEUE_KIND_MAP = {
     'action-queue': 'action',
     'group-message-queue': 'group_batch',
 }
-_ACTION_LEASE_SECONDS = 90
+_ACTION_LEASE_SECONDS = 360  # ActionWorkerFunction の Timeout (300秒) より長くする
 _GROUP_LEASE_SECONDS = 960
 
 
 class _TaskExecutionBusy(Exception):
     """同じ論理taskを別のworkerが実行中であることを表す。"""
+
+
+class ActionNotDelivered(RuntimeError):
+    """handle_action が再試行を尽くして応答を返せなかったことを表す。"""
 
 
 def _validate_task_id(value):
@@ -137,6 +141,7 @@ def _process_record(record, dependencies, owner):
                 envelope['task_id'], owner,
             )
             return
+        failures = []
         process_action(
             bot,
             serialized_user,
@@ -145,7 +150,11 @@ def _process_record(record, dependencies, owner):
             dependencies['get_group_members'],
             dependencies['options'],
             log_values=True,
+            failures=failures,
         )
+        if failures:
+            # 送信まで完了できなかった。claim を complete せず SQS の再試行と DLQ に任せる
+            raise ActionNotDelivered(', '.join(failures))
         dependencies['execution_store'].complete_task_execution(
             execution_key, owner)
         logging.info(
@@ -207,6 +216,13 @@ def lambda_handler(event, context):
         owner = f'{request_id}:{message_id}'
         try:
             _process_record(record, dependencies, owner)
+        except _TaskExecutionBusy:
+            # 同じtaskを別workerが実行中。正常な競合なので stack trace は残さない
+            logging.warning(
+                'SQS task is being processed elsewhere: owner=%s, message_id=%s',
+                owner, message_id,
+            )
+            failures.append({'itemIdentifier': message_id})
         except Exception as error:
             logging.exception(
                 'SQS task failed: owner=%s, message_id=%s, '

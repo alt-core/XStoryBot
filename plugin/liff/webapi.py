@@ -50,7 +50,8 @@ def send_message(bot_name):
     response.headers['Access-Control-Allow-Origin'] = interface.allow_origin # liff と API サーバが異なる CORS 対応
 
     auth_header = request.headers.get('Authorization')
-    access_token = auth_header.split(' ')[1] if auth_header else None
+    header_parts = auth_header.split(' ') if auth_header else []
+    access_token = header_parts[1] if len(header_parts) > 1 else None
     # access_token = request.query.access_token
 
     if not access_token:

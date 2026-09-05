@@ -45,8 +45,6 @@ class BotRuntime:
             self.scenario = ScenarioBuilder.build_from_tables(tables, constants, options=options, version=version)
             self.scenario_uri = self.scenario.save_to_storage()
             GlobalBotVariablesDB.save(self.name, self.scenario_uri)
-            # image.py の画像のキャッシュを消す
-            build_cache.clear() # TODO: 画像が更新されたときにファイル名が変わるような方向性での対応
             build_cache.set_cache(f'last_build_result:{self.name}', json.dumps({
                 "timestamp": now_str(),
                 "task_id": task_id,
@@ -124,6 +122,8 @@ class BotRuntime:
         raise_exceptions = bool(
             getattr(interface, 'should_raise_exceptions', lambda: False)())
 
+        last_phase = None
+        last_error = None
         while retry_count > 0:
             try:
                 context.reactions = []
@@ -138,6 +138,7 @@ class BotRuntime:
                         'error_type=%s', type(e).__name__)
                     raise
                 logging.error(f"handle_action で例外が発生しました: {e}")
+                last_phase, last_error = 'plan', e
                 retry_count -= 1
                 continue
 
@@ -152,8 +153,28 @@ class BotRuntime:
                         'error_type=%s', type(e).__name__)
                     raise
                 logging.error(f"interface.respond_reaction で例外が発生しました: {e}")
+                last_phase, last_error = 'send', e
                 retry_count -= 1
                 continue
 
-        logging.error(f"リトライ回数を超えました")
+        self._log_failure(context, last_phase, last_error)
         return None
+
+    def _log_failure(self, context, phase, error):
+        # 進行不能になった利用者を後から uid で辿れるよう、@log と同じ JSON 1行形式で残す
+        try:
+            status = context.status
+            record = {
+                'type': 'XSBFail',
+                'bot': self.name,
+                'service': context.service_name,
+                'uid': str(context.user),
+                'action': context.action,
+                'scene': getattr(status, 'scene', None) if status is not None else None,
+                'phase': phase,
+                'error_type': type(error).__name__ if error is not None else None,
+                'error': str(error) if error is not None else None,
+            }
+            logging.error(json.dumps(record, ensure_ascii=False, default=str))
+        except Exception:
+            logging.exception('リトライ回数を超えました（XSBFail の記録にも失敗）')

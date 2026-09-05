@@ -17,6 +17,7 @@ python3 -m unittest \
     tests.test_aws_object_store \
     tests.test_auth \
     tests.test_expression \
+    tests.test_command_arguments \
     tests.test_runtime_isolation \
     tests.test_state_namespace \
     tests.test_scenario_storage \

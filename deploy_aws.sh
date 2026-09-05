@@ -12,19 +12,39 @@ set -eu
 : "${XSBOT_AWS_ADMIN_AUTH_PARAMETER:?XSBOT_AWS_ADMIN_AUTH_PARAMETERを設定してください}"
 : "${XSBOT_AWS_RUNTIME_SECRETS_PARAMETER:?XSBOT_AWS_RUNTIME_SECRETS_PARAMETERを設定してください}"
 
-webchat_enabled=${XSBOT_WEBCHAT_ENABLED:-false}
-case "$webchat_enabled" in
-    true|false) ;;
-    *)
-        echo "XSBOT_WEBCHAT_ENABLEDはtrueまたはfalseで指定してください" >&2
-        exit 1
-        ;;
-esac
+if [ "${XSBOT_WEBCHAT_ENABLED+x}" = x ]; then
+    case "$XSBOT_WEBCHAT_ENABLED" in
+        true|false) ;;
+        *)
+            echo "XSBOT_WEBCHAT_ENABLEDはtrueまたはfalseで指定してください" >&2
+            exit 1
+            ;;
+    esac
+fi
 
-if [ "$webchat_enabled" = true ]; then
+if [ "${XSBOT_WEBCHAT_ENABLED-}" = true ]; then
     : "${XSBOT_WEBCHAT_SIGNING_KEY:?XSBOT_WEBCHAT_SIGNING_KEYを設定してください}"
     : "${XSBOT_WEBCHAT_SCENARIO_URI:?XSBOT_WEBCHAT_SCENARIO_URIを設定してください}"
 fi
+
+# 未設定は前回値を維持する。空が無効な項目の明示空はbuild前に拒否する。
+check_optional_value() {
+    if [ "$2" = x ] && [ -z "$3" ]; then
+        echo "$1に空文字は指定できません" >&2
+        exit 1
+    fi
+}
+
+check_optional_value XSBOT_WEBCHAT_SIGNING_KEY \
+    "${XSBOT_WEBCHAT_SIGNING_KEY+x}" "${XSBOT_WEBCHAT_SIGNING_KEY-}"
+check_optional_value XSBOT_WEBCHAT_SCENARIO_URI \
+    "${XSBOT_WEBCHAT_SCENARIO_URI+x}" "${XSBOT_WEBCHAT_SCENARIO_URI-}"
+check_optional_value XSBOT_WEBCHAT_COMPATIBILITY_EPOCH \
+    "${XSBOT_WEBCHAT_COMPATIBILITY_EPOCH+x}" "${XSBOT_WEBCHAT_COMPATIBILITY_EPOCH-}"
+check_optional_value XSBOT_WEBCHAT_THROTTLE_RATE \
+    "${XSBOT_WEBCHAT_THROTTLE_RATE+x}" "${XSBOT_WEBCHAT_THROTTLE_RATE-}"
+check_optional_value XSBOT_WEBCHAT_THROTTLE_BURST \
+    "${XSBOT_WEBCHAT_THROTTLE_BURST+x}" "${XSBOT_WEBCHAT_THROTTLE_BURST-}"
 
 for command_name in aws docker sam; do
     if ! command -v "$command_name" >/dev/null 2>&1; then
@@ -49,6 +69,11 @@ done
 script_directory=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 template_file="$script_directory/template.aws.yaml"
 image_tag=${XSBOT_AWS_IMAGE_TAG:-$(date -u +%Y%m%dT%H%M%SZ)}
+
+if [ ! -s "$script_directory/settings.yaml" ]; then
+    echo "settings.yamlを準備してください。空の設定ではdeployできません" >&2
+    exit 1
+fi
 
 # ECRへ書き込む前にtemplateの構文とresource定義を検査する。
 sam validate \
@@ -101,39 +126,54 @@ set -- sam deploy \
     --no-fail-on-empty-changeset \
     --parameter-overrides \
         "ParameterKey=ImageUri,ParameterValue=$image_uri" \
+        "ParameterKey=WebchatImageUri,ParameterValue=$image_uri" \
         "ParameterKey=EnvironmentName,ParameterValue=$XSBOT_AWS_ENVIRONMENT" \
         "ParameterKey=SheetId,ParameterValue=$XSBOT_AWS_SHEET_ID" \
         "ParameterKey=GoogleSheetsCredentialParameterName,ParameterValue=$XSBOT_AWS_SHEETS_CREDENTIAL_PARAMETER" \
         "ParameterKey=AdminAuthParameterName,ParameterValue=$XSBOT_AWS_ADMIN_AUTH_PARAMETER" \
-        "ParameterKey=RuntimeSecretsParameterName,ParameterValue=$XSBOT_AWS_RUNTIME_SECRETS_PARAMETER" \
-        "ParameterKey=WebchatEnabled,ParameterValue=$webchat_enabled"
+        "ParameterKey=RuntimeSecretsParameterName,ParameterValue=$XSBOT_AWS_RUNTIME_SECRETS_PARAMETER"
 
-if [ "$webchat_enabled" = true ]; then
+# SAMが空文字を認識できるよう、空を許す値は引用符も引数に含める。
+if [ "${XSBOT_AWS_ALARM_EMAIL+x}" = x ]; then
     set -- "$@" \
-        "ParameterKey=WebchatImageUri,ParameterValue=$image_uri" \
-        "ParameterKey=WebchatSigningKey,ParameterValue=$XSBOT_WEBCHAT_SIGNING_KEY" \
-        "ParameterKey=WebchatScenarioUri,ParameterValue=$XSBOT_WEBCHAT_SCENARIO_URI" \
-        "ParameterKey=WebchatCompatibilityEpoch,ParameterValue=${XSBOT_WEBCHAT_COMPATIBILITY_EPOCH:-webchat-v1}"
-    if [ -n "${XSBOT_WEBCHAT_ALLOWED_ORIGINS:-}" ]; then
-        set -- "$@" \
-            "ParameterKey=WebchatAllowedOrigins,ParameterValue=$XSBOT_WEBCHAT_ALLOWED_ORIGINS"
-    fi
-    if [ -n "${XSBOT_WEBCHAT_EXTERNAL_HTTP_ORIGINS:-}" ]; then
-        set -- "$@" \
-            "ParameterKey=WebchatExternalHttpOrigins,ParameterValue=$XSBOT_WEBCHAT_EXTERNAL_HTTP_ORIGINS"
-    fi
-    if [ -n "${XSBOT_WEBCHAT_MEDIA_ORIGINS:-}" ]; then
-        set -- "$@" \
-            "ParameterKey=WebchatMediaOrigins,ParameterValue=$XSBOT_WEBCHAT_MEDIA_ORIGINS"
-    fi
-    if [ -n "${XSBOT_WEBCHAT_THROTTLE_RATE:-}" ]; then
-        set -- "$@" \
-            "ParameterKey=WebchatThrottleRate,ParameterValue=$XSBOT_WEBCHAT_THROTTLE_RATE"
-    fi
-    if [ -n "${XSBOT_WEBCHAT_THROTTLE_BURST:-}" ]; then
-        set -- "$@" \
-            "ParameterKey=WebchatThrottleBurst,ParameterValue=$XSBOT_WEBCHAT_THROTTLE_BURST"
-    fi
+        "ParameterKey=AlarmEmail,ParameterValue=\"$XSBOT_AWS_ALARM_EMAIL\""
+fi
+
+if [ "${XSBOT_WEBCHAT_ENABLED+x}" = x ]; then
+    set -- "$@" \
+        "ParameterKey=WebchatEnabled,ParameterValue=$XSBOT_WEBCHAT_ENABLED"
+fi
+if [ "${XSBOT_WEBCHAT_SIGNING_KEY+x}" = x ]; then
+    set -- "$@" \
+        "ParameterKey=WebchatSigningKey,ParameterValue=$XSBOT_WEBCHAT_SIGNING_KEY"
+fi
+if [ "${XSBOT_WEBCHAT_SCENARIO_URI+x}" = x ]; then
+    set -- "$@" \
+        "ParameterKey=WebchatScenarioUri,ParameterValue=$XSBOT_WEBCHAT_SCENARIO_URI"
+fi
+if [ "${XSBOT_WEBCHAT_COMPATIBILITY_EPOCH+x}" = x ]; then
+    set -- "$@" \
+        "ParameterKey=WebchatCompatibilityEpoch,ParameterValue=$XSBOT_WEBCHAT_COMPATIBILITY_EPOCH"
+fi
+if [ "${XSBOT_WEBCHAT_ALLOWED_ORIGINS+x}" = x ]; then
+    set -- "$@" \
+        "ParameterKey=WebchatAllowedOrigins,ParameterValue=\"$XSBOT_WEBCHAT_ALLOWED_ORIGINS\""
+fi
+if [ "${XSBOT_WEBCHAT_EXTERNAL_HTTP_ORIGINS+x}" = x ]; then
+    set -- "$@" \
+        "ParameterKey=WebchatExternalHttpOrigins,ParameterValue=\"$XSBOT_WEBCHAT_EXTERNAL_HTTP_ORIGINS\""
+fi
+if [ "${XSBOT_WEBCHAT_MEDIA_ORIGINS+x}" = x ]; then
+    set -- "$@" \
+        "ParameterKey=WebchatMediaOrigins,ParameterValue=\"$XSBOT_WEBCHAT_MEDIA_ORIGINS\""
+fi
+if [ "${XSBOT_WEBCHAT_THROTTLE_RATE+x}" = x ]; then
+    set -- "$@" \
+        "ParameterKey=WebchatThrottleRate,ParameterValue=$XSBOT_WEBCHAT_THROTTLE_RATE"
+fi
+if [ "${XSBOT_WEBCHAT_THROTTLE_BURST+x}" = x ]; then
+    set -- "$@" \
+        "ParameterKey=WebchatThrottleBurst,ParameterValue=$XSBOT_WEBCHAT_THROTTLE_BURST"
 fi
 
 "$@"

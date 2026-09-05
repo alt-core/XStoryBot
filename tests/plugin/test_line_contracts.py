@@ -15,6 +15,10 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, call, patch
 
+from linebot.exceptions import LineBotApiError
+from linebot.models import Error as LineError
+import requests
+
 from cloud_backend import factory as backend_factory
 import utility as utility_module
 
@@ -80,7 +84,10 @@ class _QuickReply(_Model):
 
 
 def _linebot_stubs():
-    """line-bot-sdk の型判定と生成に必要な最小限の型を返す。"""
+    """line-bot-sdk の型判定と生成に必要な最小限の型を返す。
+
+    HTTP エラーの分類を試すため、LineBotApiError だけは実SDKの型を使う。
+    """
     class InvalidSignatureError(Exception):
         pass
 
@@ -123,12 +130,18 @@ def _linebot_stubs():
         LineBotApi=_model_class('LineBotApi'),
         WebhookParser=_model_class('WebhookParser'),
     )
-    exceptions = _module('linebot.exceptions', InvalidSignatureError=InvalidSignatureError)
+    exceptions = _module(
+        'linebot.exceptions',
+        InvalidSignatureError=InvalidSignatureError,
+        LineBotApiError=LineBotApiError)
     return {
         'linebot': linebot,
         'linebot.models': models,
         'linebot.exceptions': exceptions,
-    }, SimpleNamespace(**classes, InvalidSignatureError=InvalidSignatureError)
+    }, SimpleNamespace(
+        **classes,
+        InvalidSignatureError=InvalidSignatureError,
+        LineBotApiError=LineBotApiError)
 
 
 def _base_stubs():
@@ -279,7 +292,7 @@ class LineInterfaceContractTest(unittest.TestCase):
                 RAWIMAGE_CMDS=('@rawimage',)),
             'context': _module('context', ActionContext=object),
             'users': _module('users', User=_model_class('User')),
-            'requests': _module('requests', RequestException=Exception),
+            # requests は実物。通信例外と SDK 例外の型の違いをそのまま試す
         }
         cls.interface_module = _load_module(
             '_line_contract_interface', 'plugin/line/interface.py', replacements)
@@ -292,6 +305,60 @@ class LineInterfaceContractTest(unittest.TestCase):
 
     def _message_event(self, message):
         return self.types.MessageEvent(message=message)
+
+    def _sending_context(self):
+        self.interface.line_api_retry_count = 3
+        self.interface.line_api_retry_sleep = 0.0
+        return SimpleNamespace(
+            event=SimpleNamespace(type='message', reply_token='reply-token'),
+            source_id='U1', source_type='user',
+            status=SimpleNamespace(action_token='AAAAAAAA'),
+        )
+
+    def _send(self, side_effect):
+        context = self._sending_context()
+        self.interface.line_bot_api.reply_message.side_effect = side_effect
+        with patch.object(self.interface_module.time, 'sleep'):
+            return self.interface.respond_reaction(
+                context, [([None, 'こんにちは'], None)])
+
+    @staticmethod
+    def _api_error(status):
+        # 実SDK 2.x と同じ生成方法（error.message が必須）
+        return LineBotApiError(status, headers={}, error=LineError(message='test'))
+
+    def test_LINEの5xxと429は送信側で短く再試行する(self):
+        result = self._send([self._api_error(500), self._api_error(429), None])
+        self.assertEqual('OK', result)
+        self.assertEqual(
+            3, self.interface.line_bot_api.reply_message.call_count)
+
+    def test_LINEの409は送信済みとして扱う(self):
+        result = self._send([self._api_error(409)])
+        self.assertEqual('OK', result)
+        self.assertEqual(
+            1, self.interface.line_bot_api.reply_message.call_count)
+
+    def test_LINEの400は再送せず即座に上へ返す(self):
+        with self.assertRaises(LineBotApiError):
+            self._send([self._api_error(400)])
+        self.assertEqual(
+            1, self.interface.line_bot_api.reply_message.call_count)
+
+    def test_再試行を尽くした通信例外は上へ返す(self):
+        with self.assertRaises(requests.ConnectionError):
+            self._send(requests.ConnectionError('down'))
+        self.assertEqual(
+            3, self.interface.line_bot_api.reply_message.call_count)
+
+    def test_通信例外でもSDK例外でもない例外は再試行しない(self):
+        class Unexpected(Exception):
+            pass
+
+        with self.assertRaises(Unexpected):
+            self._send(Unexpected('bug'))
+        self.assertEqual(
+            1, self.interface.line_bot_api.reply_message.call_count)
 
     def test_audio_reactionをLINE送信messageへ変換する(self):
         context = SimpleNamespace(response=None)
@@ -401,6 +468,67 @@ class LineInterfaceContractTest(unittest.TestCase):
             "event unfollow doesnt have reply_token: ['生成本文']")
         self.interface.line_bot_api.reply_message.assert_not_called()
         self.interface.line_bot_api.push_message.assert_not_called()
+
+
+class LinePushRetryKeyIsolationTest(unittest.TestCase):
+    """push の retry key が共有 client の header に残らないことを実SDKで確認する。
+
+    SDK の push_message は key を client 共有の headers へ保存するため、共有 client で
+    並行 push すると別の push の key が付いて 409（送信済み扱い）になり得る。
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        replacements = {
+            **_base_stubs(),
+            'common_commands': _module(
+                'common_commands', AUDIO_CMDS=('@audio',),
+                IMAGE_CMDS=('@image',), VIDEO_CMDS=('@video',),
+                RAWIMAGE_CMDS=('@rawimage',)),
+            'context': _module('context', ActionContext=object),
+            'users': _module('users', User=_model_class('User')),
+        }
+        cls.interface_module = _load_module(
+            '_line_push_key_interface', 'plugin/line/interface.py', replacements)
+
+    def setUp(self):
+        self.interface = self.interface_module.LinePlugin_Interface('bot', {
+            'line_access_token': 'token', 'line_channel_secret': 'secret'})
+        self.interface.line_api_retry_count = 1
+        self.interface.line_api_retry_sleep = 0.0
+        self.posts = []
+
+        def fake_post(_client, url, headers=None, data=None, timeout=None):
+            self.posts.append((url, dict(headers or {})))
+            return SimpleNamespace(status_code=200, headers={}, json=lambda: {}, text='')
+
+        patcher = patch('linebot.http_client.RequestsHttpClient.post', fake_post)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    @staticmethod
+    def _context(source_id, event=None):
+        return SimpleNamespace(
+            event=event, source_id=source_id, source_type='user',
+            status=SimpleNamespace(action_token='AAAAAAAA'))
+
+    def test_pushごとに専用clientを使い共有headerへkeyを残さない(self):
+        with patch.object(self.interface_module.time, 'sleep'):
+            self.interface.respond_reaction(self._context('U1'), [([None, 'a'], None)])
+            self.interface.respond_reaction(self._context('U2'), [([None, 'b'], None)])
+            self.interface.respond_reaction(
+                self._context('U1', SimpleNamespace(type='message', reply_token='reply-token')),
+                [([None, 'c'], None)])
+
+        push_urls = [url for url, _headers in self.posts[:2]]
+        self.assertTrue(all(url.endswith('/v2/bot/message/push') for url in push_urls))
+        keys = [headers.get('X-Line-Retry-Key') for _url, headers in self.posts[:2]]
+        self.assertTrue(all(keys))
+        self.assertNotEqual(keys[0], keys[1])
+        # 共有 client（reply／rich menu 用）には key が残らず、後続の reply にも付かない
+        self.assertNotIn('X-Line-Retry-Key', self.interface.line_bot_api.headers)
+        self.assertTrue(self.posts[2][0].endswith('/v2/bot/message/reply'))
+        self.assertNotIn('X-Line-Retry-Key', self.posts[2][1])
 
 
 class LineDefaultCommandsContractTest(unittest.TestCase):

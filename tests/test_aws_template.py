@@ -71,6 +71,7 @@ class AwsTemplateTest(unittest.TestCase):
             'AWS::ECS::Cluster',
             'AWS::ECS::TaskDefinition',
             'AWS::CloudWatch::Alarm',
+            'AWS::SNS::Topic',
         }
         self.assertTrue(required.issubset(resource_types))
         self.assertNotIn('AWS::EC2::NatGateway', resource_types)
@@ -153,7 +154,7 @@ class AwsTemplateTest(unittest.TestCase):
 
     def test_SQS_workerの制御値を固定する(self):
         expected = {
-            'ActionWorkerFunction': (60, 1024, 10, 'ActionMessages'),
+            'ActionWorkerFunction': (300, 1024, 10, 'ActionMessages'),
             'GroupWorkerFunction': (900, 2048, 2, 'GroupMessages'),
         }
         for name, (timeout, memory, concurrency, event_name) in expected.items():
@@ -181,9 +182,12 @@ class AwsTemplateTest(unittest.TestCase):
         self.assertNotIn(
             'PackageType', self.template['Globals']['Function'])
 
+        # worker Timeout (300秒) 以上、かつ失敗 task の再配信待ちを短くするため 6倍(1800) にはしない
         self.assertEqual(
-            360, self.resources['ActionQueue']['Properties'][
+            600, self.resources['ActionQueue']['Properties'][
                 'VisibilityTimeout'])
+        self.assertGreaterEqual(
+            600, self.resources['ActionWorkerFunction']['Properties']['Timeout'])
         self.assertEqual(
             5400, self.resources['GroupQueue']['Properties'][
                 'VisibilityTimeout'])
@@ -258,6 +262,7 @@ class AwsTemplateTest(unittest.TestCase):
             'WebchatAllowedOrigins', 'WebchatExternalHttpOrigins',
             'WebchatMediaOrigins',
             'WebchatThrottleRate', 'WebchatThrottleBurst',
+            'AlarmEmail',
         }
         self.assertEqual(expected, set(parameters))
         self.assertTrue(parameters['WebchatSigningKey']['NoEcho'])
@@ -301,7 +306,8 @@ class AwsTemplateTest(unittest.TestCase):
         self.assertEqual({'GetAtt': 'WebchatRole.Arn'}, function['Role'])
         environment = function['Environment']['Variables']
         self.assertEqual('app_webchat:app', environment['XSBOT_APP_MODULE'])
-        self.assertEqual('500', environment['AWS_LWA_ERROR_STATUS_CODES'])
+        # Bottle の 500 (Problem JSON) を関数エラーに変換しない。監視は API Gateway 5xx alarm で行う
+        self.assertNotIn('AWS_LWA_ERROR_STATUS_CODES', environment)
         self.assertEqual('', environment['XSBOT_AWS_RUNTIME_SECRETS_PARAMETER'])
         self.assertEqual({'Ref': 'WebchatSigningKey'},
                          environment['XSBOT_WEBCHAT_SIGNING_KEY'])
@@ -453,6 +459,34 @@ class AwsTemplateTest(unittest.TestCase):
                 'ContainerDefinitions'][0]['Environment']
         }
         self.assertEqual({'Ref': 'SheetId'}, build_environment['SHEETS_ID'])
+
+    def test_alarmは1つのSNS_topicへ通知し購読はメール任意(self):
+        alarms = {
+            name: resource for name, resource in self.resources.items()
+            if resource['Type'] == 'AWS::CloudWatch::Alarm'
+        }
+        self.assertEqual(
+            {'DeadLetterAlarm', 'ApiServerErrorAlarm', 'WebchatErrorAlarm'},
+            set(alarms))
+        for name, alarm in alarms.items():
+            with self.subTest(alarm=name):
+                self.assertEqual(
+                    [{'Ref': 'AlarmTopic'}], alarm['Properties']['AlarmActions'])
+                self.assertEqual(
+                    [{'Ref': 'AlarmTopic'}], alarm['Properties']['OKActions'])
+        api_alarm = alarms['ApiServerErrorAlarm']['Properties']
+        self.assertEqual('AWS/ApiGateway', api_alarm['Namespace'])
+        self.assertEqual('5xx', api_alarm['MetricName'])
+        self.assertEqual(
+            [{'Name': 'ApiId', 'Value': {'Ref': 'HttpApi'}}],
+            api_alarm['Dimensions'])
+
+        self.assertEqual('AWS::SNS::Topic', self.resources['AlarmTopic']['Type'])
+        subscription = self.resources['AlarmEmailSubscription']
+        self.assertEqual('AlarmEmailCondition', subscription['Condition'])
+        self.assertEqual('email', subscription['Properties']['Protocol'])
+        self.assertEqual({'Ref': 'AlarmEmail'}, subscription['Properties']['Endpoint'])
+        self.assertEqual('', self.template['Parameters']['AlarmEmail']['Default'])
 
     def test_固定費を増やす同時実行予約を行わない(self):
         self.assertNotIn('ReservedConcurrentExecutions', self.source)

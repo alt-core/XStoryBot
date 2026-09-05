@@ -207,15 +207,18 @@ class GoogleSheetPlugin_Loader:
         return _get_google_service(self.params['key_file_json'])
 
     def _execute_with_retry(self, request, max_attempts=6, base_delay=5):
-        # Google Sheets API から 429 (Too Many Requests) が返った場合に備えて、指数バックオフで数回リトライする
+        # Google Sheets API の 429 (Too Many Requests) と 5xx (一時障害) は指数バックオフで数回リトライする
         delay = base_delay
         for attempt in range(max_attempts):
             try:
                 return request.execute()
             except HttpError as exc:
-                if exc.resp is not None and exc.resp.status == 429 and attempt < max_attempts - 1:
+                status = getattr(exc.resp, 'status', None) if exc.resp is not None else None
+                retryable = status == 429 or (status is not None and 500 <= status < 600)
+                if retryable and attempt < max_attempts - 1:
                     logging.warning(
-                        "Google Sheets API rate limit hit (attempt %d/%d). Retrying in %.1f seconds.",
+                        "Google Sheets API returned %s (attempt %d/%d). Retrying in %.1f seconds.",
+                        status,
                         attempt + 1,
                         max_attempts,
                         delay

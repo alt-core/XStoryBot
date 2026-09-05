@@ -65,9 +65,19 @@ assert.equal(requests[1].state_token, 'token-0');
 assert.equal(client.getSnapshot().turns.at(-1).echoMessage, 'こんにちは');
 assert.equal(client.getSnapshot().messages.at(-1).text, 'response-1');
 
+const activeBeforeClear = client.getSnapshot().activeResponse;
+const callsBeforeClear = requests.length;
 await client.clearHistory();
 assert.equal(client.getSnapshot().turns.length, 0);
+assert.equal(client.getSnapshot().messages.length, 0);
 assert.equal(client.getSnapshot().stateId, 'state-1');
+assert.deepEqual(client.getSnapshot().activeResponse, activeBeforeClear);
+assert.throws(() => {
+  client.getSnapshot().activeResponse[0].text = '改ざん';
+});
+await client.clearHistory();
+assert.deepEqual(client.getSnapshot().activeResponse, activeBeforeClear);
+assert.equal(requests.length, callsBeforeClear);
 
 await client.reset();
 assert.equal(client.getSnapshot().stateRevision, 2);
@@ -107,5 +117,36 @@ await assert.rejects(
 assert.equal(invalidCalls, 1);
 assert.equal(invalidClient.getSnapshot().stateId, null);
 invalidClient.destroy();
+
+const choiceRequests = [];
+const choiceClient = createWebchatClient({
+  apiBaseUrl: 'https://api.example.test',
+  bot: 'choice',
+  fetch: async (_url, options) => {
+    choiceRequests.push(JSON.parse(options.body));
+    const current = choiceRequests.length;
+    return new Response(JSON.stringify({
+      schema_version: 1,
+      request_id: `choice-request-${current}`,
+      state: { id: `choice-state-${current}`, revision: current },
+      state_token: `choice-state-token-${current}`,
+      echo_message: null,
+      messages: [{
+        id: `choice-message-${current}`, type: 'button', text: '選択',
+        actions: [{ type: 'postback', label: '次へ', token: 'choice-token' }],
+      }],
+    }), { headers: { 'Content-Type': 'application/json' } });
+  },
+});
+await choiceClient.start();
+await choiceClient.clearHistory();
+await choiceClient.sendPostback(
+  choiceClient.getSnapshot().activeResponse[0].actions[0].token);
+assert.deepEqual(choiceRequests[1], {
+  state_token: 'choice-state-token-1',
+  input: { type: 'postback', postback_token: 'choice-token' },
+});
+assert.equal(choiceClient.getSnapshot().turns.length, 1);
+choiceClient.destroy();
 
 console.log('webchat-client tests: OK');

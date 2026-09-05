@@ -28,7 +28,6 @@ lib/
 .env.*
 .netrc
 _netrc
-settings.yaml
 *service-account*.json
 *service_account*.json
 *firebase-adminsdk*.json

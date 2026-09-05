@@ -122,13 +122,17 @@ class _CollectionReference:
 
 
 class _Query:
-    def __init__(self, documents, filter=None, limit=None):
+    def __init__(self, documents, filter=None, limit=None, order=None):
         self._documents = list(documents)
         self._filter = filter
         self._limit = limit
+        self._order = order
 
     def limit(self, limit):
-        return _Query(self._documents, self._filter, limit)
+        return _Query(self._documents, self._filter, limit, self._order)
+
+    def order_by(self, field, direction='ASCENDING'):
+        return _Query(self._documents, self._filter, self._limit, (field, direction))
 
     def stream(self):
         documents = self._documents
@@ -142,6 +146,13 @@ class _Query:
                 document for document in documents
                 if document.to_dict().get(field) == expected
             ]
+        if self._order is not None:
+            field, direction = self._order
+            # Firestore と同じく、並べ替え field を持たない document は結果に含めない
+            documents = sorted(
+                [document for document in documents if field in document.to_dict()],
+                key=lambda document: document.to_dict()[field],
+                reverse=(direction == 'DESCENDING'))
         if self._limit is not None:
             documents = documents[:self._limit]
         return iter(documents)
@@ -231,6 +242,7 @@ class GcpStateStoreContractTest(StateStoreContractMixin, unittest.TestCase):
         self.firestore = types.SimpleNamespace(
             SERVER_TIMESTAMP=self.server_timestamp,
             transactional=lambda function: function,
+            Query=types.SimpleNamespace(DESCENDING='DESCENDING'),
         )
         self.client = _MemoryFirestoreClient(self.server_timestamp)
         self.import_module = patch(

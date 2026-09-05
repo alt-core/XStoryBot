@@ -206,10 +206,11 @@ class LiffWebAPITest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, '不正JSON'):
             self.module.send_message('testbot')
 
-    def test_existing_bearer_parser_and_none_result_are_preserved(self):
+    def test_bearer_without_token_is_bad_request_and_none_result_is_preserved(self):
         self.request.headers = {'Authorization': 'Bearer'}
-        with self.assertRaises(IndexError):
-            self.module.send_message('testbot')
+        self.assertEqual(
+            'Access token is required', self.module.send_message('testbot'))
+        self.assertEqual(self.response.status, 400)
 
         self.request.headers = {'Authorization': 'Bearer access-token'}
         self.bot.result = None

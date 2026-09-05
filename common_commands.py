@@ -57,6 +57,12 @@ RAISE_CMDS = ('@raise', '@例外')
 
 ALL_COMMON_CMDS = IMAGE_CMDS + VIDEO_CMDS + RAWIMAGE_CMDS + AUDIO_CMDS + OR_CMDS + RESET_CMDS + SET_CMDS + FORWARD_CMDS + DELAY_CMDS + IF_CMDS + SEQ_CMDS + LOOP_CMDS + RANDOM_CMDS + CALL_CMDS + RETURN_CMDS + RESET_NODES_CMDS + NEW_CHAPTER_CMDS + GROUP_ADD_CMDS + GROUP_DEL_CMDS + GROUP_CLEAR_CMDS + WEBHOOK_CMDS + LOG_CMDS + ERROR_CMDS + RAISE_CMDS + ELSE_CMDS + ELIF_CMDS + END_CMDS + DEFER_CMDS + POSTJSON_CMDS + GETJSON_CMDS
 
+# @seq/@loop/@random の選択肢は最大16個、@call の引数は最大15個で従来どおり個数固定
+# （それ以降のセルは読まない）。既存 Scenario の意味を変えないため、可変長書式 ... は @webhook だけに使う。
+_CHOICE_LABELS_V3 = ' '.join(['[label]'] * 16)
+_CHOICE_LABELS_V1 = 'label ' + ' '.join(['[label]'] * 15)
+_CALL_ARGS = 'label ' + ' '.join(['[text]'] * 15)  # 15 は scenario.CALL_ARGS_MAX と同じ
+
 COMMON_OBJECT = ('core',)
 
 POSTJSON_RESULT_VARIABLE = '$_result'
@@ -351,14 +357,17 @@ class CommonCommands_Runtime(object):
             users.clear_group(group_name)
         elif msg in WEBHOOK_CMDS:
             url = options[0]
-            if len(options) > 1:
-                # 残りのオプションを key:value の組と見なす
-                data = dict(zip(options[1:-1:2], options[2::2]))
+            rest = options[1:]
+            if rest:
+                # URL の後ろは key, value, key, value ... の組。最後の key に value が無ければ空文字
+                if len(rest) % 2:
+                    rest.append('')
+                data = dict(zip(rest[0::2], rest[1::2]))
             else:
                 data = None
             request_external = getattr(context, 'request_external', None)
             if request_external is None:
-                requests.post(url, data=data)
+                requests.post(url, data=data, timeout=120)
             else:
                 request_external('POST', url, data=data)
         elif msg in POSTJSON_CMDS:
@@ -561,7 +570,7 @@ def setup(params):
             service='*'),
         commands.CommandEntry(
             names=DELAY_CMDS,
-            options='number text|label',
+            options='number text|label [text|label]',
             builder=builder,
             runtime=runtime,
             service='*'),
@@ -591,10 +600,11 @@ def setup(params):
             service='*'),
         commands.CommandEntry(
             names=WEBHOOK_CMDS,
-            options='raw',
+            options='raw [raw]...',
             builder=builder,
             runtime=runtime,
-            service='*'),
+            service='*',
+            specs={'keep_empty_cells': True}),
         commands.CommandEntry(
             names=POSTJSON_CMDS,
             options='raw raw [raw]',
@@ -653,48 +663,42 @@ def setup(params):
             min_version=1),
         commands.CommandEntry(
             names=SEQ_CMDS,
-            # TODO: 可変長表現の追加
-            options='[label] [label] [label] [label] [label] [label] [label] [label] [label] [label] [label] [label] [label] [label] [label] [label]',
+            options=_CHOICE_LABELS_V3,
             builder=builder,
             runtime=runtime,
             service='*',
             min_version=3),
         commands.CommandEntry(
             names=SEQ_CMDS,
-            # TODO: 可変長表現の追加
-            options='label [label] [label] [label] [label] [label] [label] [label] [label] [label] [label] [label] [label] [label] [label] [label]',
+            options=_CHOICE_LABELS_V1,
             builder=builder,
             runtime=runtime,
             service='*',
             min_version=1),
         commands.CommandEntry(
             names=LOOP_CMDS,
-            # TODO: 可変長表現の追加
-            options='[label] [label] [label] [label] [label] [label] [label] [label] [label] [label] [label] [label] [label] [label] [label] [label]',
+            options=_CHOICE_LABELS_V3,
             builder=builder,
             runtime=runtime,
             service='*',
             min_version=3),
         commands.CommandEntry(
             names=LOOP_CMDS,
-            # TODO: 可変長表現の追加
-            options='label [label] [label] [label] [label] [label] [label] [label] [label] [label] [label] [label] [label] [label] [label] [label]',
+            options=_CHOICE_LABELS_V1,
             builder=builder,
             runtime=runtime,
             service='*',
             min_version=1),
         commands.CommandEntry(
             names=RANDOM_CMDS,
-            # TODO: 可変長表現の追加
-            options='[label] [label] [label] [label] [label] [label] [label] [label] [label] [label] [label] [label] [label] [label] [label] [label]',
+            options=_CHOICE_LABELS_V3,
             builder=builder,
             runtime=runtime,
             service='*',
             min_version=3),
         commands.CommandEntry(
             names=RANDOM_CMDS,
-            # TODO: 可変長表現の追加
-            options='label [label] [label] [label] [label] [label] [label] [label] [label] [label] [label] [label] [label] [label] [label] [label]',
+            options=_CHOICE_LABELS_V1,
             builder=builder,
             runtime=runtime,
             service='*',
@@ -747,7 +751,7 @@ def setup(params):
             min_version=2),
         commands.CommandEntry(
             names=CALL_CMDS,
-            options='label [text] [text] [text] [text] [text] [text] [text] [text] [text] [text] [text] [text] [text] [text] [text]',
+            options=_CALL_ARGS,
             builder=builder,
             runtime=runtime,
             service='*',

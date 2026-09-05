@@ -42,6 +42,8 @@ pageを破棄する時は`unsubscribe()`と`client.destroy()`を呼びます。
 
 snapshotには`status`、保存方式、state ID／revision、turn履歴、現在有効なresponse、notice、errorが入ります。完全な型は[index.d.ts](./index.d.ts)を参照してください。
 
+履歴を削除しても`activeResponse`は残ります。画面では、`messages`に含まれない`activeResponse`も表示すると、現在の選択肢から継続できます。同じmessage IDを二重に表示しないようにします。
+
 clientはnetwork errorやtimeoutを自動再送しません。手動再試行ではScenarioの外部処理が重複する場合があるため、UI側で利用者へ伝えてください。
 
 ## UI例

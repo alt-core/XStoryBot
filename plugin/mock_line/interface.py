@@ -3,11 +3,19 @@ import time
 import logging
 import uuid
 from requests import RequestException
+from linebot.exceptions import LineBotApiError
+from linebot.models import Error
 
 from context import ActionContext
 from users import User
 import hub
 import utility
+
+
+def _api_error(status_code, message):
+    # 実SDK (line-bot-sdk 2.x) の LineBotApiError は error.message を要求する
+    return LineBotApiError(status_code=status_code, headers={}, error=Error(message=message))
+
 
 class MockLinePlugin_ActionContext(ActionContext):
     def __init__(self, bot_name, interface, user, action, attrs, event):
@@ -81,17 +89,13 @@ class MockLinePlugin_Interface:
             if self.logging_enabled:
                 logging.warning("[MOCK] Forcing rate limit error")
             self.error_count += 1
-            mock_response = type('obj', (object,), {'status_code': 429})
-            mock_exception = RequestException(response=mock_response)
-            raise mock_exception
+            raise _api_error(429, 'mock rate limit')
 
         # レート制限のシミュレーション - 1秒あたりrate_limit_threshold件を超えたらエラー
         if len(self.request_times) >= self.rate_limit_threshold:
             if self.logging_enabled:
                 logging.warning(f"[MOCK] Rate limit exceeded: {len(self.request_times)} requests/sec")
-            mock_response = type('obj', (object,), {'status_code': 429})
-            mock_exception = RequestException(response=mock_response)
-            raise mock_exception
+            raise _api_error(429, 'mock rate limit')
 
         # エラーシミュレーション
         should_error, error_type = self._simulate_error()
@@ -104,15 +108,12 @@ class MockLinePlugin_Interface:
             elif error_type == 'server_error':
                 if self.logging_enabled:
                     logging.warning("[MOCK] Simulating server error")
-                mock_response = type('obj', (object,), {'status_code': 500})
-                mock_exception = RequestException(response=mock_response)
-                raise mock_exception
+                # 実SDK (line-bot-sdk) は HTTP エラーを LineBotApiError で投げる
+                raise _api_error(500, 'mock server error')
             else:  # client_error
                 if self.logging_enabled:
                     logging.warning("[MOCK] Simulating client error")
-                mock_response = type('obj', (object,), {'status_code': 400})
-                mock_exception = RequestException(response=mock_response)
-                raise mock_exception
+                raise _api_error(400, 'mock client error')
 
         # メッセージを保存（検証機能用）
         message_data = {

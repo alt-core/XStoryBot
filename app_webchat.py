@@ -1,13 +1,12 @@
 """DynamoDBへ依存しないWebchat専用Bottle entry point。"""
 
-import logging
-
 import settings
 from bottle import Bottle, response, static_file
 
 import commands
 import common_commands
 import hub
+import log_config
 from plugin.line import quick_reply, quick_reply_v2
 from plugin.webchat import more as webchat_more
 from plugin.webchat.errors import InvalidWebchatConfiguration
@@ -16,7 +15,7 @@ from plugin.webchat import webapi
 from runtime import BotRuntime
 
 
-logging.getLogger().setLevel(logging.INFO)
+log_config.configure(settings.CLOUD_SETTINGS.get('provider'), settings.DEPLOY_ENV)
 
 
 def _plugin_params(name):

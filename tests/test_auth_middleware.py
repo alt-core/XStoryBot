@@ -87,10 +87,21 @@ class AuthMiddlewareTest(unittest.TestCase):
         self.assertEqual(
             'no-store', raised.exception.get_header('Cache-Control'))
 
-    def test_initializeは秘密値を取得しない(self):
-        self.module.initialize()
+    def test_importでは秘密値を取得せず最初の認証時に取得する(self):
+        with patch(
+            'cloud_backend.create_credential_source',
+            return_value=self.source,
+        ) as create_source:
+            module = load_auth_middleware()
 
-        self.source.get_admin_auth_json.assert_not_called()
+            create_source.assert_not_called()
+            self.source.get_admin_auth_json.assert_not_called()
+
+            self.assertTrue(module.verify_credentials(
+                'admin', 'correct-password'))
+
+        create_source.assert_called_once_with()
+        self.source.get_admin_auth_json.assert_called_once_with()
 
     def test_Argon2idの承認済みparameterで検証する(self):
         self.assertEqual(2, self.module._password_hasher.time_cost)

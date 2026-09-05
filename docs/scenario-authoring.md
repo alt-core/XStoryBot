@@ -110,6 +110,7 @@ Sheet名には次の規則があります。
 | `/loop` | `/seq`と同じで、最後まで行くと最初の枝に戻る |
 | `/random` | `/else`で区切った枝からランダムに1つ実行(直前と同じ枝は続けて選ばれない) |
 | `@log` | `@log 分類 値` — 分析用の記録を残す。表示はされない |
+| `@delay` | `@delay 秒 action` — 指定秒後にactionを実行する。`@delay 秒 Bot名 action`と書くと別のBotで実行する。Webchatでは使えない |
 
 - commandは`@`と`/`のどちらで書いても同じです(`@if`=`/if`)。日本語名もあります(`/ランダム`など)。
 - `/if`の式では変数の比較が書けます。例: `$flag == "on"`、`$count >= 3`、`!$visited`(未設定)、`&&`(かつ)`||`(または)。
@@ -212,3 +213,6 @@ Carousel、Imagemap、Flex、続きを読む(More)、グループ配信、外部
 - `plugins.google_sheets.evaluate_formula`: Sheets式を評価値として読むかどうか。
 - Sheet名の`.環境名`は`XSBOT_DEPLOY_ENV`と比較されます。
 - 読み飛ばすSheet(既定は`_`始まり)は`plugins.google_sheets.ignore_sheet`で変更できます。
+- `@webhook URL key value key value ...`: URLへPOSTします。URLの後ろにkeyとvalueを交互に並べると、その組をform dataとして送ります。URLだけなら本文なしで送ります。途中の空セルは空文字のvalueとして位置を保ち、最後のkeyにvalueが無ければ空文字を送ります。
+- commandの引数で空セルを挟むと、後続の引数が前へ詰められます（`@seq #a <空> #c`は`#a`と`#c`の2択）。`@webhook`だけは例外で、keyとvalueの対応を保つため詰めません。
+- ChatGPTや外部APIなど時間のかかる処理は、LINEに返事をしたあと`@delay 0 #続き`で別のlabelへ回し、そこで呼び出して結果をpushで返す形にします。webhookの応答中に長い外部呼出しを書くと、reply tokenの期限（1分）やAWS Lambdaの30秒に収まりません。

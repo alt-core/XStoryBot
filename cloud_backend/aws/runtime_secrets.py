@@ -9,7 +9,7 @@ import boto3
 
 RUNTIME_SECRETS_PARAMETER_ENV = 'XSBOT_AWS_RUNTIME_SECRETS_PARAMETER'
 
-# settings.yaml.templateがAPI・各プラグインへ渡す実行時資格情報だけを許可する。
+# settings.yamlがAPI・各プラグインへ渡す実行時資格情報だけを許可する。
 ALLOWED_ENVIRONMENT_NAMES = frozenset({
     'XSBOT_API_TOKEN',
     'LINE_ACCESS_TOKEN',

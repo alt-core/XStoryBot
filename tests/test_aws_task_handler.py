@@ -159,7 +159,7 @@ class AwsTaskHandlerTest(unittest.TestCase):
                 call(
                     f'action:bot:{action["task_id"]}',
                     'request-1:action',
-                    90,
+                    360,
                 ),
                 call(
                     f'group:bot:{group["task_id"]}',
@@ -349,6 +349,34 @@ class AwsTaskHandlerTest(unittest.TestCase):
             {'batchItemFailures': [{'itemIdentifier': 'message-1'}]},
         )
         self.execution_store.complete_task_execution.assert_not_called()
+
+    def test_handle_actionがNoneを返したら失敗として再試行に回す(self):
+        # runtime.handle_action は再試行を尽くすと None を返す（例外は投げない）
+        envelope = make_envelope(action='exhausted')
+        self.bot.handle_action = Mock(return_value=None)
+
+        with patch.object(task_handler.logging, 'exception') as error_log:
+            response = self.invoke([make_record('message-1', envelope)])
+
+        self.assertEqual(
+            response,
+            {'batchItemFailures': [{'itemIdentifier': 'message-1'}]},
+        )
+        self.execution_store.complete_task_execution.assert_not_called()
+        self.assertEqual(1, error_log.call_count)
+
+    def test_group展開の一部失敗はtaskを失敗にしない(self):
+        envelope = make_envelope(user='group:g1', action='notice')
+        self.dependencies['get_group_members'].return_value = [
+            FakeUser('plaintext', 'member-1'),
+            FakeUser('plaintext', 'member-2'),
+        ]
+        self.bot.handle_action = Mock(side_effect=[None, 'ok'])
+
+        response = self.invoke([make_record('message-1', envelope)])
+
+        self.assertEqual(response, {'batchItemFailures': []})
+        self.execution_store.complete_task_execution.assert_called_once()
 
     def test_envelopeと送信元を厳密に検証する(self):
         invalid_records = []

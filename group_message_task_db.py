@@ -313,9 +313,6 @@ class GroupMessageTaskDB:
         rate_limiter = GroupMessageTaskDB.create_rate_limiter(max_rate)
         rate_limited_process = rate_limiter(process_function)
 
-        # タスク情報とメンバーリストを取得
-        task = GroupMessageTaskDB.get_task(task_id)
-
         # バッチタスクIDの場合は元のタスクIDからメンバーリストを取得
         storage_task_id = task_id
         if "_batch_" in task_id:
@@ -337,12 +334,6 @@ class GroupMessageTaskDB:
         processed_count = 0
         last_report_time = time.time()
         report_interval = 5  # 5秒ごとに進捗を報告
-
-        # タスクステータスを実行中に更新
-        GroupMessageTaskDB.update_task_status(
-            task_id=task_id,
-            status=GroupMessageTaskDB.STATUS_RUNNING
-        )
 
         start_time = time.time()
         logging.info(f"タスク {task_id} の並列処理を開始します（メンバー数: {total_members}, ワーカー数: {max_workers}, 最大レート: {max_rate} rps）")
@@ -389,22 +380,8 @@ class GroupMessageTaskDB:
             GroupMessageTaskDB._store_error_logs(task_id, error_logs)
             logging.info(f"エラーログ（{len(error_logs)}件）を保存しました")
 
-        # タスクステータスを更新（一度だけ）
         successful_count = len(successful_members)
         failed_count = len(error_logs)
-
-        # StateStoreのエラー概要は新しい順に最大N件保持する。
-        recent_errors = [f"{err[0]}: {err[1]}" for err in sorted(error_logs, key=lambda x: x[2], reverse=True)[:GroupMessageTaskDB.MAX_ERROR_MESSAGES_IN_DB]]
-        error_summary = "\n".join(recent_errors) if recent_errors else None
-
-        GroupMessageTaskDB.update_task_status(
-            task_id=task_id,
-            status=GroupMessageTaskDB.STATUS_COMPLETED if failed_count == 0 else GroupMessageTaskDB.STATUS_FAILED,
-            processed=total_members,
-            successful=successful_count,
-            failed=failed_count,
-            error=error_summary
-        )
 
         return successful_count, failed_count, successful_members, error_logs
 

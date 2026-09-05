@@ -7,6 +7,8 @@
 
   const chat = createWebchatClient({ apiBaseUrl, bot });
   let draft = '';
+  $: activeOnly = $chat.activeResponse.filter(
+    (message) => !$chat.messages.some((item) => item.id === message.id));
 
   onMount(() => {
     chat.initialize().then(() => chat.start()).catch(() => {});
@@ -32,6 +34,9 @@
   {#each turn.messages as message (message.id)}
     {#if message.type === 'text'}<p>{message.text}</p>{/if}
   {/each}
+{/each}
+{#each activeOnly as message (message.id)}
+  {#if message.type === 'text'}<p>{message.text}</p>{/if}
 {/each}
 
 <form on:submit|preventDefault={send}>

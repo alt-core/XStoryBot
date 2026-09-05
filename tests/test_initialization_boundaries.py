@@ -1,4 +1,6 @@
 import importlib.util
+import io
+import logging
 import os
 from pathlib import Path
 import sys
@@ -85,14 +87,20 @@ def load_main(deploy_env, provider='gcp'):
         module_name, PROJECT_ROOT / 'main.py')
     module = importlib.util.module_from_spec(spec)
     original_excepthook = sys.excepthook
+    original_level = logging.getLogger().level
     try:
         with (
             patch.dict(sys.modules, replacements),
             patch.dict(os.environ, {'XSBOT_DEPLOY_ENV': deploy_env}, clear=False),
+            patch('logging.basicConfig') as basic_config,
         ):
             spec.loader.exec_module(module)
     finally:
         sys.excepthook = original_excepthook
+        root_level = logging.getLogger().level
+        logging.getLogger().setLevel(original_level)
+    cloud_logging.basic_config = basic_config
+    cloud_logging.root_level = root_level
     return cloud_logging, logging_client
 
 
@@ -116,6 +124,54 @@ class CloudLoggingInitializationTest(unittest.TestCase):
 
         cloud_logging.Client.assert_not_called()
         logging_client.setup_logging.assert_not_called()
+        # AWS では標準エラーへ INFO 以上を出す（CloudWatch Logs が拾う）
+        cloud_logging.basic_config.assert_called_once()
+        self.assertEqual(logging.INFO, cloud_logging.root_level)
+
+    def test_AWSはtest環境でも標準ログをINFOにする(self):
+        # deploy 環境名 test は AWS の test stack でも使われる実環境名
+        for deploy_env in ('test', 'local'):
+            with self.subTest(deploy_env=deploy_env):
+                cloud_logging, _client = load_main(deploy_env, provider='aws')
+                cloud_logging.basic_config.assert_called_once()
+                self.assertEqual(logging.INFO, cloud_logging.root_level)
+
+
+class LogConfigTest(unittest.TestCase):
+    """log_config.configure が INFO record を実際に handler へ届けることを確認する。"""
+
+    def setUp(self):
+        import log_config
+        self.log_config = log_config
+        self.root = logging.getLogger()
+        self.original_level = self.root.level
+        self.original_handlers = list(self.root.handlers)
+
+    def tearDown(self):
+        self.root.handlers[:] = self.original_handlers
+        self.root.setLevel(self.original_level)
+
+    def test_handlerが無ければ標準エラーへINFOを出す(self):
+        self.root.handlers[:] = []
+        self.root.setLevel(logging.WARNING)
+        stderr = io.StringIO()
+        with patch('sys.stderr', stderr):
+            self.log_config.configure('aws', 'test')
+            logging.getLogger('probe').info('届くはず')
+        self.assertIn('INFO probe: 届くはず', stderr.getvalue())
+
+    def test_既存handlerは壊さずlevelだけINFOにする(self):
+        records = []
+        handler = logging.Handler()
+        handler.emit = records.append
+        self.root.handlers[:] = [handler]
+        self.root.setLevel(logging.WARNING)
+
+        self.log_config.configure('aws', 'prod')
+        logging.getLogger('probe').info('届くはず')
+
+        self.assertEqual([handler], self.root.handlers)
+        self.assertEqual(['届くはず'], [record.getMessage() for record in records])
 
 
 class OptionalPluginWebApiTest(unittest.TestCase):

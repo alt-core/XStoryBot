@@ -17,7 +17,7 @@ class TaskProcessingError(Exception):
 
 def _do_action_iter(result, bot, user, action, attrs, get_group_members,
                     options, sleep_func=time.sleep, level=0,
-                    log_values=True):
+                    log_values=True, failures=None):
     if level > 20:
         if log_values:
             logging.warning(f'group infinite loop: {user} {action}')
@@ -30,7 +30,7 @@ def _do_action_iter(result, bot, user, action, attrs, get_group_members,
             _do_action_iter(
                 result, bot, member, action, attrs,
                 get_group_members, options, sleep_func, level + 1,
-                log_values,
+                log_values, failures,
             )
             interval = options.get('group_interval', 100)
             if interval > 0:
@@ -40,7 +40,12 @@ def _do_action_iter(result, bot, user, action, attrs, get_group_members,
     interface = bot.get_interface(user.service_name)
     if interface is not None:
         context = interface.create_context(user, action, attrs)
-        result.append(str(bot.handle_action(context)))
+        outcome = bot.handle_action(context)
+        if outcome is None and failures is not None and level == 0:
+            # handle_action は再試行を尽くすと None を返す。単一userの失敗だけを呼出し側へ伝える
+            # （group展開の各memberは記録済みのログに任せ、fan-out全体の再試行にはしない）
+            failures.append(str(user))
+        result.append(str(outcome))
     elif level == 0:
         raise TaskProcessingError(404, 'not found')
     else:
@@ -52,8 +57,12 @@ def _do_action_iter(result, bot, user, action, attrs, get_group_members,
 
 def process_decoded_action(bot, serialized_user, action, attrs, user_class,
                            get_group_members, options,
-                           sleep_func=time.sleep, log_values=True):
-    """decode済みのactionを処理し、文字列化した結果を返す。"""
+                           sleep_func=time.sleep, log_values=True,
+                           failures=None):
+    """decode済みのactionを処理し、文字列化した結果を返す。
+
+    failures に list を渡すと、単一userの handle_action 失敗をそこへ追記する。
+    """
     user = user_class.deserialize(serialized_user) if serialized_user else None
     if user is None or action is None:
         raise TaskProcessingError(400, 'invalid parameter')
@@ -63,18 +72,20 @@ def process_decoded_action(bot, serialized_user, action, attrs, user_class,
     _do_action_iter(
         result, bot, user, action, attrs,
         get_group_members, options, sleep_func, log_values=log_values,
+        failures=failures,
     )
     return ''.join(result)
 
 
 def process_action(bot, serialized_user, encoded_action, user_class,
                    get_group_members, options, sleep_func=time.sleep,
-                   log_values=True):
+                   log_values=True, failures=None):
     """一件のactionをdecodeし、共通のaction処理へ渡す。"""
     action, attrs = utility.decode_action_string(encoded_action)
     return process_decoded_action(
         bot, serialized_user, action, attrs,
         user_class, get_group_members, options, sleep_func, log_values,
+        failures=failures,
     )
 
 
