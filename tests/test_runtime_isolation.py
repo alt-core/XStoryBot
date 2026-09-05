@@ -1,3 +1,4 @@
+import datetime
 import importlib.util
 import json
 from pathlib import Path
@@ -22,18 +23,17 @@ def load_common_commands():
     expression = types.ModuleType('expression')
     expression.Expression = object
 
-    pytz = types.ModuleType('pytz')
-    pytz.timezone = lambda value: value
+    utility = types.ModuleType('utility')
+    utility.timezone = lambda name: datetime.timezone.utc
 
     stub_modules = {
         'requests': types.ModuleType('requests'),
-        'pytz': pytz,
         'task_client': types.ModuleType('task_client'),
         'main': types.ModuleType('main'),
         'auth': types.ModuleType('auth'),
         'hub': types.ModuleType('hub'),
         'commands': commands,
-        'utility': types.ModuleType('utility'),
+        'utility': utility,
         'users': types.ModuleType('users'),
         'expression': expression,
     }
@@ -59,6 +59,7 @@ def load_models(fake_db):
 
     utility = types.ModuleType('utility')
     utility.deep_dump = Mock()
+    utility.timezone = lambda name: datetime.timezone.utc
 
     module_name = 'models_for_rollback_test'
     spec = importlib.util.spec_from_file_location(

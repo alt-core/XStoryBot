@@ -2,7 +2,7 @@
 
 import commands
 import datetime
-import pytz
+import utility
 
 
 CHATGPT_CMDS = ('@chatgpt', '@ChatGPT')
@@ -29,7 +29,7 @@ class ChatGPTPlugin_Runtime(object):
             'Content-Type': 'application/json; charset=UTF-8',
             'Authorization': f'Bearer {self.api_key}',
         }
-        self.timezone = pytz.timezone(params.get('timezone', 'utc'))
+        self.timezone = utility.timezone(params.get('timezone', 'UTC'))
 
     def post_chatgpt(self, endpoint, data):
         url = self.base_url + endpoint

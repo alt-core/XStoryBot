@@ -1,3 +1,4 @@
+import datetime
 import importlib.util
 import io
 import json
@@ -103,6 +104,7 @@ def load_dashboard():
     task_client.create_task = Mock(return_value='task-123')
 
     utility = types.ModuleType('utility')
+    utility.timezone = lambda name: datetime.timezone(datetime.timedelta(hours=9))
     utility.make_ok_json = make_ok_json
     utility.make_error_json = make_error_json
 
@@ -142,10 +144,6 @@ def load_dashboard():
     requests = types.ModuleType('requests')
     requests.post = Mock(return_value=types.SimpleNamespace(text='builder body'))
 
-    pytz = types.ModuleType('pytz')
-    pytz.timezone = Mock(return_value=types.SimpleNamespace(
-        localize=lambda value: value))
-
     replacements = {
         'settings': settings,
         'auth_middleware': auth_middleware,
@@ -157,7 +155,6 @@ def load_dashboard():
         'group_message_task_db': group_message_task_db,
         'auth': auth,
         'requests': requests,
-        'pytz': pytz,
     }
     previous = {name: sys.modules.get(name) for name in replacements}
     module_name = '_test_dashboard'
@@ -484,6 +481,58 @@ class DashboardTest(unittest.TestCase):
             headers['Content-Type'], 'application/json; charset=utf-8')
         self.assertEqual(
             json.loads(body), {'status': 'Failure', 'error': 'Not Found'})
+
+    def test_予約日時のoffset付き入力は保存やenqueue前に400にする(self):
+        for scheduled_at in (
+                '2026-09-06T20:00:00+00:00',
+                '2026-09-06T20:00:00+09:00',
+                '2026-09-06T20:00:00Z'):
+            with self.subTest(scheduled_at=scheduled_at):
+                status, _, body = call_wsgi(
+                    self.module.app,
+                    'POST',
+                    '/dashboard/api/create_group_message_task',
+                    json_body={
+                        'bot_name': 'zeta',
+                        'group_id': 'group-1',
+                        'action': 'hello',
+                        'scheduled_at': scheduled_at,
+                    },
+                )
+
+                self.assertEqual(400, status)
+                self.assertIn('Invalid scheduled_at format', body)
+
+        self.dependencies.group_db.create_task.assert_not_called()
+        self.dependencies.task_client.create_task.assert_not_called()
+
+    def test_予約日時のoffsetなし入力をJSTで保存してenqueueする(self):
+        status, _, body = call_wsgi(
+            self.module.app,
+            'POST',
+            '/dashboard/api/create_group_message_task',
+            json_body={
+                'bot_name': 'zeta',
+                'group_id': 'group-1',
+                'action': 'hello',
+                'scheduled_at': '2026-09-06T20:00:00',
+            },
+        )
+
+        self.assertEqual(200, status)
+        scheduled_at = self.dependencies.group_db.create_task.call_args.kwargs[
+            'scheduled_at']
+        self.assertEqual(
+            '2026-09-06T20:00:00+09:00', scheduled_at.isoformat())
+        self.assertEqual(
+            '2026-09-06T11:00:00+00:00',
+            scheduled_at.astimezone(datetime.timezone.utc).isoformat())
+        self.assertIn('実行予定です', json.loads(body)['message'])
+        self.dependencies.task_client.create_task.assert_called_once_with(
+            queue_name='group-message-queue',
+            url='/api/v1/bots/zeta/process_group_batch',
+            params={'message_task_id': 'group-task-1', 'batch_index': 0},
+        )
 
     def test_scheduled_enqueue_failure_message_is_not_overwritten(self):
         self.dependencies.task_client.create_task.side_effect = RuntimeError(

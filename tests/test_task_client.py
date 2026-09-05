@@ -404,8 +404,6 @@ def load_common_commands(task_client):
     requests.RequestException = type('RequestException', (Exception,), {})
     requests.post = Mock()
     requests.get = Mock()
-    pytz = types.ModuleType('pytz')
-    pytz.timezone = Mock()
 
     module_name = 'common_commands_for_task_test'
     spec = importlib.util.spec_from_file_location(
@@ -419,7 +417,6 @@ def load_common_commands(task_client):
         'users': users,
         'expression': expression,
         'requests': requests,
-        'pytz': pytz,
     }
     with patch.dict(sys.modules, modules):
         spec.loader.exec_module(module)

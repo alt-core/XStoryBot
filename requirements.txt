@@ -8,5 +8,6 @@ itsdangerous~=2.2.0
 Pillow~=12.3.0
 Arpeggio~=2.0.2
 PyYAML~=6.0.2
-pytz~=2025.1
+# zoneinfo の fallback データ（base image に tzdata が無いときだけ使われる）。データだけなので常に最新でよい
+tzdata>=2026.3
 gunicorn~=23.0.0

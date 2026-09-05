@@ -3,7 +3,6 @@ import logging
 import re
 import requests
 import datetime
-import pytz
 import json
 from urllib.parse import urlsplit
 
@@ -261,7 +260,7 @@ class CommonCommands_Runtime(object):
         self.params = params
         self.lastContext = None
         self.reset_keyword = params['reset_keyword']
-        self.timezone = pytz.timezone(params.get('timezone', 'utc'))
+        self.timezone = utility.timezone(params.get('timezone', 'UTC'))
         self.cmds_not_handle_here = (IMAGE_CMDS + VIDEO_CMDS + RAWIMAGE_CMDS + AUDIO_CMDS + OR_CMDS + IF_CMDS + ELSE_CMDS + ELIF_CMDS + END_CMDS + SEQ_CMDS + LOOP_CMDS + RANDOM_CMDS + CALL_CMDS + RETURN_CMDS + DEFER_CMDS)
 
     def modify_incoming_action(self, context, action):

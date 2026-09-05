@@ -321,14 +321,15 @@ def api_create_group_message_task():
         if scheduled_at_str:
             try:
                 # タイムゾーン指定を明示的に処理
-                import pytz
-                jst = pytz.timezone('Asia/Tokyo')
+                jst = utility.timezone('Asia/Tokyo')
 
                 # ISOフォーマット文字列をパース
                 naive_dt = datetime.fromisoformat(scheduled_at_str)
+                if naive_dt.tzinfo is not None:
+                    raise ValueError('予約日時はタイムゾーンなしのJSTで指定してください')
 
                 # JSTタイムゾーンを設定
-                scheduled_at = jst.localize(naive_dt)
+                scheduled_at = naive_dt.replace(tzinfo=jst)
 
                 logging.info(f"予約送信時刻を設定: {scheduled_at_str} → {scheduled_at.isoformat()}")
             except ValueError:
@@ -389,8 +390,8 @@ def api_get_group_tasks(bot_name):
             tasks = []
         else:
             # 保存済み日時をJSTのISO 8601文字列へ変換する。
-            import datetime, pytz
-            jst = pytz.timezone('Asia/Tokyo')
+            import datetime
+            jst = utility.timezone('Asia/Tokyo')
 
             for task in tasks:
                 if 'created_at' in task:
@@ -435,8 +436,8 @@ def api_get_group_task(task_id):
         task = GroupMessageTaskDB.get_task(task_id)
         if task:
             # 保存済み日時をJSTのISO 8601文字列へ変換する。
-            import datetime, pytz
-            jst = pytz.timezone('Asia/Tokyo')
+            import datetime
+            jst = utility.timezone('Asia/Tokyo')
 
             if 'created_at' in task:
                 if hasattr(task['created_at'], 'timestamp'):

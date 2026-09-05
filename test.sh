@@ -7,6 +7,7 @@ export XSBOT_CLOUD_PROVIDER=gcp
 python3 -m unittest \
     tests.test_settings_configuration \
     tests.test_plugin_loading \
+    tests.test_timezone \
     tests.test_cloud_backend_factory \
     tests.test_credential_source \
     tests.test_aws_credential_source \

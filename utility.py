@@ -1,6 +1,8 @@
 import base64
 import binascii
+import datetime
 import re
+import zoneinfo
 from unicodedata import normalize
 import json
 import yaml
@@ -274,3 +276,11 @@ def deep_dump(obj, indent=0, visited=None):
         for attr, value in obj.__dict__.items():
             print(f"{prefix}  Attribute '{attr}' ->")
             deep_dump(value, indent + 4, visited)
+
+
+def timezone(name):
+    """IANA の timezone 名（例: Asia/Tokyo）から tzinfo を作る。UTC は大文字小文字を区別しない。
+    未知の名前は zoneinfo.ZoneInfoNotFoundError、形式が不正なら ValueError。"""
+    if name is None or str(name).upper() == 'UTC':
+        return datetime.timezone.utc
+    return zoneinfo.ZoneInfo(name)

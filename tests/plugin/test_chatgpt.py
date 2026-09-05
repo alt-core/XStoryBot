@@ -20,17 +20,12 @@ def load_chatgpt_module():
     requests = types.ModuleType('requests')
     requests.post = mock.Mock()
 
-    pytz = types.ModuleType('pytz')
-    pytz.timezone = lambda _name: datetime.timezone.utc
-    pytz.exceptions = types.SimpleNamespace(UnknownTimeZoneError=ValueError)
-
     module_name = 'tests_target_chatgpt'
     spec = importlib.util.spec_from_file_location(module_name, TARGET)
     module = importlib.util.module_from_spec(spec)
     with mock.patch.dict(sys.modules, {
         'commands': commands,
         'requests': requests,
-        'pytz': pytz,
         module_name: module,
     }):
         spec.loader.exec_module(module)
