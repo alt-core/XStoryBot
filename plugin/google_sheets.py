@@ -1,10 +1,8 @@
 import re
 import time
 import json
-from google.oauth2 import service_account
-from googleapiclient.discovery import build
-from googleapiclient.errors import HttpError
 import logging
+from urllib.parse import quote
 
 from cloud_backend import create_credential_source
 import hub
@@ -12,10 +10,33 @@ import utility
 import settings
 from utility import deep_merge, to_hankaku
 
-_google_services = {}
+# Google Sheets API v4 を service account で直接呼ぶ。
+# https://developers.google.com/sheets/api/reference/rest
+# 使うのは spreadsheets.get（sheet 一覧）と spreadsheets.values.batchGet だけ。
+SHEETS_API = 'https://sheets.googleapis.com/v4/spreadsheets'
+SCOPES = ['https://www.googleapis.com/auth/spreadsheets.readonly']
+REQUEST_TIMEOUT = (30, 120)  # (接続, 読取) 秒
+
+_sessions = {}
 _credential_source = None
 
-SCOPES = ['https://www.googleapis.com/auth/spreadsheets.readonly']
+
+class SheetsApiError(Exception):
+    """Google Sheets API が 2xx 以外を返したときの例外。"""
+
+    def __init__(self, status_code, message):
+        super().__init__(f'Google Sheets API error: status={status_code} message={message}')
+        self.status_code = status_code
+        self.message = message
+
+    @classmethod
+    def from_response(cls, response):
+        try:
+            message = response.json().get('error', {}).get('message')
+        except (ValueError, AttributeError):
+            message = None
+        return cls(response.status_code, message if message is not None else response.text[:200])
+
 
 def _get_credential_source():
     global _credential_source
@@ -23,9 +44,13 @@ def _get_credential_source():
         _credential_source = create_credential_source()
     return _credential_source
 
-def _get_google_service(key_file_name):
-    if key_file_name not in _google_services:
-        # 認証情報の作成
+def _get_google_session(key_file_name):
+    """service account で認可済みの requests.Session（token は自動更新）。key file ごとに1つ。"""
+    if key_file_name not in _sessions:
+        # google-auth を使うのは builder だけなので、ここで import して API／worker の起動を軽くする
+        from google.oauth2 import service_account
+        from google.auth.transport.requests import AuthorizedSession
+
         credential_data = (
             _get_credential_source().get_google_service_account(
                 key_file_name))
@@ -39,9 +64,9 @@ def _get_google_service(key_file_name):
                 service_account.Credentials.from_service_account_file(
                     credential_data.file_path,
                     scopes=SCOPES))
-        _google_services[key_file_name] = build('sheets', 'v4', credentials=credentials)
+        _sessions[key_file_name] = AuthorizedSession(credentials)
 
-    return _google_services[key_file_name]
+    return _sessions[key_file_name]
 
 
 def convert_value(s):
@@ -203,74 +228,30 @@ class GoogleSheetPlugin_Loader:
         self.ignore_sheet = re.compile(self.params.get('ignore_sheet', r'^_'), re.IGNORECASE)
         self.evaluate_formula = bool(self.params.get('evaluate_formula', False))
 
-    def get_service(self):
-        return _get_google_service(self.params['key_file_json'])
+    def get_session(self):
+        return _get_google_session(self.params['key_file_json'])
 
-    def _execute_with_retry(self, request, max_attempts=6, base_delay=5):
-        # Google Sheets API の 429 (Too Many Requests) と 5xx (一時障害) は指数バックオフで数回リトライする
+    def _get_json(self, session, path, params, max_attempts=6, base_delay=5):
+        """GET して JSON を返す。429 と 5xx は指数バックオフで数回リトライし、他の失敗は SheetsApiError。"""
         delay = base_delay
         for attempt in range(max_attempts):
-            try:
-                return request.execute()
-            except HttpError as exc:
-                status = getattr(exc.resp, 'status', None) if exc.resp is not None else None
-                retryable = status == 429 or (status is not None and 500 <= status < 600)
-                if retryable and attempt < max_attempts - 1:
-                    logging.warning(
-                        "Google Sheets API returned %s (attempt %d/%d). Retrying in %.1f seconds.",
-                        status,
-                        attempt + 1,
-                        max_attempts,
-                        delay
-                    )
-                    time.sleep(delay)
-                    delay *= 2
-                    continue
-                raise
-
-    def _get_sheet_values(self, service, spreadsheet_id, sheet_title):
-        if not self.evaluate_formula:
-            # evaluate_formulaがFalseなら式文字列を返す。
-            request = service.spreadsheets().values().get(
-                spreadsheetId=spreadsheet_id,
-                range=sheet_title + "!A:Z",
-                valueRenderOption="FORMULA"
-            )
-            result = self._execute_with_retry(request)
-            return result.get('values', [])
-        # evaluate_formulaがTrueなら式文字列と評価値を取得して結合する。
-        return self._get_sheet_values_with_formula(service, spreadsheet_id, sheet_title)
-
-    def _get_sheet_values_with_formula(self, service, spreadsheet_id, sheet_title):
-        # まず式の文字列表現を取得する（=IMAGE の判定などに利用する）
-        formula_request = service.spreadsheets().values().get(
-            spreadsheetId=spreadsheet_id,
-            range=sheet_title + "!A:Z",
-            valueRenderOption="FORMULA"
-        )
-        formula_result = self._execute_with_retry(formula_request).get('values', [])
-        # 続けて式の評価結果を取得する（=IMAGE 以外のセルはこちらを利用する）
-        # UNFORMATTED_VALUE を指定すると数値は数値のまま返るため、後段の convert_value で自然に処理できる
-        value_request = service.spreadsheets().values().get(
-            spreadsheetId=spreadsheet_id,
-            range=sheet_title + "!A:Z",
-            valueRenderOption="UNFORMATTED_VALUE"
-        )
-        value_result = self._execute_with_retry(value_request)
-        values = value_result.get('values', [])
-
-        def is_formula(cell_value):
-            # Google Sheets では '=foo' と入力すれば文字列扱いになるため、先頭 '=' だけで十分に式判定できる
-            if not isinstance(cell_value, str):
-                return False
-            stripped = cell_value.strip()
-            if not stripped.startswith("="):
-                return False
-            # =IMAGE のケースだけはプレビュー用として式文字列を保ちたいので除外する
-            return not stripped.upper().startswith("=IMAGE")
-
-        # 式でない行はそのまま、式行は評価済みの値を返す
-        return self._combine_formula_values(sheet_title, formula_result, values, is_formula)
+            response = session.get(f'{SHEETS_API}/{path}', params=params, timeout=REQUEST_TIMEOUT)
+            status = response.status_code
+            if 200 <= status < 300:
+                return response.json()
+            retryable = status == 429 or 500 <= status < 600
+            if retryable and attempt < max_attempts - 1:
+                logging.warning(
+                    "Google Sheets API returned %s (attempt %d/%d). Retrying in %.1f seconds.",
+                    status,
+                    attempt + 1,
+                    max_attempts,
+                    delay
+                )
+                time.sleep(delay)
+                delay *= 2
+                continue
+            raise SheetsApiError.from_response(response)
 
     def _combine_formula_values(self, sheet_title, formula_result, values, is_formula):
         combined = []
@@ -292,7 +273,13 @@ class GoogleSheetPlugin_Loader:
             combined.append(combined_row)
         return combined
 
-    def _batch_get_sheet_values(self, service, spreadsheet_id, sheet_titles):
+    def _batch_get_values(self, session, spreadsheet_id, ranges, value_render_option):
+        result = self._get_json(
+            session, f'{quote(spreadsheet_id, safe="")}/values:batchGet',
+            {'ranges': ranges, 'valueRenderOption': value_render_option})
+        return result.get('valueRanges', [])
+
+    def _batch_get_sheet_values(self, session, spreadsheet_id, sheet_titles):
         """複数シートの値を batchGet で一括取得する"""
         if not sheet_titles:
             return {}
@@ -300,34 +287,17 @@ class GoogleSheetPlugin_Loader:
         ranges = [title + "!A:Z" for title in sheet_titles]
 
         if not self.evaluate_formula:
-            request = service.spreadsheets().values().batchGet(
-                spreadsheetId=spreadsheet_id,
-                ranges=ranges,
-                valueRenderOption="FORMULA"
-            )
-            result = self._execute_with_retry(request)
-            value_ranges = result.get('valueRanges', [])
+            # 式は文字列のまま返す（=IMAGE の判定などに利用する）
+            value_ranges = self._batch_get_values(session, spreadsheet_id, ranges, "FORMULA")
             return {
                 sheet_titles[i]: value_ranges[i].get('values', [])
                 for i in range(len(value_ranges))
             }
 
         # evaluate_formula が True の場合は FORMULA と UNFORMATTED_VALUE の両方を取得
-        formula_request = service.spreadsheets().values().batchGet(
-            spreadsheetId=spreadsheet_id,
-            ranges=ranges,
-            valueRenderOption="FORMULA"
-        )
-        formula_result = self._execute_with_retry(formula_request)
-        formula_ranges = formula_result.get('valueRanges', [])
-
-        value_request = service.spreadsheets().values().batchGet(
-            spreadsheetId=spreadsheet_id,
-            ranges=ranges,
-            valueRenderOption="UNFORMATTED_VALUE"
-        )
-        value_result = self._execute_with_retry(value_request)
-        value_ranges = value_result.get('valueRanges', [])
+        # UNFORMATTED_VALUE を指定すると数値は数値のまま返るため、後段の convert_value で自然に処理できる
+        formula_ranges = self._batch_get_values(session, spreadsheet_id, ranges, "FORMULA")
+        value_ranges = self._batch_get_values(session, spreadsheet_id, ranges, "UNFORMATTED_VALUE")
 
         def is_formula(cell_value):
             # Google Sheets では '=foo' と入力すれば文字列扱いになるため、先頭 '=' だけで十分に式判定できる
@@ -349,11 +319,10 @@ class GoogleSheetPlugin_Loader:
 
     def _get_table_from_google_sheets(self, spreadsheet_id):
         logging.info(f"loading google sheet: {spreadsheet_id}")
-        service = self.get_service()
-        request = service.spreadsheets().get(
-            spreadsheetId=spreadsheet_id, fields="sheets(properties(sheet_id,title))"
-        )
-        result = self._execute_with_retry(request)
+        session = self.get_session()
+        result = self._get_json(
+            session, quote(spreadsheet_id, safe=""),
+            {'fields': 'sheets(properties(sheet_id,title))'})
         sheet_titles = [sheet_prop['properties']['title'] for sheet_prop in result.get('sheets', [])]
 
         # 対象シートを収集してbatchGetで一括取得
@@ -370,7 +339,7 @@ class GoogleSheetPlugin_Loader:
             if self.constant_sheet.match(parsed_sheet_title) or (parsed_sheet_title != "" and self.script_sheet.match(parsed_sheet_title)):
                 target_sheet_titles.append(sheet_title)
 
-        all_values = self._batch_get_sheet_values(service, spreadsheet_id, target_sheet_titles)
+        all_values = self._batch_get_sheet_values(session, spreadsheet_id, target_sheet_titles)
 
         sheets = []
         constants = {}

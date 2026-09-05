@@ -434,11 +434,11 @@ class DependencyConfigurationTest(unittest.TestCase):
         self.assertIn('gunicorn~=23.0.0', core)
         self.assertIn('argon2-cffi~=25.1.0', core)
         self.assertIn('itsdangerous~=2.2.0', core)
-        self.assertIn('google-api-python-client~=2.160.0', core)  # Sheets は両 provider の builder が使う
+        self.assertIn('google-auth~=2.57.1', core)  # Sheets は両 provider の builder が service account で直接呼ぶ
         names = self._names(core)
-        for excluded in ('line-bot-sdk', 'boto3', 'google-cloud-firestore', 'google-cloud-storage',
-                         'google-cloud-tasks', 'google-cloud-logging', 'twilio', 'pusher',
-                         'firebase-admin', 'google-cloud-memcache'):
+        for excluded in ('line-bot-sdk', 'google-api-python-client', 'boto3', 'google-cloud-firestore',
+                         'google-cloud-storage', 'google-cloud-tasks', 'google-cloud-logging', 'twilio',
+                         'pusher', 'firebase-admin', 'google-cloud-memcache'):
             self.assertNotIn(excluded, names)
 
     def test_provider別と任意pluginの依存ファイル(self):

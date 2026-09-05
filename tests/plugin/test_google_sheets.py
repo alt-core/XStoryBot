@@ -24,41 +24,7 @@ def deep_merge(left, right):
 
 
 def load_google_sheets_module():
-    """Google APIを呼ばずに対象モジュールを読み込む。"""
-    credential_calls = []
-    credential_info_calls = []
-    build_calls = []
-
-    class Credentials:
-        @classmethod
-        def from_service_account_file(cls, key_file_name, scopes):
-            credential = object()
-            credential_calls.append((key_file_name, scopes, credential))
-            return credential
-
-        @classmethod
-        def from_service_account_info(cls, info, scopes):
-            credential = object()
-            credential_info_calls.append((info, scopes, credential))
-            return credential
-
-    def build(*args, **kwargs):
-        service = object()
-        build_calls.append((args, kwargs, service))
-        return service
-
-    google = types.ModuleType('google')
-    google_oauth2 = types.ModuleType('google.oauth2')
-    service_account = types.ModuleType('google.oauth2.service_account')
-    service_account.Credentials = Credentials
-    google_oauth2.service_account = service_account
-
-    googleapiclient = types.ModuleType('googleapiclient')
-    discovery = types.ModuleType('googleapiclient.discovery')
-    discovery.build = build
-    errors = types.ModuleType('googleapiclient.errors')
-    errors.HttpError = type('HttpError', (Exception,), {})
-
+    """Google API を呼ばずに対象モジュールを読み込む。"""
     hub = types.ModuleType('hub')
     hub.register_scenario_loader_factory = mock.Mock()
     utility = types.ModuleType('utility')
@@ -83,12 +49,6 @@ def load_google_sheets_module():
     module = importlib.util.module_from_spec(spec)
     replacements = {
         'cloud_backend': cloud_backend,
-        'google': google,
-        'google.oauth2': google_oauth2,
-        'google.oauth2.service_account': service_account,
-        'googleapiclient': googleapiclient,
-        'googleapiclient.discovery': discovery,
-        'googleapiclient.errors': errors,
         'hub': hub,
         'utility': utility,
         'settings': settings,
@@ -96,108 +56,108 @@ def load_google_sheets_module():
     }
     with mock.patch.dict(sys.modules, replacements):
         spec.loader.exec_module(module)
-    return (
-        module,
-        credential_calls,
-        credential_info_calls,
-        build_calls,
-        credential_source,
-    )
+    return module, credential_source
 
 
-class FakeRequest:
-    def __init__(self, result):
-        self.result = result
+def google_auth_stubs():
+    """google-auth の service account 資格情報と AuthorizedSession の最小 stub。"""
+    credential_calls = []
+    credential_info_calls = []
+    session_calls = []
 
-    def execute(self):
-        return self.result
+    class Credentials:
+        @classmethod
+        def from_service_account_file(cls, key_file_name, scopes):
+            credential = object()
+            credential_calls.append((key_file_name, scopes, credential))
+            return credential
+
+        @classmethod
+        def from_service_account_info(cls, info, scopes):
+            credential = object()
+            credential_info_calls.append((info, scopes, credential))
+            return credential
+
+    class AuthorizedSession:
+        def __init__(self, credentials):
+            self.credentials = credentials
+            session_calls.append(self)
+
+    google = types.ModuleType('google')
+    google.__path__ = []
+    oauth2 = types.ModuleType('google.oauth2')
+    oauth2.__path__ = []
+    service_account = types.ModuleType('google.oauth2.service_account')
+    service_account.Credentials = Credentials
+    auth = types.ModuleType('google.auth')
+    auth.__path__ = []
+    transport = types.ModuleType('google.auth.transport')
+    transport.__path__ = []
+    transport_requests = types.ModuleType('google.auth.transport.requests')
+    transport_requests.AuthorizedSession = AuthorizedSession
+    modules = {
+        'google': google, 'google.oauth2': oauth2,
+        'google.oauth2.service_account': service_account,
+        'google.auth': auth, 'google.auth.transport': transport,
+        'google.auth.transport.requests': transport_requests,
+    }
+    return modules, credential_calls, credential_info_calls, session_calls
 
 
-class FakeValues:
-    def __init__(self, batch_results):
-        self.batch_results = list(batch_results)
-        self.batch_calls = []
+class FakeResponse:
+    def __init__(self, status_code, body=None, text=''):
+        self.status_code = status_code
+        self._body = body
+        self.text = text
 
-    def batchGet(self, **kwargs):
-        self.batch_calls.append(kwargs)
-        return FakeRequest(self.batch_results.pop(0))
-
-
-class FakeSpreadsheets:
-    def __init__(self, sheet_titles, batch_results):
-        self.sheet_titles = sheet_titles
-        self.values_api = FakeValues(batch_results)
-        self.get_calls = []
-
-    def get(self, **kwargs):
-        self.get_calls.append(kwargs)
-        sheets = [
-            {'properties': {'sheet_id': index, 'title': title}}
-            for index, title in enumerate(self.sheet_titles)
-        ]
-        return FakeRequest({'sheets': sheets})
-
-    def values(self):
-        return self.values_api
+    def json(self):
+        if self._body is None:
+            raise ValueError('not json')
+        return self._body
 
 
-class FakeService:
-    def __init__(self, sheet_titles=(), batch_results=()):
-        self.spreadsheets_api = FakeSpreadsheets(sheet_titles, batch_results)
+class FakeSession:
+    """session.get(url, params=, timeout=) を記録し、用意した応答を順に返す。"""
 
-    def spreadsheets(self):
-        return self.spreadsheets_api
+    def __init__(self, responses=()):
+        self.responses = list(responses)
+        self.calls = []
+
+    def get(self, url, params=None, timeout=None):
+        self.calls.append({'url': url, 'params': params, 'timeout': timeout})
+        response = self.responses.pop(0)
+        if isinstance(response, FakeResponse):
+            return response
+        return FakeResponse(200, response)
+
+
+def sheet_metadata(titles):
+    return {'sheets': [
+        {'properties': {'sheet_id': index, 'title': title}}
+        for index, title in enumerate(titles)
+    ]}
 
 
 class GoogleSheetsPluginTest(unittest.TestCase):
     def setUp(self):
-        (
-            self.module,
-            self.credential_calls,
-            self.credential_info_calls,
-            self.build_calls,
-            self.credential_source,
-        ) = load_google_sheets_module()
+        self.module, self.credential_source = load_google_sheets_module()
+        self.module._sessions.clear()
 
-    def test_service_uses_configured_key_file_and_is_cached(self):
-        first = self.module._get_google_service('/keys/sheets.json')
-        second = self.module._get_google_service('/keys/sheets.json')
+    def test_sessionはkey_fileごとに1つ作りcacheする(self):
+        modules, credential_calls, _info_calls, session_calls = google_auth_stubs()
+        with mock.patch.dict(sys.modules, modules):
+            first = self.module._get_google_session('/keys/sheets.json')
+            second = self.module._get_google_session('/keys/sheets.json')
 
         self.assertIs(first, second)
-        self.assertEqual(len(self.credential_calls), 1)
-        key_file_name, scopes, credential = self.credential_calls[0]
+        self.assertEqual(len(credential_calls), 1)
+        key_file_name, scopes, credential = credential_calls[0]
         self.assertEqual(key_file_name, '/keys/sheets.json')
         self.assertEqual(scopes, self.module.SCOPES)
-        self.assertEqual(len(self.build_calls), 1)
-        args, kwargs, built_service = self.build_calls[0]
-        self.assertEqual(args, ('sheets', 'v4'))
-        self.assertIs(kwargs['credentials'], credential)
-        self.assertIs(first, built_service)
+        self.assertEqual([first], session_calls)
+        self.assertIs(first.credentials, credential)
         self.credential_source.get_google_service_account.assert_called_once_with(
             '/keys/sheets.json')
-
-    def test_一時障害の5xxと429は再試行し4xxは即座に伝播する(self):
-        loader = self.module.GoogleSheetPlugin_Loader({})
-        HttpError = self.module.HttpError
-
-        def http_error(status):
-            error = HttpError()
-            error.resp = types.SimpleNamespace(status=status)
-            return error
-
-        request = mock.Mock()
-        request.execute.side_effect = [http_error(503), http_error(429), 'values']
-        with mock.patch.object(self.module.time, 'sleep') as sleep:
-            self.assertEqual('values', loader._execute_with_retry(request))
-        self.assertEqual(3, request.execute.call_count)
-        self.assertEqual([mock.call(5), mock.call(10)], sleep.call_args_list)
-
-        request = mock.Mock()
-        request.execute.side_effect = [http_error(404)]
-        with mock.patch.object(self.module.time, 'sleep') as sleep:
-            with self.assertRaises(HttpError):
-                loader._execute_with_retry(request)
-        sleep.assert_not_called()
 
     def test_inline_JSONから資格情報を生成する(self):
         self.credential_source.get_google_service_account.return_value = (
@@ -207,18 +167,48 @@ class GoogleSheetsPluginTest(unittest.TestCase):
                 use_default=False,
             ))
         self.credential_source.get_google_service_account.side_effect = None
+        modules, _calls, credential_info_calls, session_calls = google_auth_stubs()
 
-        service = self.module._get_google_service('/parameter/sheets-key')
+        with mock.patch.dict(sys.modules, modules):
+            session = self.module._get_google_session('/parameter/sheets-key')
 
-        self.assertEqual(len(self.credential_info_calls), 1)
-        info, scopes, credential = self.credential_info_calls[0]
+        self.assertEqual(len(credential_info_calls), 1)
+        info, scopes, credential = credential_info_calls[0]
         self.assertEqual({'project_id': 'test-project'}, info)
         self.assertEqual(self.module.SCOPES, scopes)
-        self.assertIs(self.build_calls[0][1]['credentials'], credential)
-        self.assertIs(service, self.build_calls[0][2])
+        self.assertIs(session.credentials, credential)
+        self.assertEqual([session], session_calls)
+
+    def test_module_importではgoogle_authを読み込まない(self):
+        # google-auth の import は builder が session を作るときだけ（API／worker の起動を軽くする）
+        source = TARGET.read_text(encoding='utf-8')
+        top_level_imports = [
+            line for line in source.splitlines()
+            if line.startswith(('import ', 'from ')) and 'google' in line]
+        self.assertEqual([], top_level_imports)
+
+    def test_一時障害の5xxと429は再試行し4xxは即座に伝播する(self):
+        loader = self.module.GoogleSheetPlugin_Loader({})
+        session = FakeSession([
+            FakeResponse(503, text='unavailable'), FakeResponse(429, {'error': {'message': 'quota'}}),
+            {'values': [['ok']]}])
+        with mock.patch.object(self.module.time, 'sleep') as sleep:
+            self.assertEqual({'values': [['ok']]}, loader._get_json(session, 'sheet/values:batchGet', {'ranges': []}))
+        self.assertEqual(3, len(session.calls))
+        self.assertEqual([mock.call(5), mock.call(10)], sleep.call_args_list)
+        self.assertEqual('https://sheets.googleapis.com/v4/spreadsheets/sheet/values:batchGet', session.calls[0]['url'])
+        self.assertEqual((30, 120), session.calls[0]['timeout'])
+
+        session = FakeSession([FakeResponse(404, {'error': {'message': 'Requested entity was not found.'}})])
+        with mock.patch.object(self.module.time, 'sleep') as sleep:
+            with self.assertRaises(self.module.SheetsApiError) as captured:
+                loader._get_json(session, 'sheet', {})
+        sleep.assert_not_called()
+        self.assertEqual(404, captured.exception.status_code)
+        self.assertEqual('Requested entity was not found.', captured.exception.message)
 
     def test_batch_get_preserves_target_order_and_formula_text(self):
-        service = FakeService(batch_results=[{
+        session = FakeSession([{
             'valueRanges': [
                 {'values': [['second']]},
                 {'values': [['first']]},
@@ -231,17 +221,20 @@ class GoogleSheetsPluginTest(unittest.TestCase):
         })
 
         result = loader._batch_get_sheet_values(
-            service, 'spreadsheet', ['second', 'first', 'empty'])
+            session, 'spreadsheet', ['second', 'first', 'empty'])
 
         self.assertEqual(result, {
             'second': [['second']],
             'first': [['first']],
             'empty': [],
         })
-        self.assertEqual(service.spreadsheets_api.values_api.batch_calls, [{
-            'spreadsheetId': 'spreadsheet',
-            'ranges': ['second!A:Z', 'first!A:Z', 'empty!A:Z'],
-            'valueRenderOption': 'FORMULA',
+        self.assertEqual(session.calls, [{
+            'url': 'https://sheets.googleapis.com/v4/spreadsheets/spreadsheet/values:batchGet',
+            'params': {
+                'ranges': ['second!A:Z', 'first!A:Z', 'empty!A:Z'],
+                'valueRenderOption': 'FORMULA',
+            },
+            'timeout': (30, 120),
         }])
 
     def test_formula_evaluation_is_opt_in(self):
@@ -252,7 +245,7 @@ class GoogleSheetsPluginTest(unittest.TestCase):
         self.assertFalse(loader.evaluate_formula)
 
     def test_formula_evaluation_keeps_image_formula_and_empty_result(self):
-        service = FakeService(batch_results=[
+        session = FakeSession([
             {
                 'valueRanges': [
                     {'values': [
@@ -275,17 +268,16 @@ class GoogleSheetsPluginTest(unittest.TestCase):
         })
 
         result = loader._batch_get_sheet_values(
-            service, 'spreadsheet', ['story', 'empty'])
+            session, 'spreadsheet', ['story', 'empty'])
 
         self.assertEqual(result['story'], [
             [2, '=IMAGE("https://example.invalid/a.png")', 'plain'],
             [''],
         ])
         self.assertEqual(result['empty'], [])
-        calls = service.spreadsheets_api.values_api.batch_calls
-        self.assertEqual(calls[0]['valueRenderOption'], 'FORMULA')
-        self.assertEqual(calls[1]['valueRenderOption'], 'UNFORMATTED_VALUE')
-        self.assertEqual(calls[0]['ranges'], ['story!A:Z', 'empty!A:Z'])
+        self.assertEqual(session.calls[0]['params']['valueRenderOption'], 'FORMULA')
+        self.assertEqual(session.calls[1]['params']['valueRenderOption'], 'UNFORMATTED_VALUE')
+        self.assertEqual(session.calls[0]['params']['ranges'], ['story!A:Z', 'empty!A:Z'])
 
     def test_same_name_environment_sheet_is_extended_in_place(self):
         titles = [
@@ -298,12 +290,12 @@ class GoogleSheetsPluginTest(unittest.TestCase):
             {'values': [['base_value', 'value'], ['', 'base']]},
             {'values': [['test_value', 'value'], ['', 'test']]},
         ]
-        service = FakeService(titles, [{'valueRanges': values}])
+        session = FakeSession([sheet_metadata(titles), {'valueRanges': values}])
         loader = self.module.GoogleSheetPlugin_Loader({
             'key_file_json': '/keys/sheets.json',
             'evaluate_formula': False,
         })
-        loader.get_service = lambda: service
+        loader.get_session = lambda: session
 
         sheets, constants = loader._get_table_from_google_sheets('spreadsheet')
 
@@ -315,10 +307,20 @@ class GoogleSheetsPluginTest(unittest.TestCase):
             'base_value': 'base',
             'test_value': 'test',
         })
-        batch_call = service.spreadsheets_api.values_api.batch_calls[0]
-        self.assertEqual(batch_call['ranges'], [
+        self.assertEqual(
+            'https://sheets.googleapis.com/v4/spreadsheets/spreadsheet', session.calls[0]['url'])
+        self.assertEqual({'fields': 'sheets(properties(sheet_id,title))'}, session.calls[0]['params'])
+        self.assertEqual(session.calls[1]['params']['ranges'], [
             'story!A:Z', 'story.test!A:Z', '$const!A:Z', '$const.test!A:Z',
         ])
+
+    def test_spreadsheet_idはURLのpath用に符号化する(self):
+        loader = self.module.GoogleSheetPlugin_Loader({'key_file_json': '/keys/sheets.json'})
+        session = FakeSession([sheet_metadata([]), ])
+        loader.get_session = lambda: session
+        loader._get_table_from_google_sheets('a/b c')
+        self.assertEqual(
+            'https://sheets.googleapis.com/v4/spreadsheets/a%2Fb%20c', session.calls[0]['url'])
 
 
 if __name__ == '__main__':

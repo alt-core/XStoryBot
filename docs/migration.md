@@ -10,7 +10,7 @@ GAE用のデプロイ設定は含まれていません。GCPではAPI用・ビ�
 
 ## 2. 設定を作り直す
 
-依存は`requirements-gcp.txt`と`requirements-aws.txt`に分かれ、Dockerイメージには接続先の依存だけが入ります（`--build-arg XSBOT_CLOUD_PROVIDER`）。TwilioとPusherは任意pluginになり、`settings.yaml`の`plugins`に書く場合だけ`requirements-optional.txt`を追加します。以前の`settings.yaml.template`を写した設定には両pluginが残っているので、使わないなら`plugins`から外してください。残したまま依存が無いと、起動時に不足しているpackage名を示して停止します。
+依存は`requirements-gcp.txt`と`requirements-aws.txt`に分かれ、Dockerイメージには接続先の依存だけが入ります（`--build-arg XSBOT_CLOUD_PROVIDER`）。TwilioとPusherは任意pluginになり、`settings.yaml`の`plugins`に書く場合だけ`requirements-optional.txt`を追加します。Google Sheetsの読み込みは`google-auth`のservice account認証でSheets API v4を直接呼ぶため、`google-api-python-client`は不要になりました。以前の`settings.yaml.template`を写した設定には両pluginが残っているので、使わないなら`plugins`から外してください。残したまま依存が無いと、起動時に不足しているpackage名を示して停止します。
 
 `settings.yaml.template`を初回に`settings.yaml`へコピーし、Botとpluginを設定します。ローカル実行とDockerはこの`settings.yaml`を使います。コンテナ用にtemplateを直接編集していた場合は、その内容を非公開の`settings.yaml`へ移してください。ファイルが無い場合や空の場合はビルドが停止します。秘密値は直書きせず、`.env.template`を参考に実行環境から渡してください。実設定は公開Gitへ追加せず、`.env`や認証情報ファイルはDockerイメージへ含めないでください。
 
