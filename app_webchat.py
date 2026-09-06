@@ -8,7 +8,6 @@ import common_commands
 import hub
 import log_config
 from plugin.line import quick_reply, quick_reply_v2
-from plugin.webchat import more as webchat_more
 from plugin.webchat.errors import InvalidWebchatConfiguration
 from plugin.webchat.interface import WebchatInterfaceFactory
 from plugin.webchat import webapi
@@ -33,6 +32,7 @@ if 'line.quick_reply' in settings.PLUGINS:
 if 'line.quick_reply_v2' in settings.PLUGINS:
     quick_reply_v2.load_plugin(_plugin_params('line.quick_reply_v2'))
 if 'line.more' in settings.PLUGINS:
+    from plugin.webchat import more as webchat_more
     webchat_more.load_plugin(_plugin_params('line.more'))
 
 _factory = WebchatInterfaceFactory(_plugin_params('webchat'))

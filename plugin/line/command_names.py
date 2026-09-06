@@ -1,4 +1,4 @@
-"""LINE表示commandの名前だけを共有する軽量module。"""
+"""LINE用commandの名前だけを共有する軽量module。"""
 
 
 BUTTON_CMDS = ('@button', '@ボタン')
@@ -8,6 +8,7 @@ IMAGEMAP_CMDS = ('@imagemap', '@イメージマップ')
 FLEX_CMDS = ('@flex', '@フレックス')
 REPLY_CMDS = ('@reply', '@リプライ')
 RICHMENU_CMDS = ('@richmenu', '@リッチメニュー')
+SET_NEXT_LABEL_CMD = '@@set_next_label'
 ALL_TEMPLATE_CMDS = (
     BUTTON_CMDS + CONFIRM_CMDS + PANEL_CMDS + IMAGEMAP_CMDS
     + REPLY_CMDS + RICHMENU_CMDS

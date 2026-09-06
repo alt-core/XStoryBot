@@ -6,10 +6,10 @@ import json
 from cloud_backend import create_state_store
 from plugin.render_text import renderer
 
-from plugin.line import more
 import commands
 import utility
 from plugin.line import default_commands, quick_reply
+from plugin.line.command_names import SET_NEXT_LABEL_CMD
 
 
 IMAGE_TEXT_CMDS = ('@imagetext', '@画像テキスト', '@novel', '@小説')
@@ -42,8 +42,8 @@ class ImageTextStatDB:
 
 class LineImageTextPlugin_Builder(object):
     def __init__(self, params):
-        self.default_more_message = params['more_message']
-        self.more_image_url = params['more_image_url']
+        self.default_more_message = params.get('more_message')
+        self.more_image_url = params.get('more_image_url')
         frames = params.get('frames', {})
         if len(frames) == 0:
             frames['default'] = {}
@@ -92,6 +92,18 @@ class LineImageTextPlugin_Builder(object):
         if frame_opt is None:
             builder.raise_error("定義されていないフレーム名です: {}".format(frame))
         more_message = utility.safe_list_get(options, 2, frame_opt['more_message'])
+        if frame_opt['more_mode'] in ('inner', 'between', 'always'):
+            if commands.get_command(SET_NEXT_LABEL_CMD, builder.version, service='line') is None:
+                builder.raise_error(
+                    'このフレームの more_mode には line.more が必要です。'
+                    'settings.yaml の plugins で有効にするか、quick_between / quick_always を指定してください')
+            if not more_message:
+                builder.raise_error(
+                    'More方式の画像テキストには more_message が必要です。'
+                    'line.image_text、フレーム設定、またはコマンドの第3引数で指定してください')
+            if frame_opt['more_mode'] in ('between', 'always') and not self.more_image_url:
+                builder.raise_error(
+                    'このフレームの more_mode には line.image_text の more_image_url が必要です')
         counter = 0
         while text:
             stat = None
@@ -113,7 +125,7 @@ class LineImageTextPlugin_Builder(object):
             if frame_opt['more_mode'] == 'inner':
                 builder.add_command(sender, default_commands.IMAGEMAP_CMDS[0], [str(image_url), str(size[0]), str(size[1])], [[frame_opt['button_area'], more_message]])
                 next_label = '##IMGTEXT__{}__{}'.format(builder.scene.get_relative_position_desc(builder.node), counter)
-                builder.add_command(sender, more.SET_NEXT_LABEL_CMD, [next_label, more_message], None)
+                builder.add_command(sender, SET_NEXT_LABEL_CMD, [next_label, more_message], None)
                 builder.add_new_string_block(next_label)
             else:
                 builder.add_command(sender, default_commands.IMAGEMAP_CMDS[0], [str(image_url), str(size[0]), str(size[1])], [])
@@ -127,7 +139,7 @@ class LineImageTextPlugin_Builder(object):
                 filepath, size = builder.build_image_for_imagemap_command(self.more_image_url)
                 builder.add_command(sender, default_commands.IMAGEMAP_CMDS[0], [str(filepath), str(size[0]), str(size[1])], [['0,0,{},{}'.format(size[0],size[1]), more_message]])
                 next_label = '##IMGTEXT__{}__{}'.format(builder.scene.get_relative_position_desc(builder.node), counter)
-                builder.add_command(sender, more.SET_NEXT_LABEL_CMD, [next_label, more_message], None)
+                builder.add_command(sender, SET_NEXT_LABEL_CMD, [next_label, more_message], None)
                 builder.add_new_string_block(next_label)
             counter += 1
             if counter > 100:

@@ -67,6 +67,7 @@ def _base_stubs():
         Default_Builder=lambda: object(),
         register_commands=Mock(),
         register_command=Mock(),
+        get_command=Mock(),
         invoke_runtime_construct_response=Mock(return_value=False),
     )
     utility = _module(
@@ -574,6 +575,7 @@ def _plugin_packages(default_commands=None, more=None, quick_reply=None):
                 default_commands, 'IMAGEMAP_CMDS', ('@imagemap',)),
             REPLY_CMDS=getattr(
                 default_commands, 'REPLY_CMDS', ('@reply',)),
+            SET_NEXT_LABEL_CMD='@@set_next_label',
         )
         line.command_names = command_names
         replacements['plugin.line.command_names'] = command_names

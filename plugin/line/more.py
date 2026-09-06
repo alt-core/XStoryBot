@@ -6,10 +6,10 @@ from cloud_backend import create_state_store
 import hub
 import commands
 from plugin.line import default_commands
+from plugin.line.command_names import SET_NEXT_LABEL_CMD
 from utility import safe_list_get
 
 
-SET_NEXT_LABEL_CMD = '@@set_next_label'
 CLEAR_NEXT_LABEL_CMDS = ('@clear_next_label', '@reset_next_label')
 
 

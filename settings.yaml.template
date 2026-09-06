@@ -103,20 +103,11 @@
       ignore_pattern: "^リセット$|^「リセット」$|^\\*共通/リセット$|^##line\\.liff\\."
       please_select_quick_reply_label: "##please_select_quick_reply"
 
-    line.more:
-      command: []
-      image_url: "https://example.com/path/to/more_button.png"
-      message: "「続きを読む」"
-      action_pattern: null
-      ignore_pattern: "^「|^リセット$|^\\*共通/リセット$"
-      please_push_more_button_label: "##please_push_more_button"
-
     line.image_text:
-      more_message: "「続きを読む」"
-      more_image_url: "https://example.com/path/to/more_button.png"
       default_frame: "book"
       frames:
         book:
+          more_mode: "quick_between"
           size_x: 2080
           size_y: 1872
           margin_x: 90

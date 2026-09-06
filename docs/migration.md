@@ -20,6 +20,14 @@ GAE用のデプロイ設定は含まれていません。GCPではAPI用・ビ�
 
 状態を共有するBotには同じ`state_namespace`を設定します。省略した場合はBot名がnamespaceになります。
 
+### Moreを使うシナリオの設定
+
+`settings.yaml.template`では`line.more`を有効にせず、画像テキストの標準フレームに`more_mode: quick_between`を指定しています。既存のMoreを使うシナリオを移行する場合は、`settings.yaml`の`plugins`に`line.more`を残し、記号・画像・案内先ラベルを既存設定に合わせてください。追加パッケージは不要です。
+
+画像テキストのMore方式には、`line.image_text.more_message`（フレーム設定またはコマンド第3引数による指定も可）が必要です。`between`／`always`は`line.image_text.more_image_url`も維持します。`inner`は追加画像URLを使わず、`quick_between`／`quick_always`はこの2項目を省略できます。フレームの`more_mode`を省略した場合の既定値は、従来どおり`between`です。
+
+ビルド済みシナリオにはMoreの内部命令が含まれることがあります。設定だけで無効化せず、画像テキストの`inner`／`between`／`always`も含めて利用箇所を確認してください。Quick Replyへ切り替える場合は再ビルドし、操作の見た目と進行中の利用者への影響を確認します。Webchatも同じ`line.more`設定を使います。
+
 ## 3. シナリオを再ビルドする
 
 Google Sheetsを新環境のサービスアカウントへ共有し、管理画面からシナリオをビルドします。ビルド済みpickleや変換済みメディアを手作業で移す必要はありません。

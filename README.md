@@ -88,6 +88,20 @@ Twilio と Pusher は任意 plugin です。使う場合は`requirements-optiona
         secret: !env PUSHER_APP_SECRET
         cluster: !env PUSHER_APP_CLUSTER
 
+More（`line.more`）も任意 plugin です。追加パッケージは不要で、既存シナリオの移行などで使う場合だけ`settings.yaml`の`plugins`に追加します。
+
+    line.more:
+      command: ["▼"]
+      image_url: "https://example.com/path/to/more_button.png"
+      message: "「続きを読む」"
+      action_pattern: null
+      ignore_pattern: "^「|^リセット$|^\\*共通/リセット$"
+      please_push_more_button_label: "##please_push_more_button"
+
+`command`はシナリオで使う記号に合わせ、案内先の`##please_push_more_button`ラベルも用意してください。画像テキストの標準フレームは`more_mode: quick_between`でQuick Replyを使います。`inner`／`between`／`always`でMoreを使うフレームには`line.more`が必要です。WebchatのMoreも同じ設定で有効になります。
+
+画像テキストでMoreを使う場合は、`line.image_text.more_message`を指定します。フレームの`more_message`またはコマンドの第3引数でも指定できます。`between`／`always`では`line.image_text.more_image_url`も必要です。`inner`は本文画像をボタンにするため追加画像URLは不要で、`quick_between`／`quick_always`では両項目とも不要です。
+
 Cloud Runへデプロイする場合は、利用するGCPプロジェクトを準備してください。
 
 以下、特殊な前準備が必要です。

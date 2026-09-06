@@ -99,6 +99,11 @@ class SettingsTemplateTest(unittest.TestCase):
         self.assertTrue(default['plugins']['chatgpt']['log_conversation'])
         self.assertEqual('bot', default['bots']['bot']['state_namespace'])
         self.assertEqual('gcp', default['cloud']['provider'])
+        for optional_plugin in ('twilio', 'pusher', 'line.more'):
+            self.assertNotIn(optional_plugin, default['plugins'])
+        self.assertEqual(
+            'quick_between',
+            default['plugins']['line.image_text']['frames']['book']['more_mode'])
         self.assertFalse(bool(default['plugins']['webchat']['enabled']))
         self.assertEqual(
             'https://app.example.invalid',

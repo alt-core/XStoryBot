@@ -3,10 +3,10 @@ import re
 
 import commands
 import hub
+from plugin.line.command_names import SET_NEXT_LABEL_CMD
 from utility import safe_list_get
 
 
-SET_NEXT_LABEL_CMD = '@@set_next_label'
 CLEAR_NEXT_LABEL_CMDS = ('@clear_next_label', '@reset_next_label')
 
 
