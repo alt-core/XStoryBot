@@ -240,6 +240,20 @@ class OptionalPluginWebApiTest(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, 'plugin import failed'):
             self.load_app(RuntimeError('plugin import failed'))
 
+    def test_Webchatのrouteは通常APIに混在させない(self):
+        line_webapi = types.SimpleNamespace(app=Bottle())
+
+        @line_webapi.app.post('/line/callback/<bot_name>')
+        def line_callback(bot_name):
+            return 'OK'
+
+        importer = Mock(return_value=line_webapi)
+        module = self.load_app(importer, {'webchat': object(), 'line': object()})
+
+        importer.assert_called_once_with('plugin.line.webapi')
+        self.assertIn('/line/callback/<bot_name>', [route.rule for route in module.app.routes])
+        self.assertFalse(any('/api/webchat/' in route.rule for route in module.app.routes))
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -11,6 +11,7 @@ class GroupMessageTaskDB:
     # クラス定数
     MAX_FAILED_IDS_IN_DB = 100
     MAX_ERROR_MESSAGES_IN_DB = 10
+    MAX_ERROR_MESSAGE_LENGTH = 2000
 
     # タスクステータス定義
     STATUS_PENDING = 'pending'     # 作成済み、処理待ち
@@ -139,14 +140,17 @@ class GroupMessageTaskDB:
         def build_update(data):
             current_update = dict(update_data)
 
+            errors = list(data.get('error_messages', []))
             if error is not None:
-                errors = list(data.get('error_messages', []))
-                if len(errors) >= GroupMessageTaskDB.MAX_ERROR_MESSAGES_IN_DB:
-                    # 古いものから削除 (リストの末尾に追加される想定なら pop(0))
-                    # 現在は先頭に追加しているので、末尾を削除
-                    errors = errors[:GroupMessageTaskDB.MAX_ERROR_MESSAGES_IN_DB - 1]
-                errors.insert(0, error) # 新しいエラーを先頭に追加
-                current_update['error_messages'] = errors
+                errors.insert(0, error)
+            # 保存済み分も丸め、DBの概要が配信結果の更新を妨げないようにする。
+            suffix = '\n…（省略）'
+            limit = GroupMessageTaskDB.MAX_ERROR_MESSAGE_LENGTH
+            current_update['error_messages'] = [
+                message if len(message) <= limit
+                else message[:limit - len(suffix)] + suffix
+                for message in errors[:GroupMessageTaskDB.MAX_ERROR_MESSAGES_IN_DB]
+            ]
 
             if failed_member_id is not None:
                 # StateStoreのtransaction callback内でObjectStoreへ追記する。

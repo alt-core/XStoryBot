@@ -69,6 +69,7 @@ def dashboard_logout():
 @app.get('/dashboard/api/config')
 @auth_middleware.auth_required()
 def api_config():
+    response.set_header('Content-Type', 'application/json; charset=utf-8')
     bots = [
         {
             'id': bot_id,
@@ -95,6 +96,7 @@ def serve_static(filepath):
 @app.post('/dashboard/build_async/<bot_name>')
 @auth_middleware.auth_required(state_changing=True)
 def api_build_async(bot_name):
+    response.set_header('Content-Type', 'application/json; charset=utf-8')
     bot = main.get_bot(bot_name)
     if not bot:
         abort_json(404, 'not found')

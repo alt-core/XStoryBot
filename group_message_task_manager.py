@@ -279,13 +279,7 @@ class GroupMessageTaskManager:
                            success_count, error_count, errors):
         current_success = task.get('successful_members', 0)
         current_error = task.get('failed_members', 0)
-        current_errors = task.get('error_messages', [])
-
-        recent_errors = errors
-        if current_errors:
-            recent_errors = (current_errors + errors)[:10]
-
-        error_summary = "\n".join(recent_errors) if recent_errors else None
+        error_summary = "\n".join(errors) if errors else None
 
         self.mark_task_as_completed(
             task_id=task_id,

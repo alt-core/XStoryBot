@@ -33,6 +33,9 @@ app.merge(dashboard.app)
 
 # plugin をループして、存在する場合はマージする
 for plugin_name in main.get_plugins().keys():
+    if plugin_name == 'webchat':
+        # 固定Scenarioを使うWebchatはapp_webchatの専用processで受け付ける。
+        continue
     try:
         plugin_webapi = importlib.import_module(f'plugin.{plugin_name}.webapi')
     except ModuleNotFoundError as e:

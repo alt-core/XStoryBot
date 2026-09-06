@@ -259,10 +259,11 @@ class DashboardTest(unittest.TestCase):
 
     def test_config_sorts_by_display_name_and_returns_raw_description(self):
         with patch.object(self.module.logging, 'info') as info:
-            status, _, body = call_wsgi(
+            status, headers, body = call_wsgi(
                 self.module.app, 'GET', '/dashboard/api/config')
 
         self.assertEqual(status, 200)
+        self.assertEqual(headers['Content-Type'], 'application/json; charset=utf-8')
         payload = json.loads(body)
         self.assertEqual(
             [bot['id'] for bot in payload['data']['bots']],
@@ -375,7 +376,7 @@ class DashboardTest(unittest.TestCase):
             '/dashboard/build_async/zeta',
             params={'skip_image': 'skip-value', 'force': 'force-value'},
         )
-        post_status, _, post_body = call_wsgi(
+        post_status, post_headers, post_body = call_wsgi(
             self.module.app,
             'POST',
             '/dashboard/build_async/zeta',
@@ -384,8 +385,8 @@ class DashboardTest(unittest.TestCase):
 
         self.assertEqual(get_status, 200)
         self.assertEqual(post_status, 200)
-        self.assertFalse(
-            get_headers['Content-Type'].startswith('application/json'))
+        for headers in (get_headers, post_headers):
+            self.assertEqual(headers['Content-Type'], 'application/json; charset=utf-8')
         for body in (get_body, post_body):
             payload = json.loads(body)
             self.assertEqual(payload['message'], 'Queued')
@@ -413,7 +414,7 @@ class DashboardTest(unittest.TestCase):
         self.dependencies.requests.post.return_value.text = (
             '{"status":"Failure","error":"builder result"}')
 
-        status, _, body = call_wsgi(
+        status, headers, body = call_wsgi(
             self.module.app,
             'POST',
             '/dashboard/build_async/zeta',
@@ -421,6 +422,7 @@ class DashboardTest(unittest.TestCase):
         )
 
         self.assertEqual(status, 200)
+        self.assertEqual(headers['Content-Type'], 'application/json; charset=utf-8')
         self.assertEqual(
             body, '{"status":"Failure","error":"builder result"}')
         self.dependencies.requests.post.assert_called_once_with(

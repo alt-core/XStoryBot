@@ -80,11 +80,14 @@ Sheet名には次の規則があります。
 | `/はい/X` | 末尾の`X`を付けると入力全体との完全一致になります |
 | `#名前` | labelへの内部action専用の条件 |
 
+括弧でまとめた条件は`&`・`|`で他の条件とつなぎます。例えば`(森|海)&へ`は書けますが、`(森|海)へ`のように括弧の直後へ語句を連結することはできません。
+
 どの条件にも一致しない入力には、何も反応しません。
 
 ## messageの書き方
 
 - B列に普通の文字列を書くと、そのまま利用者への発言になります。セル内の改行はそのまま表示されます。
+- 普通のmessage本文で`{`・`}`を文字として表示するときは`{{`・`}}`と書きます。例: `{{説明}}`は`{説明}`と表示され、`{$変数名}`は変数の埋め込みになります。
 - セルの1行目を`話者名:`だけにして2行目から本文を書くと、話者の名前(とBot設定のアイコン)付きで表示されます。
 - 1つの条件から返せるmessageは、LINEでは**合計5つまで**です(テキスト、画像、音声、動画、Buttonをそれぞれ1つと数えます。Quick Replyは数えません)。超えるとbuildがエラーになります。テキスト1つはLINEでは300文字までです。
 
@@ -114,6 +117,8 @@ Sheet名には次の規則があります。
 
 - commandは`@`と`/`のどちらで書いても同じです(`@if`=`/if`)。日本語名もあります(`/ランダム`など)。
 - `/if`の式では変数の比較が書けます。例: `$flag == "on"`、`$count >= 3`、`!$visited`(未設定)、`&&`(かつ)`||`(または)。
+
+version 3では、未設定の変数を文章に埋め込むと`None`、真偽値は`True`・`False`と表示されます。「未入手」などの表示にしたい場合は、`/if`で台詞を分けます。
 
 `/if`の例:
 
@@ -204,6 +209,8 @@ Carousel、Imagemap、Flex、続きを読む(More)、グループ配信、外部
 
 ## Bot管理者向けメモ
 
+`@flex`・`@postjson`・`@getjson`のJSON引数も書式展開されます。例えば`{"name":"案内人"}`を送る引数は`{{"name":"案内人"}}`と書きます。buildでは展開対象の文字列の括弧と書式の入れ子を検査しますが、変数の値に依存する型エラーまでは検査しません。
+
 作成者向けの本文から外した設定項目です。
 
 - `options.scenario_version`: 既定は3。version 1／2の既存Scenarioを移行する場合は、書式を書き換えるまで値を維持してください。
@@ -211,6 +218,7 @@ Carousel、Imagemap、Flex、続きを読む(More)、グループ配信、外部
 - `plugins.webchat.start_action`: Webchatの開始action。既定は`##line.follow`です。
 - `plugins.line.quick_reply.command`: Quick Reply短縮記法の記号(例: `＞`)。`please_select_quick_reply_label`が再提示用の条件名です。
 - `plugins.google_sheets.evaluate_formula`: Sheets式を評価値として読むかどうか。
+- 大人数への一斉配信には管理画面のグループ配信を使います。action APIの`user=group:グループ名`はメンバーを順番に処理するため、大人数配信には向きません。
 - Sheet名の`.環境名`は`XSBOT_DEPLOY_ENV`と比較されます。
 - 読み飛ばすSheet(既定は`_`始まり)は`plugins.google_sheets.ignore_sheet`で変更できます。
 - `@webhook URL key value key value ...`: URLへPOSTします。URLの後ろにkeyとvalueを交互に並べると、その組をform dataとして送ります。URLだけなら本文なしで送ります。途中の空セルは空文字のvalueとして位置を保ち、最後のkeyにvalueが無ければ空文字を送ります。

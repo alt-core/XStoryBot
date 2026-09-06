@@ -2,6 +2,8 @@
 
 Webchatは、Player状態を署名付きtokenとしてbrowserへ返す同期interfaceです。Webchat turnではPlayer、More、履歴をDynamoDBへ保存せず、固定したScenarioをS3から初回だけ読み、その後はprocess内で再利用します。
 
+Webchatは`app_webchat:app`を起動する専用processで提供します。Dockerでは`XSBOT_APP_MODULE=app_webchat:app`を指定します。通常APIの`app:app`にはWebchatのturn APIを登録しません。
+
 ## 設計上の性質
 
 - stateとpostbackはHMAC-SHA256で改ざんを検出します。暗号化はしないため内容は利用者から読めます。

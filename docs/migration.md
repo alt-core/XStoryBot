@@ -14,6 +14,8 @@ GAE用のデプロイ設定は含まれていません。GCPではAPI用・ビ�
 
 `settings.yaml.template`を初回に`settings.yaml`へコピーし、Botとpluginを設定します。ローカル実行とDockerはこの`settings.yaml`を使います。コンテナ用にtemplateを直接編集していた場合は、その内容を非公開の`settings.yaml`へ移してください。ファイルが無い場合や空の場合はビルドが停止します。秘密値は直書きせず、`.env.template`を参考に実行環境から渡してください。実設定は公開Gitへ追加せず、`.env`や認証情報ファイルはDockerイメージへ含めないでください。
 
+`plugins.line`の遅延判定には`line_abort_duration`と`line_abort_duration_dont_break`を使います。以前のテンプレートからコピーした`abort_duration`と`abort_duration_dont_break`は、この2つへ置き換えてください。標準設定は27秒超過を警告し、処理を続行します。
+
 `XSBOT_CLOUD_PROVIDER`には`gcp`または`aws`を必ず明示してください。未指定時にGCPへfallbackする挙動はなく、誤接続を避けるため起動時に失敗します。
 
 既存シナリオでDSL version 1または2を利用している場合は、`options.scenario_version`へ同じversionを明示します。設定テンプレートの既定値は3です。

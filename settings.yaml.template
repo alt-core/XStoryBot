@@ -89,8 +89,8 @@
       log_conversation: true
 
     line:
-      abort_duration: 27
-      abort_duration_dont_break: true
+      line_abort_duration: 27
+      line_abort_duration_dont_break: true
       alt_text: "LINEアプリで確認してください。"
       sender_icon_urls:
         SENDER_NAME: "https://example.com/path/to/line_icon.jpg"

@@ -195,9 +195,10 @@ class Scene:
 
 
 class SyntaxTree:
-    def __init__(self, tab_name, line, term):
+    def __init__(self, tab_name, line, term, source_position=None):
         self.tab_name = tab_name
         self.line_no = line
+        self.source_position = source_position
         self.term = term
         self.children = []
 
@@ -235,7 +236,8 @@ class SyntaxTree:
 
     def __str__(self):
         msg = ', '.join([str(x) for x in self.term])
-        msg += f' ＠{self.tab_name}!{self.line_no}行目'
+        tab_name, line_no = self.source_position or (self.tab_name, self.line_no)
+        msg += f' ＠{tab_name}!{line_no + 1}行目'
         return msg
 
 
@@ -372,6 +374,7 @@ class ScenarioBuilder:
         first_line_no = line_no
         while line_no < len(table):
             row = table[line_no]
+            source_position = getattr(row, 'source_position', None)
 
             # None を空白に置換（None が渡ってくることがあるかは不明）
             row = [cell if cell is not None else '' for cell in row]
@@ -420,7 +423,8 @@ class ScenarioBuilder:
             # 空のセルは右端から順に消す
             utility.remove_tail_empty_cells(row)
 
-            child_node = SyntaxTree(tab_name, line_no, list(row[level:]))
+            child_node = SyntaxTree(
+                tab_name, line_no, list(row[level:]), source_position=source_position)
             node.children.append(child_node)
             if column_as_node_rule:
                 # 1列が1ノードレベルという扱い
@@ -822,6 +826,13 @@ class ScenarioBuilder:
                     self._backpatch_relative_label_iter(command.children, region, i_label)
 
     def add_command(self, sender, msg, options, children):
+        self._check_format_string(msg)
+        for value in options or []:
+            self._check_format_string(value)
+        if self.version >= 3 and children is not None:
+            for row in children:
+                for value in row:
+                    self._check_format_string(value)
         self.lines.append(Command(sender, msg, options, children))
 
     def add_new_string_block(self, label):
@@ -1179,6 +1190,13 @@ class ScenarioBuilder:
             error_msg += '\n' + str(self.node)
         raise ScenarioSyntaxError(error_msg)
 
+    def _check_format_string(self, value):
+        if isinstance(value, str):
+            try:
+                StringFormatter().check_syntax(value)
+            except ValueError as error:
+                self.raise_error(f'文字列の書式が不正です: {error}', value)
+
     def assert_strlen(self, msg, maxlen, error_msg = None):
         if error_msg is None:
             error_msg = '文字数制限（{}文字）'
@@ -1223,6 +1241,14 @@ class ScenarioBuilder:
 
 
 class StringFormatter(string.Formatter):
+    def check_syntax(self, value, recursion_depth=2):
+        """値を展開せず、Formatterと同じ深さまで括弧とformat specを確認する。"""
+        if recursion_depth < 0:
+            raise ValueError('書式の入れ子が深すぎます')
+        for _literal, field_name, format_spec, _conversion in self.parse(value):
+            if field_name is not None:
+                self.check_syntax(format_spec, recursion_depth - 1)
+
     def get_value(self, key, args, kwargs):
         if isinstance(key, str):
             # field_name を正規化
@@ -1245,6 +1271,7 @@ class Director:
         self.context = context
         self.vformat = StringFormatter().vformat
         self.flag_label_error = False
+        self.label_error_action = None
         self.deferred_actions = []
 
     def _get_scene(self, scene_title):
@@ -1284,6 +1311,7 @@ class Director:
                 if next_scene is None:
                     if not dry_run:
                         self.flag_label_error = True
+                        self.label_error_action = '*' + scene_fullpath
                     return None, None, None, None
                 if not dry_run:
                     self.base_scene = next_scene
@@ -1296,6 +1324,7 @@ class Director:
                 if next_scene is None:
                     if not dry_run:
                         self.flag_label_error = True
+                        self.label_error_action = action
                     return None, None, None, None
                 if not dry_run:
                     self.base_scene = next_scene
@@ -1327,6 +1356,7 @@ class Director:
         if action.startswith('#'):
             # tag 指定の呼び出しだったのに見つからなかった
             self.flag_label_error = True
+            self.label_error_action = action
 
         return None, None, None, None
 
@@ -1601,7 +1631,8 @@ class Director:
                 # 実行すべきブロックの発見に失敗した
                 if self.flag_label_error:
                     # ラベル指定があったのに見つけられなかった
-                    logging.warning("ラベルを見つけられませんでした: {} @ {}".format(action, self.base_scene))
+                    logging.warning("ラベルを見つけられませんでした: {} @ {} (移動先: {})".format(
+                        action, self.base_scene, self.label_error_action))
                     # ##error_invalid_label という特殊な action を発行する
                     self.context.add_env({
                         '$$invalid_label': action

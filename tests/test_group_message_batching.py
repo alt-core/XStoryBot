@@ -322,6 +322,10 @@ class GroupBatchAccumulationTest(GroupBatchTestBase):
         self.assertEqual(self.task['processed_members'], 500)
         self.assertEqual(self.task['successful_members'], 497)
         self.assertEqual(self.task['failed_members'], 3)
+        self.assertEqual(self.task['error_messages'], [
+            'mock-line:user-498: failure-2\nmock-line:user-499: failure-3',
+            'mock-line:user-249: failure-1',
+        ])
         self.assertEqual(
             self.db._append_failed_member_list.call_args_list,
             [
@@ -651,6 +655,101 @@ class GroupMessageTaskDBTest(unittest.TestCase):
         self.object_store.store_private.assert_called_once_with(
             'group_tasks/task-1/failed_members.json',
             json.dumps(['existing-user', 'new-user']))
+
+    def test_概要は新規と保存済みの両方を最大10件各2000文字に制限する(self):
+        old_errors = ['古い概要' * 1000] + [f'error-{index}' for index in range(12)]
+        for error in (None, '単独の長いエラー' * 1000, '境' * 2000):
+            with self.subTest(error_length=None if error is None else len(error)):
+                updates = []
+                self.state_store.update_group_message_task.side_effect = (
+                    lambda _task_id, builder: updates.append(
+                        builder({'error_messages': old_errors})) or True)
+
+                self.db.update_task_status('task-1', self.db.STATUS_RUNNING, error=error)
+
+                messages = updates[0]['error_messages']
+                self.assertEqual(len(messages), 10)
+                self.assertTrue(all(len(message) <= 2000 for message in messages))
+                old_index = 0 if error is None else 1
+                self.assertEqual(len(messages[old_index]), 2000)
+                self.assertTrue(messages[old_index].endswith('…（省略）'))
+                if error is not None:
+                    if len(error) == 2000:
+                        self.assertEqual(messages[0], error)
+                    else:
+                        self.assertEqual(len(messages[0]), 2000)
+                        self.assertTrue(messages[0].endswith('…（省略）'))
+                self.assertEqual(old_errors[0], '古い概要' * 1000)
+                self.assertEqual(messages[-1], f'error-{8 - old_index}')
+
+    def test_2000人ずつ3batchの大量失敗でも全件記録と集計を残して完了する(self):
+        manager_module = load_group_message_task_manager()
+        manager_module.GroupMessageTaskDB = self.db
+        manager = manager_module.GroupMessageTaskManager('test-bot')
+        task = {
+            'bot_name': 'test-bot', 'group_id': 'test-group',
+            'action': 'notice', 'attrs': {}, 'status': self.db.STATUS_PENDING,
+            'total_members': 6000, 'successful_members': 0, 'failed_members': 0,
+            'error_messages': [],
+        }
+        saved = {}
+
+        def update_task(_task_id, builder):
+            updated = {**task, **builder(task)}
+            # 大きな概要を持つ更新がDB上限で拒否される状況を再現する。
+            self.assertLess(len(json.dumps(updated).encode('utf-8')), 400 * 1024)
+            task.update(updated)
+            return True
+
+        def load_object(key):
+            if key not in saved:
+                raise ObjectNotFoundError('missing')
+            return saved[key].encode('utf-8')
+
+        self.state_store.update_group_message_task.side_effect = update_task
+        self.object_store.load_private.side_effect = load_object
+        self.object_store.store_private.side_effect = (
+            lambda key, content, *args: saved.__setitem__(key, content))
+        expected_failed = []
+        long_error = '長い単独エラー' * 1000
+        with patch.object(
+            self.db, 'create_rate_limiter', return_value=lambda function: function,
+        ):
+            for batch in range(3):
+                members = [f'line:user,U{batch * 2000 + index:032x}' for index in range(2000)]
+                errors = {
+                    member: long_error if index == 0 else 'handle_action failed'
+                    for index, member in enumerate(members[:-1])
+                }
+                expected_failed.extend(members[:-1])
+                result = self.db.process_members_in_parallel(
+                    f'task-1_batch_{batch}',
+                    lambda member: (False, errors[member]) if member in errors else (True, None),
+                    max_workers=1, max_rate=100, member_ids=members,
+                )
+                response, status = manager._handle_batch_completion(
+                    'task-1', dict(task), batch, 3, result[0], result[1], result[3],
+                    2000, 6000,
+                )
+                self.assertEqual(status, 200)
+                stored_errors = json.loads(saved[f'group_tasks/task-1_batch_{batch}/error_logs.json'])
+                self.assertEqual(len(stored_errors), 1999)
+                self.assertEqual(dict((item[0], item[1]) for item in stored_errors), errors)
+                self.assertEqual(
+                    json.loads(saved[f'group_tasks/task-1_batch_{batch}/successful_members.json']),
+                    members[-1:],
+                )
+
+        self.assertEqual(task['status'], self.db.STATUS_COMPLETED)
+        self.assertEqual(task['processed_members'], 6000)
+        self.assertEqual((task['successful_members'], task['failed_members']), (3, 5997))
+        self.assertEqual((response['success_count'], response['error_count']), (3, 5997))
+        self.assertEqual(task['current_batch'], 3)
+        self.assertEqual(len(task['error_messages']), 3)
+        self.assertTrue(all(len(message) <= 2000 for message in task['error_messages']))
+        self.assertCountEqual(
+            json.loads(saved['group_tasks/task-1/failed_members.json']), expected_failed)
+        self.assertEqual(manager_module.task_client.create_task.call_count, 2)
 
     def test_task不存在ならupdate_builderとGCS追記を実行しない(self):
         self.state_store.update_group_message_task.return_value = False

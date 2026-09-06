@@ -143,6 +143,9 @@ class LinePlugin_Interface(object):
     def respond_reaction(self, context, reactions):
         msgs = self._construct_responses(context, reactions)
         if len(msgs) > 5:
+            logging.warning(
+                '[LINE] message limit exceeded: bot=%s user=%s scene=%s count=%s',
+                self.bot_name, context.user, getattr(context.status, 'scene', None), len(msgs))
             msgs = [line_messages.text('内部エラー: 送信するメッセージが多すぎます')]
         if len(msgs) == 0:
             return 'OK'

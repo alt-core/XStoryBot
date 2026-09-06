@@ -12,6 +12,7 @@ import hmac
 import importlib.util
 import io
 import json
+import os
 import re
 import subprocess
 import sys
@@ -22,6 +23,7 @@ from types import SimpleNamespace
 from unittest.mock import Mock, call, patch
 
 import requests
+from webtest import TestApp
 
 from cloud_backend import factory as backend_factory
 from plugin.line import api as line_api
@@ -144,6 +146,63 @@ class LineRuntimeImportTest(unittest.TestCase):
         self.assertEqual('[]', result.stdout.strip())
 
 
+class LineTemplateWebhookTest(unittest.TestCase):
+    def test_templateの遅延設定は27秒超過を警告してHTTP処理を継続する(self):
+        with patch.dict(os.environ, {
+            'LINE_ACCESS_TOKEN': 'artificial-access-token',
+            'LINE_CHANNEL_SECRET': 'artificial-channel-secret',
+        }, clear=True):
+            settings = utility_module.load_settings_yaml(
+                PROJECT_ROOT / 'settings.yaml.template')['*']
+        interface_module = _load_module(
+            '_line_template_interface', 'plugin/line/interface.py', {})
+        factory = interface_module.LinePlugin_InterfaceFactory(
+            utility_module.merge_params(settings['options'], settings['plugins']['line']))
+        interface = factory.create_interface(
+            'bot', settings['bots']['bot']['interfaces'][0]['params'])
+        self.assertEqual(interface.line_abort_duration_ms, 27000)
+        self.assertTrue(interface.line_abort_duration_dont_break)
+        bot = SimpleNamespace(
+            get_interface=Mock(return_value=interface),
+            check_reload=Mock(), handle_action=Mock(),
+        )
+        webapi = _load_module(
+            '_line_template_webapi', 'plugin/line/webapi.py', {
+                'main': _module('main', get_bot=Mock(return_value=bot)),
+                'auth': _module('auth'),
+            })
+        client = TestApp(webapi.app)
+        for delay_ms in (27000, 28000):
+            with self.subTest(delay_ms=delay_ms):
+                bot.handle_action.reset_mock()
+                body = json.dumps({'events': [{
+                    'type': 'message', 'timestamp': 1000000 - delay_ms,
+                    'replyToken': 'artificial-reply-token',
+                    'source': {'type': 'user', 'userId': 'Utest'},
+                    'message': {'id': 'message-1', 'type': 'text', 'text': '開始'},
+                }]}, ensure_ascii=False).encode('utf-8')
+                signature = base64.b64encode(hmac.new(
+                    interface.line_channel_secret.encode('utf-8'), body, hashlib.sha256,
+                ).digest()).decode('ascii')
+                with (
+                    patch.object(webapi.time, 'time', return_value=1000),
+                    patch.object(webapi.logging, 'warning') as warning,
+                ):
+                    result = client.post('/line/callback/bot', body,
+                        headers={'X-Line-Signature': signature},
+                        content_type='application/json', status=200)
+                self.assertEqual(result.status_int, 200)
+                bot.handle_action.assert_called_once()
+                context = bot.handle_action.call_args.args[0]
+                self.assertIsInstance(context, interface_module.LinePlugin_ActionContext)
+                self.assertEqual(context.action, '開始')
+                if delay_ms > 27000:
+                    warning.assert_called_once_with(
+                        '[LINE] webhook delivery delay exceeded limit; continue: 28000')
+                else:
+                    warning.assert_not_called()
+
+
 class LineWebhookContractTest(unittest.TestCase):
     def setUp(self):
         self.secret = 'channel-secret'
@@ -252,11 +311,11 @@ class LineInterfaceContractTest(unittest.TestCase):
             '_line_contract_interface', 'plugin/line/interface.py', _interface_replacements())
 
     def setUp(self):
-        self.interface = object.__new__(self.interface_module.LinePlugin_Interface)
-        self.interface.bot_name = 'bot'
-        self.interface.allow_special_action_text_for_debug = False
+        self.interface = self.interface_module.LinePlugin_InterfaceFactory({
+            'line_access_token': 'artificial-access-token',
+            'line_channel_secret': 'artificial-channel-secret',
+        }).create_interface('bot', {})
         self.interface.api = Mock()
-        self.interface.sender_icon_urls = {}
 
     @staticmethod
     def _message_event(message):
@@ -269,7 +328,8 @@ class LineInterfaceContractTest(unittest.TestCase):
         return SimpleNamespace(
             event={'type': 'message', 'replyToken': 'reply-token'},
             source_id='U1', source_type='user',
-            status=SimpleNamespace(action_token='AAAAAAAA'),
+            user='line:user,U1',
+            status=SimpleNamespace(action_token='AAAAAAAA', scene='story/scene'),
         )
 
     def _send(self, side_effect):
@@ -311,12 +371,27 @@ class LineInterfaceContractTest(unittest.TestCase):
             self._send(Unexpected('bug'))
         self.assertEqual(1, self.interface.api.reply.call_count)
 
-    def test_6件以上のmessageは内部エラー1件に置き換える(self):
+    def test_6件以上のmessageは診断情報だけを一度記録して内部エラー1件に置き換える(self):
         context = self._sending_context()
-        self.interface.respond_reaction(
-            context, [([None, f'本文{index}'], None) for index in range(6)])
+        with self.assertLogs(level='WARNING') as captured:
+            self.interface.respond_reaction(
+                context, [([None, f'本文{index}'], None) for index in range(6)])
+        self.assertEqual([record.getMessage() for record in captured.records], [
+            '[LINE] message limit exceeded: bot=bot user=line:user,U1 scene=story/scene count=6',
+        ])
         sent = self.interface.api.reply.call_args.args[1]
         self.assertEqual([{'type': 'text', 'text': '内部エラー: 送信するメッセージが多すぎます'}], sent)
+        self.interface.api.reply.assert_called_once()
+        self.interface.api.push.assert_not_called()
+
+    def test_5件以内のmessageは警告せずそのまま送る(self):
+        context = self._sending_context()
+        with self.assertNoLogs(level='WARNING'):
+            self.interface.respond_reaction(
+                context, [([None, f'本文{index}'], None) for index in range(5)])
+        self.interface.api.reply.assert_called_once_with('reply-token', [
+            {'type': 'text', 'text': f'本文{index}'} for index in range(5)
+        ])
 
     def test_eventが無ければpushしretry_keyを渡す(self):
         context = self._sending_context()

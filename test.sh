@@ -20,6 +20,8 @@ python3 -m unittest \
     tests.test_auth \
     tests.test_expression \
     tests.test_command_arguments \
+    tests.test_scenario_formatting \
+    tests.test_scenario_progression \
     tests.test_runtime_isolation \
     tests.test_state_namespace \
     tests.test_scenario_storage \

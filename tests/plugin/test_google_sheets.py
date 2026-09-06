@@ -285,8 +285,8 @@ class GoogleSheetsPluginTest(unittest.TestCase):
             '$const', '$const.test',
         ]
         values = [
-            {'values': [['base-row']]},
-            {'values': [['test-row-1'], ['test-row-2']]},
+            {'values': [['base-row'], []]},
+            {'values': [['test-row-1'], [], ['test-row-2']]},
             {'values': [['base_value', 'value'], ['', 'base']]},
             {'values': [['test_value', 'value'], ['', 'test']]},
         ]
@@ -301,8 +301,13 @@ class GoogleSheetsPluginTest(unittest.TestCase):
 
         self.assertEqual(sheets, [(
             'story',
-            [['base-row'], ['test-row-1'], ['test-row-2']],
+            [['base-row'], [], ['test-row-1'], [], ['test-row-2']],
         )])
+        self.assertTrue(all(isinstance(row, list) for row in sheets[0][1]))
+        self.assertEqual([
+            ('story', 0), ('story', 1),
+            ('story.test', 0), ('story.test', 1), ('story.test', 2),
+        ], [row.source_position for row in sheets[0][1]])
         self.assertEqual(constants, {
             'base_value': 'base',
             'test_value': 'test',
@@ -313,6 +318,20 @@ class GoogleSheetsPluginTest(unittest.TestCase):
         self.assertEqual(session.calls[1]['params']['ranges'], [
             'story!A:Z', 'story.test!A:Z', '$const!A:Z', '$const.test!A:Z',
         ])
+
+    def test_環境別sheetが先でも入力順と元sheet名を維持する(self):
+        session = FakeSession([
+            sheet_metadata(['story.test', 'story']),
+            {'valueRanges': [{'values': [['環境別']]}, {'values': [['共通']]}]},
+        ])
+        loader = self.module.GoogleSheetPlugin_Loader({})
+        loader.get_session = lambda: session
+        sheets, constants = loader._get_table_from_google_sheets('spreadsheet')
+        self.assertEqual([('story', [['環境別'], ['共通']])], sheets)
+        self.assertEqual(
+            [('story.test', 0), ('story', 0)],
+            [row.source_position for row in sheets[0][1]])
+        self.assertEqual({}, constants)
 
     def test_spreadsheet_idはURLのpath用に符号化する(self):
         loader = self.module.GoogleSheetPlugin_Loader({'key_file_json': '/keys/sheets.json'})

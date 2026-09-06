@@ -220,6 +220,14 @@ def parse_table(table):
     return env
 
 
+class _SheetRow(list):
+    """連結後も元シートの表示位置を保持する行。"""
+
+    def __init__(self, cells, sheet_title, line_no):
+        super().__init__(cells)
+        self.source_position = (sheet_title, line_no)
+
+
 class GoogleSheetPlugin_Loader:
     def __init__(self, params):
         self.params = params
@@ -366,7 +374,10 @@ class GoogleSheetPlugin_Loader:
                 logging.info(f"loading script sheet: {sheet_title}")
 
                 # スクリプトシートの読み込み
-                sheet_values = all_values.get(sheet_title, [])
+                sheet_values = [
+                    _SheetRow(row, sheet_title, line_no)
+                    for line_no, row in enumerate(all_values.get(sheet_title, []))
+                ]
                 if parsed_sheet_title not in [s[0] for s in sheets]:
                     sheets.append((parsed_sheet_title, sheet_values))
                 else:
