@@ -9,6 +9,13 @@ python3 -m unittest \
     tests.test_plugin_loading \
     tests.test_timezone \
     tests.test_cloud_backend_factory \
+    tests.test_local_backend \
+    tests.test_local_media_input \
+    tests.test_local_scenario \
+    tests.test_local_cache \
+    tests.test_local_webchat \
+    tests.test_local_watch \
+    tests.test_local_watch_inputs \
     tests.test_credential_source \
     tests.test_aws_credential_source \
     tests.test_aws_runtime_secrets \
@@ -26,6 +33,7 @@ python3 -m unittest \
     tests.test_state_namespace \
     tests.test_scenario_storage \
     tests.plugin.test_google_sheets \
+    tests.plugin.test_tsv \
     tests.plugin.test_chatgpt \
     tests.plugin.test_liff \
     tests.plugin.test_mock_line \

@@ -73,7 +73,7 @@ plugin によって拡張可能な設計になっています。
     > python3 -m pip install -r requirements-aws.txt      # AWS に接続する場合
     > python3 -m pip install -r requirements-optional.txt # Twilio／Pusher plugin を使う場合だけ
 
-`requirements.txt`は両者に共通の依存で、単独では使いません。開発・テストには`requirements-dev.txt`（全部入り）を使います。
+`requirements.txt`は共通の依存で、クラウド接続には上記provider別の依存を使います。ローカルのシナリオ開発・LINE検証・Webchatは共通依存だけで実行できます。手順は[ローカル開発ガイド](docs/local-development.md)を参照してください。エンジン全体の開発・テストには`requirements-dev.txt`（全部入り）を使います。
 
 Twilio と Pusher は任意 plugin です。使う場合は`requirements-optional.txt`を追加で install し、`settings.yaml`の`plugins`に次のように書きます（値は環境変数から渡します）。Docker では`--build-arg XSBOT_EXTRA_REQUIREMENTS=requirements-optional.txt`を付けます。
 

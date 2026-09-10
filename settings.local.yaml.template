@@ -1,0 +1,47 @@
+# このファイルをsettings.yamlへコピーし、コンテンツごとの設定を編集する。
+'*':
+  cloud:
+    provider: local
+  local:
+    storage_root: outputs/local-bot
+    public_base_url: http://127.0.0.1:8765/local-media
+    assets: {}
+    allow_external_media: false
+  auth: {}
+  constants: {}
+  options:
+    scenario_version: 3
+    reset_keyword: '!!local-reset!!'
+    timezone: Asia/Tokyo
+  plugins:
+    line:
+      alt_text: シナリオの確認
+      sender_icon_urls: {}
+    line.quick_reply:
+      command: ['＞']
+      default_reply: '続きを読む=>続きを読む'
+      please_select_quick_reply_label: '##please_select_quick_reply'
+    line.image_text:
+      default_frame: default
+      frames:
+        default:
+          more_mode: quick_between
+          size_x: 1040
+          size_y: 520
+          margin_x: 60
+          margin_y: 30
+          font_size: 32
+    tsv: {}
+    webchat:
+      start_action: '##line.follow'
+      scenario_compatibility_epoch: '1'
+      sender_icon_urls: {}
+  bots:
+    bot:
+      state_namespace: bot
+      interfaces:
+        - type: webchat
+      scenario:
+        type: tsv
+        params:
+          manifest: examples/local/manifest.json

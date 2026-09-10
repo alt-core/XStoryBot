@@ -1,4 +1,3 @@
-import re
 import time
 import json
 import logging
@@ -8,7 +7,7 @@ from cloud_backend import create_credential_source
 import hub
 import utility
 import settings
-from utility import deep_merge, to_hankaku
+from plugin.scenario_table import SheetSelector, assemble_tables, convert_value, parse_table
 
 # Google Sheets API v4 を service account で直接呼ぶ。
 # https://developers.google.com/sheets/api/reference/rest
@@ -69,171 +68,10 @@ def _get_google_session(key_file_name):
     return _sessions[key_file_name]
 
 
-def convert_value(s):
-    # 文字列を変換する
-    # まず、strip する
-    # 1. 数値型ならそのまま返す
-    # 2. "null" なら None に変換
-    # 3. "true" または "false" なら bool 型に変換
-    # 4. 数値っぽいなら int または float に変換
-    # 5. それ以外は文字列として返す
-    orig = s
-    if isinstance(s, (int, float)):
-        return s
-    s = s.strip()
-    low = s.lower()
-    if low == "null":
-        return None
-    if low == "true":
-        return True
-    if low == "false":
-        return False
-    if s.lstrip("-").isdigit():
-        try:
-            return int(s)
-        except ValueError:
-            pass
-    try:
-        f = float(s)
-        return f
-    except ValueError:
-        pass
-    return s
-
-
-def parse_table(table):
-    env = {}
-    i = 0
-    n = len(table)
-    while i < n:
-        row = table[i]
-        if row and len(row) > 0:
-            var_name = to_hankaku(row[0]).strip().lower()
-            if var_name == "" or var_name.startswith(";") or var_name.startswith("；"):
-                # コメント行
-                i += 1
-                continue
-            var_type = row[1].strip().lower() if len(row) >= 2 else ""
-
-            if var_type == "value":
-                i += 1
-                # value 型は2列目が値
-                value = None
-                while i < n:
-                    if (not table[i]) or table[i][0].startswith(";") or table[i][0].startswith("；"):
-                        i += 1
-                        continue
-                    if table[i][0] != "":
-                        break
-                    value = convert_value(table[i][1])
-                    i += 1
-                env[var_name] = value
-            elif var_type == "list":
-                # list 型は2列目が値
-                env[var_name] = []
-                i += 1
-                # 次のヘッダー行まで
-                while i < n:
-                    if (not table[i]) or table[i][0].startswith(";") or table[i][0].startswith("；"):
-                        i += 1
-                        continue
-                    if table[i][0] != "":
-                        break
-                    data_row = table[i]
-                    if len(data_row) >= 2:
-                        value = convert_value(data_row[1])
-                        if value != "":
-                            env[var_name].append(value)
-                    i += 1
-            elif var_type == "dict":
-                # dict 型は2列目がキー、3列目が値
-                env[var_name] = {}
-                i += 1
-                # 次のヘッダー行まで
-                while i < n:
-                    if (not table[i]) or table[i][0].startswith(";") or table[i][0].startswith("；"):
-                        i += 1
-                        continue
-                    if table[i][0] != "":
-                        break
-                    data_row = table[i]
-                    if len(data_row) >= 2:
-                        key = convert_value(data_row[1])
-                        if key:
-                            value = None
-                            if len(data_row) >= 3:
-                                value = convert_value(data_row[2])
-                            env[var_name][key] = value
-                    i += 1
-            elif var_type == "list_table":
-                # list_table 型は2列目が空欄で、3列目以降がサブ辞書の値
-                sub_keys = [cell.strip() for cell in row[2:]]
-                env[var_name] = []
-                i += 1
-                # 次のヘッダー行まで
-                while i < n:
-                    if (not table[i]) or table[i][0].startswith(";") or table[i][0].startswith("；"):
-                        i += 1
-                        continue
-                    if table[i][0] != "":
-                        break
-                    data_row = table[i]
-                    # list_table 型は2列目が空欄、3列目以降が値群
-                    # 全部空白ならスキップ
-                    if len(data_row) > 2 and any([str(cell).strip() for cell in data_row[2:]]):
-                        sub_dict = {}
-                        for idx, sub_key in enumerate(sub_keys):
-                            cell = data_row[idx+2] if idx+2 < len(data_row) else ""
-                            sub_dict[sub_key] = convert_value(cell)
-                        env[var_name].append(sub_dict)
-                    i += 1
-            elif var_type == "dict_table":
-                # dict_table 型は2列目がキー、3列目以降がサブ辞書の値
-                sub_keys = [cell.strip() for cell in row[2:]]
-                env[var_name] = {}
-                i += 1
-                # 次のヘッダー行まで
-                while i < n:
-                    if (not table[i]) or table[i][0].startswith(";") or table[i][0].startswith("；"):
-                        i += 1
-                        continue
-                    if table[i][0] != "":
-                        break
-                    data_row = table[i]
-                    # table 型は2列目がキー、3列目以降が値群
-                    if len(data_row) >= 2:
-                        main_key = convert_value(data_row[1])
-                        if main_key:
-                            sub_dict = {}
-                            for idx, sub_key in enumerate(sub_keys):
-                                cell = data_row[idx+2] if idx+2 < len(data_row) else ""
-                                sub_dict[sub_key] = convert_value(cell)
-                            env[var_name][main_key] = sub_dict
-                    i += 1
-            elif var_type == "":
-                raise ValueError(f"型が指定されていません '{var_name}'")
-            else:
-                raise ValueError(f"不明な型 '{var_type}' です")
-        else:
-            # ヘッダー行の前など
-            i += 1
-    return env
-
-
-class _SheetRow(list):
-    """連結後も元シートの表示位置を保持する行。"""
-
-    def __init__(self, cells, sheet_title, line_no):
-        super().__init__(cells)
-        self.source_position = (sheet_title, line_no)
-
-
 class GoogleSheetPlugin_Loader:
     def __init__(self, params):
         self.params = params
-        self.script_sheet = re.compile(self.params.get('script_sheet', r'^[^$]'), re.IGNORECASE)
-        self.constant_sheet = re.compile(self.params.get('constant_sheet', r'^\$'), re.IGNORECASE)
-        self.ignore_sheet = re.compile(self.params.get('ignore_sheet', r'^_'), re.IGNORECASE)
+        self.sheet_selector = SheetSelector(params)
         self.evaluate_formula = bool(self.params.get('evaluate_formula', False))
 
     def get_session(self):
@@ -333,64 +171,10 @@ class GoogleSheetPlugin_Loader:
             {'fields': 'sheets(properties(sheet_id,title))'})
         sheet_titles = [sheet_prop['properties']['title'] for sheet_prop in result.get('sheets', [])]
 
-        # 対象シートを収集してbatchGetで一括取得
-        target_sheet_titles = []
-        for sheet_title in sheet_titles:
-            if self.ignore_sheet.match(sheet_title):
-                continue
-            sheet_parts = sheet_title.split('.')
-            parsed_sheet_title = sheet_parts[0]
-            if len(sheet_parts) >= 2:
-                sheet_env = sheet_parts[-1]
-                if sheet_env.lower() != settings.DEPLOY_ENV.lower():
-                    continue
-            if self.constant_sheet.match(parsed_sheet_title) or (parsed_sheet_title != "" and self.script_sheet.match(parsed_sheet_title)):
-                target_sheet_titles.append(sheet_title)
-
-        all_values = self._batch_get_sheet_values(session, spreadsheet_id, target_sheet_titles)
-
-        sheets = []
-        constants = {}
-        for sheet_title in sheet_titles:
-            if self.ignore_sheet.match(sheet_title):
-                # ignore 対象はスキップ
-                continue
-
-            sheet_parts = sheet_title.split('.')
-            parsed_sheet_title = sheet_parts[0]
-            if len(sheet_parts) >= 2:
-                # . が付いていたら、末尾と実行環境を比較
-                sheet_env = sheet_parts[-1]
-                if sheet_env.lower() != settings.DEPLOY_ENV.lower():
-                    continue
-
-            if self.constant_sheet.match(parsed_sheet_title):
-                logging.info(f"loading constant sheet: {sheet_title}")
-
-                # 定数シートの読み込み
-                sheet_values = all_values.get(sheet_title, [])
-                constants = deep_merge(constants, parse_table(sheet_values))
-            elif parsed_sheet_title != "" and self.script_sheet.match(parsed_sheet_title):
-                logging.info(f"loading script sheet: {sheet_title}")
-
-                # スクリプトシートの読み込み
-                sheet_values = [
-                    _SheetRow(row, sheet_title, line_no)
-                    for line_no, row in enumerate(all_values.get(sheet_title, []))
-                ]
-                if parsed_sheet_title not in [s[0] for s in sheets]:
-                    sheets.append((parsed_sheet_title, sheet_values))
-                else:
-                    # 同名sheetに環境別の行を追加する。
-                    for s in sheets:
-                        if s[0] == parsed_sheet_title:
-                            s[1].extend(sheet_values)
-
-        #import pprint
-        #pprint.pprint(constants)
-        #import logging
-        #logging.info(f"Constants: {constants}")
-        return sheets, constants
+        selected = self.sheet_selector.select(sheet_titles, settings.DEPLOY_ENV)
+        target_titles = [title for title, _name, _is_constant in selected]
+        all_values = self._batch_get_sheet_values(session, spreadsheet_id, target_titles)
+        return assemble_tables(selected, all_values)
 
     def load_scenario(self):
         return self._get_table_from_google_sheets(self.params['sheet_id'])

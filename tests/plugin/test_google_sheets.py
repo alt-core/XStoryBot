@@ -3,11 +3,15 @@
 import copy
 import importlib.util
 from pathlib import Path
+import re
 import sys
 import types
 import unicodedata
 import unittest
 from unittest import mock
+
+# 共有の純粋処理を、下のutility stubへ結び付けない。
+from plugin import scenario_table
 
 
 TARGET = Path(__file__).resolve().parents[2] / 'plugin' / 'google_sheets.py'
@@ -243,6 +247,10 @@ class GoogleSheetsPluginTest(unittest.TestCase):
         })
 
         self.assertFalse(loader.evaluate_formula)
+
+    def test_不正なシート選択条件は通信前の初期化時に拒否する(self):
+        with self.assertRaises(re.error):
+            self.module.GoogleSheetPlugin_Loader({'script_sheet': '('})
 
     def test_formula_evaluation_keeps_image_formula_and_empty_result(self):
         session = FakeSession([

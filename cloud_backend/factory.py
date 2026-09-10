@@ -15,7 +15,7 @@ def configure(cloud_settings=None):
     if not provider:
         raise ValueError(
             'クラウドプロバイダーを明示してから初期化してください')
-    if provider not in ('gcp', 'aws'):
+    if provider not in ('gcp', 'aws', 'local'):
         raise ValueError(f'未対応のクラウドプロバイダーです: {provider}')
     if _provider is not None and _provider != provider:
         raise RuntimeError('起動後にクラウドプロバイダーは変更できません')

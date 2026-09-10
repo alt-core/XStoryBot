@@ -65,6 +65,13 @@ class CloudBackendFactoryTest(unittest.TestCase):
 
         importer.assert_called_once_with('cloud_backend.aws')
 
+    def test_local選択時はlocal_moduleだけをimportする(self):
+        fake_module = types.SimpleNamespace(create_state_store=lambda: 'local-state')
+        factory.configure({'provider': 'local'})
+        with patch.object(factory.importlib, 'import_module', return_value=fake_module) as importer:
+            self.assertEqual('local-state', factory.create_state_store())
+        importer.assert_called_once_with('cloud_backend.local')
+
 
 if __name__ == '__main__':
     unittest.main()

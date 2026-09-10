@@ -316,6 +316,17 @@ class ScenarioBuilder:
         expression.set_version(self.version)
 
         self.options = options or {}
+        self.local_media_files = self.options.get('local_media_files')
+        if self.local_media_files is not None:
+            if not isinstance(self.local_media_files, dict):
+                raise ValueError('local_media_filesはURLとファイルpathの辞書で指定してください')
+            normalized_files = {}
+            for url, path in self.local_media_files.items():
+                normalized_url = requests.utils.requote_uri(url)
+                if normalized_url in normalized_files:
+                    raise ValueError(f'local_media_filesのURLが重複しています: {url}')
+                normalized_files[normalized_url] = path
+            self.local_media_files = normalized_files
         if self.options.get('force') == True:
             self.option_force = True
             self.option_skip_image = False
@@ -1005,6 +1016,19 @@ class ScenarioBuilder:
     def build_image_for_image_command(self, image_url):
         return self.build_image(image_url, 'image')
 
+    def _read_media_bytes(self, url):
+        if self.local_media_files is not None:
+            normalized_url = requests.utils.requote_uri(url)
+            if normalized_url in self.local_media_files:
+                path = self.local_media_files[normalized_url]
+                with open(path, 'rb') as source:
+                    return source.read()
+            if self.options.get('allow_external_media') is not True:
+                raise ValueError(f'ローカル媒体が登録されていません: {url}')
+        response = requests.get(url)
+        response.raise_for_status()
+        return response.content
+
     def build_video(self, video_url):
         from models import MediaFileStatDB
         key = f'video|{video_url}'
@@ -1023,9 +1047,7 @@ class ScenarioBuilder:
 
         try:
             # TODO: 動画を全部メモリに読み込むのではなく、ストリーミングで処理するようにする
-            response = requests.get(video_url)
-            response.raise_for_status()
-            content = response.content
+            content = self._read_media_bytes(video_url)
         except Exception as e:
             self.raise_error(f'動画ファイルの読み込みに失敗しました: {video_url} {str(e)}')
 
@@ -1096,9 +1118,7 @@ class ScenarioBuilder:
             #    logging.debug(u'ImageFileStatDB does not have {}: {}'.format(image_url, stat))
 
         try:
-            response = requests.get(image_url)
-            response.raise_for_status()
-            content = response.content
+            content = self._read_media_bytes(image_url)
         except Exception as e:
             self.raise_error(f'画像ファイルの読み込みに失敗しました: {image_url} {str(e)}')
         image_format = convert_image.get_image_format(content)

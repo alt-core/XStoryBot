@@ -230,6 +230,33 @@ class SettingsTemplateTest(unittest.TestCase):
 
 
 class SettingsModuleTest(unittest.TestCase):
+    def test_明示設定pathでlocalと環境名を独立して選択する(self):
+        cloud_backend = types.ModuleType('cloud_backend')
+        cloud_backend.configure = Mock()
+        runtime_secrets = types.ModuleType('cloud_backend.aws.runtime_secrets')
+        runtime_secrets.load_runtime_secrets = Mock()
+        config = {'*': {'cloud': {'provider': 'local'}, 'auth': {}, 'bots': {},
+                        'local': {'storage_root': '/synthetic/root'}, 'constants': {'name': 'default'}},
+                  'dev': {'constants': {'name': 'development'}}}
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'chosen.yaml'
+            path.write_text(json.dumps(config), encoding='utf-8')
+            spec = importlib.util.spec_from_file_location('settings_local_under_test', PROJECT_ROOT / 'settings.py')
+            module = importlib.util.module_from_spec(spec)
+            with patch.dict(os.environ, {
+                    'XSBOT_SETTINGS_FILE': str(path), 'XSBOT_DEPLOY_ENV': 'dev',
+                    'XSBOT_AWS_RUNTIME_SECRETS_PARAMETER': '/must-not-load'}, clear=True), patch.dict(sys.modules, {
+                        'cloud_backend': cloud_backend,
+                        'cloud_backend.aws.runtime_secrets': runtime_secrets}):
+                spec.loader.exec_module(module)
+        self.assertEqual('local', module.CLOUD_SETTINGS['provider'])
+        self.assertEqual('dev', module.DEPLOY_ENV)
+        self.assertEqual('development', module.CONSTANTS['name'])
+        self.assertEqual({'storage_root': '/synthetic/root'}, module.BACKEND_SETTINGS)
+        self.assertEqual({}, module.GCP_SETTINGS)
+        runtime_secrets.load_runtime_secrets.assert_not_called()
+        cloud_backend.configure.assert_called_once_with({'provider': 'local'})
+
     def test_module_loads_selected_environment(self):
         template_path = PROJECT_ROOT / 'settings.yaml.template'
         module_path = PROJECT_ROOT / 'settings.py'

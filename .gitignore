@@ -88,7 +88,11 @@ celerybeat-schedule
 
 # virtualenv
 venv/
+.venv/
 ENV/
+
+# macOS
+.DS_Store
 
 # Spyder project settings
 .spyderproject

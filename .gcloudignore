@@ -39,6 +39,8 @@ client_secret*.json
 *.p12
 .python-version
 venv/
+.venv/
+.DS_Store
 ENV/
 
 # 文書

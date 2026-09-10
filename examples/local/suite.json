@@ -1,0 +1,43 @@
+{
+  "schema_version": 1,
+  "cases": [
+    {
+      "name": "選択肢を再提示して右へ進む",
+      "seed": 0,
+      "steps": [
+        {
+          "input": {"type": "start"},
+          "expect": {
+            "texts": ["どちらにしますか"],
+            "choices": [{"type": "postback", "label": "左"}, {"type": "postback", "label": "右"}]
+          }
+        },
+        {
+          "input": {"type": "text", "text": "わからない"},
+          "expect": {"texts": ["候補から選んでください"]}
+        },
+        {
+          "input": {"type": "choice", "index": 1},
+          "expect": {
+            "texts": ["右を選びました", "画像と入力すると画像テキストを確認できます"],
+            "flags": {"$choice": "right"},
+            "absent_flags": ["$$line.quick_reply"]
+          }
+        },
+        {
+          "input": {"type": "text", "text": "a@@b"},
+          "expect": {"texts": ["本文の@@を受け取りました"]}
+        }
+      ]
+    },
+    {
+      "name": "画像テキスト",
+      "steps": [
+        {
+          "input": {"type": "text", "text": "画像"},
+          "expect": {"choices": [{"type": "postback", "label": "続きを読む"}]}
+        }
+      ]
+    }
+  ]
+}

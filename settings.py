@@ -10,7 +10,7 @@ DEPLOY_ENV = os.getenv('XSBOT_DEPLOY_ENV', '')
 
 
 def load_settings():
-    settings = load_settings_yaml('settings.yaml')
+    settings = load_settings_yaml(os.getenv('XSBOT_SETTINGS_FILE', 'settings.yaml'))
     default_settings = settings.get('*', {})
     env_settings = settings.get(DEPLOY_ENV, {})
     return deep_merge(default_settings, env_settings)
@@ -23,10 +23,10 @@ _configured_provider = (
     _provider_from_environment
     or settings.get('cloud', {}).get('provider')
 )
-if _configured_provider not in ('gcp', 'aws'):
+if _configured_provider not in ('gcp', 'aws', 'local'):
     raise ValueError(
         'クラウドプロバイダーをXSBOT_CLOUD_PROVIDERまたは'
-        'cloud.providerへgcp／awsで明示してください')
+        'cloud.providerへgcp／aws／localで明示してください')
 
 # AWSではSecureString展開後に!envを解決し直す。GCPは一度だけ読む。
 if (

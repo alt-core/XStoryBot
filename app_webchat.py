@@ -35,7 +35,10 @@ if 'line.more' in settings.PLUGINS:
     from plugin.webchat import more as webchat_more
     webchat_more.load_plugin(_plugin_params('line.more'))
 
-_factory = WebchatInterfaceFactory(_plugin_params('webchat'))
+_factory = WebchatInterfaceFactory(
+    _plugin_params('webchat'),
+    local_settings=(settings.BACKEND_SETTINGS
+                    if settings.CLOUD_SETTINGS.get('provider') == 'local' else None))
 _bots = {}
 _initialization_error = None
 try:
@@ -89,6 +92,8 @@ def chat(bot_name):
         return '404 Not Found'
     interface = bot.get_interface('webchat')
     media_sources = ' '.join(interface.media_origins) or 'https:'
+    if not interface.allow_external_media:
+        media_sources = ''
     return static_file(
         'index.html',
         root='static/webchat',

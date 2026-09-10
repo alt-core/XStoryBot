@@ -7,7 +7,7 @@ import re
 import secrets
 import threading
 import time
-from urllib.parse import urljoin
+from urllib.parse import unquote, urljoin
 from urllib.parse import urlsplit
 
 import requests
@@ -54,7 +54,7 @@ def _format_origin(parsed):
     return origin
 
 
-def _normalize_origins(values, allow_empty=False):
+def _normalize_origins(values, allow_empty=False, local_origin=None):
     if values is None and allow_empty:
         values = []
     if isinstance(values, str):
@@ -68,7 +68,7 @@ def _normalize_origins(values, allow_empty=False):
             continue
         parsed = urlsplit(value)
         if (
-                parsed.scheme.lower() != 'https'
+                parsed.scheme.lower() not in ('http', 'https')
                 or not parsed.hostname
                 or parsed.username is not None
                 or parsed.password is not None
@@ -78,6 +78,9 @@ def _normalize_origins(values, allow_empty=False):
             raise InvalidWebchatConfiguration(
                 'allowed_originsにはHTTPS originを指定してください')
         origin = _format_origin(parsed)
+        if parsed.scheme.lower() != 'https' and origin != local_origin:
+            raise InvalidWebchatConfiguration(
+                'allowed_originsにはHTTPS originを指定してください')
         if origin not in result:
             result.append(origin)
     if not result and not allow_empty:
@@ -86,9 +89,40 @@ def _normalize_origins(values, allow_empty=False):
 
 
 class WebchatInterface:
-    def __init__(self, bot_name, params):
+    def __init__(self, bot_name, params, local_settings=None):
         self.bot_name = bot_name
         self.params = params
+        self.local_origin = None
+        self.local_media_base = None
+        self.local_asset_urls = {}
+        self.allow_external_media = True
+        if local_settings is not None:
+            from cloud_backend import get_provider
+            if get_provider() != 'local':
+                raise InvalidWebchatConfiguration('local媒体設定はlocal provider専用です')
+            base_url = local_settings.get('public_base_url', '')
+            parsed = urlsplit(base_url)
+            try:
+                port = parsed.port
+            except ValueError as error:
+                raise InvalidWebchatConfiguration('local媒体のportが不正です') from error
+            if (parsed.scheme != 'http' or parsed.hostname != '127.0.0.1'
+                    or port is None or port < 1
+                    or parsed.username is not None or parsed.password is not None
+                    or parsed.path != '/local-media' or parsed.query or parsed.fragment):
+                raise InvalidWebchatConfiguration('local媒体には固定loopback URLを指定してください')
+            store_id = local_settings.get('store_id')
+            if not isinstance(store_id, str) or not re.fullmatch(r'[a-zA-Z0-9_-]+', store_id):
+                raise InvalidWebchatConfiguration('local媒体のstore_idが不正です')
+            self.local_origin = _format_origin(parsed)
+            self.local_media_base = f'{base_url}/{store_id}/'
+            self.local_asset_urls = dict(local_settings.get('webchat_asset_urls', {}))
+            if any(not isinstance(key, str) or not isinstance(value, str)
+                   or not value.startswith(self.local_media_base)
+                   for key, value in self.local_asset_urls.items()):
+                raise InvalidWebchatConfiguration('local媒体mapの形式または保存先が不正です')
+            self.allow_external_media = _as_bool(
+                local_settings.get('allow_external_media', False))
         self.enabled = _as_bool(params.get('enabled'))
         allowed_commands = params.get('allowed_commands', []) or []
         if not isinstance(allowed_commands, (list, tuple, set)):
@@ -141,9 +175,11 @@ class WebchatInterface:
         if not self.start_action:
             raise InvalidWebchatConfiguration('Webchat start actionがありません')
         allowed_origins = list(_normalize_origins(
-            params.get('allowed_origins', []), allow_empty=True))
+            params.get('allowed_origins', []), allow_empty=True,
+            local_origin=self.local_origin))
         for origin in _normalize_origins(
-                params.get('self_origin', []), allow_empty=True):
+                params.get('self_origin', []), allow_empty=True,
+                local_origin=self.local_origin):
             if origin not in allowed_origins:
                 allowed_origins.append(origin)
         if not allowed_origins:
@@ -152,7 +188,8 @@ class WebchatInterface:
         self.external_http_origins = _normalize_origins(
             params.get('external_http_origins', []), allow_empty=True)
         self.media_origins = _normalize_origins(
-            params.get('media_origins', []), allow_empty=True)
+            params.get('media_origins', []), allow_empty=True,
+            local_origin=self.local_origin)
         for icon_url in self.sender_icon_urls.values():
             self.validate_media_url(icon_url)
         self.codec = WebchatTokenCodec(params.get('signing_key'))
@@ -192,7 +229,18 @@ class WebchatInterface:
             raise BotNotWebCompatible('外部HTTP URLが不正です') from error
 
     def validate_media_url(self, url):
-        parsed = urlsplit(str(url))
+        url = str(url)
+        if self.local_origin is not None:
+            url = self.local_asset_urls.get(requests.utils.requote_uri(url), url)
+        parsed = urlsplit(url)
+        if self.local_origin is not None and url.startswith(self.local_media_base):
+            key = unquote(parsed.path).split('/', 3)[-1]
+            if (parsed.query or parsed.fragment or '\\' in key
+                    or any(part in ('', '.', '..') for part in key.split('/'))):
+                raise BotNotWebCompatible('local媒体のkeyが不正です')
+            return url
+        if self.local_origin is not None and not self.allow_external_media:
+            raise BotNotWebCompatible('媒体URLをlocal.assetsへ登録してください')
         if (
                 parsed.scheme.lower() != 'https'
                 or not parsed.hostname
@@ -205,7 +253,7 @@ class WebchatInterface:
             raise BotNotWebCompatible('media URLが不正です') from error
         if self.media_origins and origin not in self.media_origins:
             raise BotNotWebCompatible('media originが許可されていません')
-        return str(url)
+        return url
 
     def request_external(self, context, method, url, **kwargs):
         started_at = time.monotonic()
@@ -424,10 +472,12 @@ class WebchatInterface:
 
 
 class WebchatInterfaceFactory:
-    def __init__(self, params):
+    def __init__(self, params, local_settings=None):
         self.params = params
+        self.local_settings = local_settings
         register_runtime()
 
     def create_interface(self, bot_name, params):
         return WebchatInterface(
-            bot_name, utility.merge_params(self.params, params))
+            bot_name, utility.merge_params(self.params, params),
+            local_settings=self.local_settings)
