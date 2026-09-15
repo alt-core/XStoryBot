@@ -33,6 +33,9 @@ ALLOWED_PLUGINS = frozenset({
     'line', 'line.quick_reply', 'line.quick_reply_v2', 'line.image_text',
     'line.more', 'google_sheets', 'tsv', 'webchat',
 })
+SHARED_TABLE_PARAMS = frozenset({
+    'evaluate_formula', 'script_sheet', 'constant_sheet', 'ignore_sheet',
+})
 
 
 class Parser(argparse.ArgumentParser):
@@ -132,14 +135,24 @@ def load_config(args):
     options = copy.deepcopy(_mapping(merged.get('options', {}), 'options'))
     options.pop('api_token', None)
     scenario = copy.deepcopy(_mapping(bot.get('scenario'), 'scenario'))
-    if args.tsv:
-        scenario = {'type': 'tsv', 'params': {'manifest': str(Path(args.tsv).resolve())}}
     kind = scenario.get('type')
+    bot_params = _mapping(scenario.get('params', {}), 'scenario.params')
+    params = dict(options)
+    if args.tsv:
+        # 入力元だけを切り替え、表の解釈は引き継ぐ。元sourceの資格情報等は持ち越さない。
+        params.update({key: value for key, value in plugins.get(kind, {}).items()
+                       if key in SHARED_TABLE_PARAMS})
+        params.update(plugins.get('tsv', {}))
+        params.update({key: value for key, value in bot_params.items()
+                       if key in SHARED_TABLE_PARAMS})
+        params['manifest'] = str(Path(args.tsv).resolve())
+        kind = 'tsv'
+        scenario = {'type': kind}
+    else:
+        params.update(plugins.get(kind, {}))
+        params.update(bot_params)
     if kind not in ('tsv', 'google_sheets'):
         raise LocalInputError('scenario.typeはtsvまたはgoogle_sheetsにしてください')
-    params = dict(options)
-    params.update(plugins.get(kind, {}))
-    params.update(_mapping(scenario.get('params', {}), 'scenario.params'))
     if kind == 'tsv':
         params['manifest'] = _file_path(params.get('manifest'), path.parent, 'manifest')
     else:
@@ -189,6 +202,7 @@ def save_settings(path, config):
 def inspect_watch_inputs(args):
     """元の入力だけを列挙し、壊れた・欠落したmanifestも監視に残す。"""
     from plugin.scenario_table import SheetSelector
+    from plugin.tsv_values import sync_baselines
 
     files = {str(Path(args.settings).resolve())}
     fonts = set()
@@ -209,6 +223,7 @@ def inspect_watch_inputs(args):
                 fonts.add(frame['font_path'])
         manifest_path = Path(scenario['params']['manifest'])
         files.add(str(manifest_path))
+        files.add(str(manifest_path.parent / 'sheets-sync.json'))
         manifest = read_json(manifest_path)
         require_keys(manifest, ('sheets',), label='TSV manifest')
         if not isinstance(manifest['sheets'], list):
@@ -221,7 +236,13 @@ def inspect_watch_inputs(args):
                 raise LocalInputError('TSVシート名は空でない、重複のない文字列にしてください')
             paths[name] = _file_path(sheet['path'], manifest_path.parent, 'TSV')
         selected = SheetSelector(scenario['params']).select(paths, environment)
-        files.update(paths[name] for name, _logical, _constant in selected)
+        if scenario['params'].get('evaluate_formula', False):
+            # 選択外の補助シートも参照できる。本文は読まず、全候補の変更を監視する。
+            files.update(paths.values())
+        else:
+            files.update(paths[name] for name, _logical, _constant in selected)
+        # 同期基準は式評価の有無によらずセル型へ影響する。
+        files.update(str(path) for path in sync_baselines(manifest_path, paths).values())
     except (OSError, ValueError, KeyError, TypeError, re.error) as error:
         result['error'] = str(error)
     result.update(files=sorted(files | fonts), fonts=sorted(fonts))

@@ -14,6 +14,7 @@ from unittest.mock import patch
 import yaml
 
 from plugin.scenario_table import SheetSelector
+from plugin.tsv import TsvPlugin_Loader
 from tools.local_scenario import load_config, save_settings
 from tools.local_support import LocalInputError, read_json, validate_suite
 
@@ -188,6 +189,15 @@ sys.addaudithook(reject_external)
         self.config['*']['plugins']['google_sheets'] = {
             'service_account': 'SYNTHETIC_UNUSED_GOOGLE_CREDENTIAL',
         }
+        self.config['*']['plugins']['tsv'] = {'evaluate_formula': True}
+        self.manifest_path.write_text(json.dumps({'sheets': [
+            {'name': 'story', 'path': 'story.tsv'},
+            {'name': '_shared', 'path': 'shared.tsv'},
+        ]}), encoding='utf-8')
+        (self.root / 'shared.tsv').write_text('どちら\n左\n右\n', encoding='utf-8')
+        self.rows[0][1] = '=_shared!A1&"にしますか"'
+        self.rows[1][2:] = ['=_shared!A2', '=_shared!A3']
+        self._write_rows()
         self._write_settings()
         result = self._run(cases=[
             self._case('選択する', [
@@ -363,6 +373,93 @@ sys.addaudithook(reject_external)
         params = config['bots']['bot']['scenario']['params']
         self.assertEqual('^story$', params['ignore_sheet'])
         self.assertEqual([], SheetSelector(params).select(['story'], environment))
+
+    def test_TSV切替は元sourceの共有設定だけを継承しBot指定を優先する(self):
+        common = {'evaluate_formula': False, 'script_sheet': '^common$',
+                  'constant_sheet': '^common_config$', 'ignore_sheet': '^common_ignore$'}
+        source = {'evaluate_formula': True, 'script_sheet': '^source$',
+                  'constant_sheet': '^source_config$', 'ignore_sheet': '^source_ignore$'}
+        target = {'evaluate_formula': False, 'script_sheet': '^target$',
+                  'constant_sheet': '^target_config$', 'ignore_sheet': '^target_ignore$'}
+        bot = {'evaluate_formula': True, 'script_sheet': '^bot$',
+               'constant_sheet': '^bot_config$', 'ignore_sheet': '^bot_ignore$'}
+        self.config['*']['options'].update(common)
+        self.config['*']['plugins']['google_sheets'] = {
+            'sheet_id': 'unused-plugin-sheet', 'key_file_json': 'unused-plugin-key.json',
+            'source_only': '持ち越さない',
+        }
+        self.config['*']['bots']['bot']['scenario'] = {
+            'type': 'google_sheets', 'params': {
+                'sheet_id': 'unused-bot-sheet', 'key_file_json': 'unused-bot-key.json',
+                'source_only': '持ち越さない',
+            },
+        }
+        plugin_params = self.config['*']['plugins']['google_sheets']
+        bot_params = self.config['*']['bots']['bot']['scenario']['params']
+        for stage, expected in (('common', common), ('source', source), ('target', target), ('bot', bot)):
+            with self.subTest(stage=stage):
+                if stage == 'source':
+                    plugin_params.update(source)
+                elif stage == 'target':
+                    self.config['*']['plugins']['tsv'] = {**target, 'manifest': 'unused-manifest.json'}
+                elif stage == 'bot':
+                    bot_params.update(bot)
+                self._write_settings()
+                config, _environment = self._load_config(tsv=str(self.manifest_path))
+                scenario = config['bots']['bot']['scenario']
+                self.assertEqual('tsv', scenario['type'])
+                self.assertEqual(expected, {key: scenario['params'][key] for key in expected})
+                self.assertEqual(str(self.manifest_path), scenario['params']['manifest'])
+                for key in ('sheet_id', 'key_file_json', 'source_only'):
+                    self.assertNotIn(key, scenario['params'])
+
+    def test_TSV同士のmanifest切替でもBot固有の共有設定を保つ(self):
+        self.config['*']['plugins']['tsv'] = {
+            'evaluate_formula': True, 'script_sheet': '^story$',
+            'constant_sheet': '^config$', 'ignore_sheet': '^plugin_ignore$',
+            'manifest': 'unused-plugin.json',
+        }
+        self.config['*']['bots']['bot']['scenario']['params'].update({
+            'evaluate_formula': False, 'ignore_sheet': '^bot_ignore$', 'manifest': 'unused-bot.json',
+        })
+        self._write_settings()
+
+        config, _environment = self._load_config(tsv=str(self.manifest_path))
+
+        params = config['bots']['bot']['scenario']['params']
+        self.assertIs(False, params['evaluate_formula'])
+        self.assertEqual('^story$', params['script_sheet'])
+        self.assertEqual('^config$', params['constant_sheet'])
+        self.assertEqual('^bot_ignore$', params['ignore_sheet'])
+        self.assertEqual(str(self.manifest_path), params['manifest'])
+
+    def test_SheetsからTSVへ切り替えても定数とセル参照の解釈を保つ(self):
+        self.config['*']['bots']['bot']['scenario'] = {
+            'type': 'google_sheets', 'params': {
+                'sheet_id': 'unused', 'key_file_json': 'unused.json',
+                'evaluate_formula': True, 'script_sheet': '^story$',
+                'constant_sheet': '^config$', 'ignore_sheet': '^_',
+            },
+        }
+        self._write_settings()
+        self.rows = [['開始', '=config!B2']]
+        self._write_rows()
+        with (self.root / 'config.tsv').open('w', encoding='utf-8', newline='') as target:
+            csv.writer(target, dialect='excel-tab').writerows([
+                ['greeting', 'value'], ['', '="旅人"&"さん"'],
+            ])
+        self.manifest_path.write_text(json.dumps({'sheets': [
+            {'name': 'story', 'path': 'story.tsv'}, {'name': 'config', 'path': 'config.tsv'},
+            {'name': '_ignored', 'path': 'missing.tsv'},
+        ]}), encoding='utf-8')
+        config, environment = self._load_config(tsv=str(self.manifest_path))
+        loader = TsvPlugin_Loader(config['bots']['bot']['scenario']['params'])
+
+        with patch.dict(sys.modules, {'settings': SimpleNamespace(DEPLOY_ENV=environment)}):
+            tables, constants = loader.load_scenario()
+
+        self.assertEqual([('story', [['開始', '旅人さん']])], tables)
+        self.assertEqual({'greeting': '旅人さん'}, constants)
 
 
 if __name__ == '__main__':

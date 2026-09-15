@@ -31,7 +31,7 @@ class SheetSelector:
                 continue
             parts = title.split('.')
             name = parts[0]
-            if len(parts) >= 2 and parts[-1].lower() != environment.lower():
+            if environment is not None and len(parts) >= 2 and parts[-1].lower() != environment.lower():
                 continue
             is_constant = bool(self.constant_sheet.match(name))
             if is_constant or (name != '' and self.script_sheet.match(name)):

@@ -45,10 +45,72 @@ class LocalWatchInputsTest(unittest.TestCase):
         info = inspect_watch_inputs(self.args)
         self.assertNotIn('error', info)
         self.assertEqual(
-            {'settings.yaml', 'manifest.json', 'story.tsv', 'test.tsv', 'icon.png', 'font.ttf'},
+            {'settings.yaml', 'manifest.json', 'sheets-sync.json',
+             'story.tsv', 'test.tsv', 'icon.png', 'font.ttf'},
             {Path(path).name for path in info['files']})
         self.assertEqual([str(self.root / 'font.ttf')], info['fonts'])
         self.assertFalse((self.root / 'store').exists())
+        self.assertFalse((self.root / 'sheets-sync.json').exists())
+
+    def test_式評価時は参照候補の全TSVを本文を読まず監視する(self):
+        self.config['*']['plugins']['tsv'] = {'evaluate_formula': True}
+        self._save()
+        info = inspect_watch_inputs(self.args)
+        self.assertNotIn('error', info)
+        self.assertIn(str(self.root / 'prod.tsv'), info['files'])
+        self.assertIn(str(self.root / 'sheets-sync.json'), info['files'])
+        self.assertFalse((self.root / 'prod.tsv').exists())
+        self.assertFalse((self.root / 'sheets-sync.json').exists())
+
+    def test_Sheetsの式評価設定を継承したTSV切替でも参照候補を監視する(self):
+        self.config['*']['bots']['bot']['scenario'] = {
+            'type': 'google_sheets', 'params': {
+                'sheet_id': 'unused', 'key_file_json': 'unused.json', 'evaluate_formula': True,
+            },
+        }
+        self.args.tsv = str(self.root / 'manifest.json')
+        self._save()
+
+        info = inspect_watch_inputs(self.args)
+
+        self.assertNotIn('error', info)
+        self.assertEqual('tsv', info['source_type'])
+        self.assertIn(str(self.root / 'prod.tsv'), info['files'])
+        self.assertFalse((self.root / 'prod.tsv').exists())
+        self.assertFalse((self.root / 'store').exists())
+
+    def test_同期基準の全pathを監視し基準本文は読まない(self):
+        entries = [{'name': name, 'path': f'sheet-{index}.tsv', 'sheet_id': index}
+                   for index, name in enumerate(('story', 'story.test', 'story.prod'))]
+        (self.root / 'manifest.json').write_text(json.dumps({'sheets': [
+            {'name': entry['name'], 'path': entry['path']} for entry in entries
+        ]}), encoding='utf-8')
+        metadata = self.root / 'sheets-sync.json'
+        metadata.write_text(json.dumps({
+            'schema_version': 1, 'spreadsheet_id': 'synthetic', 'sheets': entries,
+        }), encoding='utf-8')
+        baseline_directory = self.root / '.sheets-sync'
+        baseline_directory.mkdir()
+        (baseline_directory / 'base-0.json').write_text('本文は検査しない', encoding='utf-8')
+        original_open = Path.open
+
+        def open_without_baseline(path, *args, **kwargs):
+            if path.parent == baseline_directory:
+                self.fail('監視対象の列挙では基準本文を読みません')
+            return original_open(path, *args, **kwargs)
+
+        for evaluate_formula in (False, True):
+            with self.subTest(evaluate_formula=evaluate_formula):
+                self.config['*']['plugins']['tsv'] = {'evaluate_formula': evaluate_formula}
+                self._save()
+                with patch.object(Path, 'open', open_without_baseline):
+                    info = inspect_watch_inputs(self.args)
+                self.assertNotIn('error', info)
+                self.assertIn(str(metadata), info['files'])
+                self.assertTrue({str(baseline_directory / f'base-{index}.json') for index in range(3)}
+                                .issubset(info['files']))
+                self.assertEqual(evaluate_formula, str(self.root / 'sheet-2.tsv') in info['files'])
+        self.assertFalse((baseline_directory / 'base-2.json').exists())
 
     def test_新manifestの欠落やJSON不正でも元pathを返して修正を検出できる(self):
         self.config['*']['bots']['bot']['scenario']['params']['manifest'] = 'new.json'

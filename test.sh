@@ -16,6 +16,9 @@ python3 -m unittest \
     tests.test_local_webchat \
     tests.test_local_watch \
     tests.test_local_watch_inputs \
+    tests.test_sheets_values \
+    tests.test_sheets_api \
+    tests.test_sheets_sync \
     tests.test_credential_source \
     tests.test_aws_credential_source \
     tests.test_aws_runtime_secrets \

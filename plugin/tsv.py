@@ -38,8 +38,15 @@ class TsvPlugin_Loader:
             paths[title] = (manifest_path.parent / entry['path']).resolve()
 
         selected = self.sheet_selector.select(paths, settings.DEPLOY_ENV)
+        evaluate_formula = self.params.get('evaluate_formula', False)
+        from plugin.tsv_values import MAX_COLUMNS, local_values, read_base_values, sync_baselines, to_text
+        baseline_paths = sync_baselines(manifest_path, paths)
         values = {}
-        for title, _name, _is_constant in selected:
+        literal_cells = set()
+
+        def read_sheet(title):
+            if title in values:
+                return values[title]
             path = paths[title]
             rows = []
             with path.open(encoding='utf-8', newline='') as source:
@@ -55,7 +62,36 @@ class TsvPlugin_Loader:
                             f'TSVの形式が不正です: {title} ({path})!{line_no + 1}行目: {error}'
                         ) from error
                     rows.append(SourceRow(row, title, line_no, str(path)))
+            if title in baseline_paths:
+                try:
+                    typed_rows = local_values(rows, read_base_values(baseline_paths[title]))
+                except ValueError as error:
+                    raise ValueError(f'{title} ({path}): {error}') from error
+                # 値をpushと揃え、CSV行数・範囲内の空セル・元の物理位置は変えない。
+                for row_index, row in enumerate(rows):
+                    # 同期範囲外は空列だけを許可し、余分なpaddingを保持しない。
+                    del row[MAX_COLUMNS:]
+                    typed_row = typed_rows[row_index] if row_index < len(typed_rows) else []
+                    for column in range(len(row)):
+                        cell = typed_row[column] if column < len(typed_row) else {}
+                        row[column] = to_text(cell)
+                        if (evaluate_formula and 'stringValue' in cell
+                                and row[column].lstrip().startswith('=')):
+                            literal_cells.add((title, row_index, column))
             values[title] = rows
+            return rows
+
+        if evaluate_formula:
+            from plugin.tsv_formula import FormulaEvaluator, is_formula
+            evaluator = FormulaEvaluator(read_sheet, paths, literal_cells)
+            for title, _name, _is_constant in selected:
+                for row_index, row in enumerate(read_sheet(title)):
+                    for column, value in enumerate(row):
+                        if is_formula(value):
+                            row[column] = evaluator.evaluate(title, row_index, column)
+        else:
+            for title, _name, _is_constant in selected:
+                read_sheet(title)
         return assemble_tables(selected, values)
 
 
