@@ -1,5 +1,7 @@
 import unittest
 from pathlib import Path
+import re
+from urllib.parse import urljoin
 from unittest.mock import Mock
 
 from tools.webchat_dev_server import (
@@ -22,6 +24,27 @@ class WebchatDevServerTest(unittest.TestCase):
         handler.send_error = Mock()
         handler.do_GET()
         return handler
+
+    def test_既存chat画面からstylesheetと全moduleを取得できる(self):
+        page = self._get('/chat/bot')
+        status, body, content_type, _cache = page._send.call_args.args
+        self.assertEqual(200, status)
+        self.assertIn('text/html', content_type)
+        paths = [urljoin('/chat/bot', value) for value in re.findall(
+            r'(?:href|src)="([^"]+)"', body.decode('utf-8'))]
+        for path in paths:
+            with self.subTest(path=path):
+                asset = self._get(path)
+                status, body, content_type, _cache = asset._send.call_args.args
+                self.assertEqual(200, status)
+                self.assertIn('text/css' if path.endswith('.css') else 'javascript', content_type)
+                if path.endswith('/app.js'):
+                    paths.extend(urljoin(path, value) for value in re.findall(
+                        r"from ['\"]([^'\"]+)['\"]", body.decode('utf-8')))
+        self.assertEqual({
+            '/static/webchat/style.css', '/static/webchat/app.js',
+            '/static/webchat/ui_logic.mjs', '/webchat-client/index.js',
+        }, set(paths))
 
     def test_保存テスト画面は外部moduleを読み込む(self):
         handler = self._get('/devtest/storage')

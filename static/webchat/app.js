@@ -1,4 +1,4 @@
-import { createWebchatClient } from '/webchat-client/index.js';
+import { createWebchatClient } from '../../webchat-client/index.js';
 import {
   classifyUriTarget,
   createBottomResizeFollower,
@@ -6,11 +6,13 @@ import {
   createHorizontalDragController,
   createVideoPlaybackController,
   createVideoCompletionQueue,
-} from '/static/webchat/ui_logic.mjs';
+} from './ui_logic.mjs';
 
 const pathParts = location.pathname.split('/').filter(Boolean);
-const bot = decodeURIComponent(pathParts[pathParts.length - 1] || 'bot');
-const client = createWebchatClient({ apiBaseUrl: location.origin, bot });
+const pageConfig = document.documentElement.dataset;
+const bot = pageConfig.webchatBot || decodeURIComponent(pathParts[pathParts.length - 1] || 'bot');
+const apiBaseUrl = pageConfig.webchatApiBaseUrl || location.origin;
+const client = createWebchatClient({ apiBaseUrl, bot });
 
 const scroller = document.querySelector('#scroller');
 const messagesElement = document.querySelector('#messages');

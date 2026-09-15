@@ -73,7 +73,7 @@ await client.sendText('こんにちは');
 - React hook: `webchat-client/examples/react/useWebchat.js`
 - plain DOM参照UI: `GET /chat/{bot}`
 
-参照UIとその静的配信（`/chat/{bot}`、`/static/webchat/*`、`/webchat-client/*`）は動作確認用です。本番コンテンツではheadless clientをWebクライアント（SvelteやReactのアプリ）へ組み込み、そのアプリのoriginを`allowed_origins`へ登録して配信する構成を推奨します。参照UIのrouteを公開したままにする場合、その静的配信もWebchat Lambdaの負荷になる点は変わりません。
+既存UIは[静的ファイルへ書き出し](webchat-export.md)、APIとは別のhosting・任意のサブパスへ配信できます。独自の画面にはheadless clientをSvelteやReact等へ組み込み、配信元originを`allowed_origins`へ登録してください。同一originの参照UI（`/chat/{bot}`、`/static/webchat/*`、`/webchat-client/*`）も引き続き使えます。このrouteからの静的配信はWebchat Lambdaの負荷になります。
 
 npm等への公開は別作業です。現時点ではrepository内のpackageをworkspace／file dependencyとして取り込むか、配布物へ同梱してください。
 

@@ -156,8 +156,10 @@ class LocalWebchatTest(unittest.TestCase):
         prepared = self._prepare()
         snapshot = self.root / 'serve-settings.yaml'
         snapshot.write_text(json.dumps({'*': prepared}), encoding='utf-8')
-        script = '''
+        script = r'''
 import json
+import re
+from urllib.parse import urljoin
 import settings
 import app_webchat
 from cloud_backend.local.object_store import LocalObjectStore
@@ -168,12 +170,20 @@ store = LocalObjectStore(local['storage_root'], local['public_base_url'])
 client = TestApp(create_app(app_webchat.app, store))
 host = {'Host': '127.0.0.1:8765'}
 page = client.get('/chat/bot', headers=host)
+assets = []
+paths = [urljoin('/chat/bot', value) for value in re.findall(r'(?:href|src)="([^"]+)"', page.text)]
+for path in paths:
+    asset = client.get(path, headers=host)
+    assets.append((path, asset.status_int, asset.headers['Content-Type']))
+    if path.endswith('/app.js'):
+        paths.extend(urljoin(path, value) for value in re.findall(r"from ['\"]([^'\"]+)['\"]", asset.text))
 options = client.request('OPTIONS', '/api/webchat/v1/bots/bot/turn',
                         headers={**host, 'Origin': 'http://127.0.0.1:8765'})
 rejected = client.post_json('/api/webchat/v1/bots/bot/turn', {},
                            headers=host, expect_errors=True)
 print(json.dumps({'page': page.status_int, 'csp': page.headers['Content-Security-Policy'],
-                  'options': options.status_int, 'without_origin': rejected.status_int}))
+                  'options': options.status_int, 'without_origin': rejected.status_int,
+                  'assets': assets}))
 '''
         result = subprocess.run([sys.executable, '-B', '-c', script], cwd=PROJECT_ROOT,
                                 env={**os.environ, 'XSBOT_CLOUD_PROVIDER': 'local',
@@ -184,6 +194,14 @@ print(json.dumps({'page': page.status_int, 'csp': page.headers['Content-Security
         self.assertEqual((200, 204, 403), (actual['page'], actual['options'], actual['without_origin']))
         for directive in ('img-src', 'media-src'):
             self.assertEqual("'self'", actual['csp'].split(directive, 1)[1].split(';', 1)[0].strip())
+        self.assertEqual({
+            '/static/webchat/style.css', '/static/webchat/app.js',
+            '/static/webchat/ui_logic.mjs', '/webchat-client/index.js',
+        }, {path for path, _status, _content_type in actual['assets']})
+        for path, status, content_type in actual['assets']:
+            with self.subTest(path=path):
+                self.assertEqual(200, status)
+                self.assertIn('text/css' if path.endswith('.css') else 'javascript', content_type)
 
     def test_環境未確定ではsettingsを読み込まず停止する(self):
         with patch.dict(os.environ, {}, clear=True), patch.dict(sys.modules, {'settings': None}):

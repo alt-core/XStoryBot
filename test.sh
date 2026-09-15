@@ -45,6 +45,7 @@ python3 -m unittest \
     tests.plugin.test_webchat \
     tests.plugin.test_webchat_runtime_e2e \
     tests.test_webchat_dev_server \
+    tests.test_webchat_export \
     tests.test_webchat_reference_ui \
     tests.plugin.test_line_contracts \
     tests.plugin.test_line_api \
