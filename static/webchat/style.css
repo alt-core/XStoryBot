@@ -87,12 +87,12 @@ button, a { -webkit-tap-highlight-color: transparent; }
   flex-direction: column;
   height: 100vh;
   height: 100dvh;
-  max-width: 46rem;
+  max-width: 30rem;
   margin: 0 auto;
   background: var(--bg);
 }
 
-@media (min-width: 46rem) {
+@media (min-width: 30rem) {
   .chat {
     border-left: 1px solid var(--hairline);
     border-right: 1px solid var(--hairline);
@@ -451,10 +451,10 @@ button, a { -webkit-tap-highlight-color: transparent; }
 
 .media-viewer {
   box-sizing: border-box;
-  width: min(46rem, 100vw);
+  width: min(30rem, 100vw);
   height: 100vh;
   height: 100dvh;
-  max-width: 46rem;
+  max-width: 30rem;
   max-height: none;
   margin: auto;
   padding: calc(3.75rem + env(safe-area-inset-top))

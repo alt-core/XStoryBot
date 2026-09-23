@@ -502,7 +502,7 @@ const renderMessage = (message) => {
       image.srcset = message.sources
         .map((source) => `${source.url} ${source.width}w`)
         .join(', ');
-      image.sizes = '(max-width: 46rem) 100vw, 46rem';
+      image.sizes = '(max-width: 30rem) 100vw, 30rem';
     }
     image.alt = message.alt || '選択可能な画像';
     watchMediaLoad(image);
