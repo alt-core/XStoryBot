@@ -2,6 +2,76 @@ import assert from 'node:assert/strict';
 
 import { createWebchatClient } from './index.js';
 
+// 応答本文は一度だけ受け取り、有効なIDから表示中の選択肢を保存する。
+{
+  let activeIds = ['last'];
+  const messages = [
+    { id: 'first', type: 'text', text: '転送前' },
+    { id: 'last', type: 'text', text: '転送後' },
+  ];
+  const activeClient = createWebchatClient({
+    apiBaseUrl: 'https://api.example.test', bot: 'active-ids', indexedDB: null,
+    fetch: async () => new Response(JSON.stringify({
+      schema_version: 1, request_id: 'request',
+      state: { id: 'state', revision: 0 }, state_token: 'token',
+      messages, active_message_ids: activeIds,
+    }), { headers: { 'Content-Type': 'application/json' } }),
+  });
+  await activeClient.start();
+  assert.deepEqual(activeClient.getSnapshot().messages, messages);
+  assert.deepEqual(activeClient.getSnapshot().activeResponse, [messages[1]]);
+  await activeClient.clearHistory();
+  assert.deepEqual(activeClient.getSnapshot().activeResponse, [messages[1]]);
+  activeIds = [];
+  await activeClient.sendText('解除');
+  assert.deepEqual(activeClient.getSnapshot().activeResponse, []);
+  activeIds = [42];
+  await assert.rejects(activeClient.sendText('不正'), { code: 'invalid-response' });
+  activeClient.destroy();
+}
+
+// LIFFの状態だけを採用した場合、会話履歴と表示中の選択肢を維持する。
+{
+  let revision = -1;
+  const bodies = [];
+  let malformed = false;
+  const app = { id: 'menu', url: 'https://pages.example.test/menu' };
+  const sessionClient = createWebchatClient({
+    apiBaseUrl: 'https://api.example.test', bot: 'liff-session',
+    fetch: async (_url, options) => {
+      const body = JSON.parse(options.body);
+      bodies.push(body);
+      const liff = body.input.type === 'liff';
+      revision++;
+      return new Response(JSON.stringify({
+        schema_version: 1, request_id: `request-${revision}`,
+        state: { id: `state-${revision}`, revision }, state_token: `token-${revision}`,
+        messages: liff ? [] : [{ id: `message-${revision}`, type: 'text', text: '選択してください' }],
+        echo_message: body.input.type === 'text' ? body.input.text : null,
+        chat_updated: !liff, liff_apps: [app],
+        ...(liff ? { liff_result: malformed ? {} : ['{"event":"advance"}'] } : {}),
+      }), { headers: { 'Content-Type': 'application/json' } });
+    },
+  });
+  await sessionClient.start();
+  const before = sessionClient.getSnapshot();
+  assert.deepEqual(await sessionClient.requestLiff(app, 'open'), ['{"event":"advance"}']);
+  let current = sessionClient.getSnapshot();
+  assert.equal(current.stateId, 'state-1');
+  assert.deepEqual(current.turns, before.turns);
+  assert.deepEqual(current.activeResponse, before.activeResponse);
+  assert.deepEqual(current.liffApps, [app]);
+  assert.equal(bodies[1].state_token, 'token-0');
+  await sessionClient.sendText('持ち物');
+  assert.equal(bodies[2].state_token, 'token-1');
+  assert.equal(sessionClient.getSnapshot().turns.length, 2);
+  malformed = true;
+  await assert.rejects(sessionClient.requestLiff(app, 'open'), { code: 'invalid-response' });
+  assert.equal(sessionClient.getSnapshot().stateId, 'state-2');
+  assert.equal(sessionClient.getSnapshot().turns.length, 2);
+  sessionClient.destroy();
+}
+
 
 let revision = -1;
 const requests = [];
@@ -150,3 +220,31 @@ assert.equal(choiceClient.getSnapshot().turns.length, 1);
 choiceClient.destroy();
 
 console.log('webchat-client tests: OK');
+
+// 旧メニューのタップではセーブと履歴を維持し、表示だけを更新する。
+{
+  const richmenu = {id: 'main', revision: 'new', chat_bar_text: 'メニュー', selected: false,
+    image_url: 'https://media.example.test/a.png', width: 800, height: 400,
+    areas: [{x: 0, y: 0, width: 800, height: 400,
+      action: {type: 'menu', label: '開く', echo_text: null}}]};
+  const sent = [];
+  const menuClient = createWebchatClient({apiBaseUrl: 'https://api.example.test', bot: 'menu-case',
+    fetch: async (_url, options) => {
+      const body = JSON.parse(options.body); sent.push(body);
+      return new Response(JSON.stringify({schema_version: 1, request_id: 'request',
+        state: {id: 'state', revision: 0}, state_token: 'token', echo_message: null,
+        messages: [], richmenu, ...(body.input.type === 'menu' ? {chat_updated: false, menu_updated: true} : {})}),
+      {headers: {'Content-Type': 'application/json'}});
+    }});
+  await menuClient.start();
+  const before = menuClient.getSnapshot();
+  await menuClient.sendMenu('main', 0, 'old');
+  assert.deepEqual(sent[1].input, {type: 'menu', menu: 'main', area: 0, revision: 'old'});
+  assert.deepEqual(menuClient.getSnapshot().turns, before.turns);
+  assert.equal(menuClient.getSnapshot().stateId, before.stateId);
+  assert.equal(menuClient.getSnapshot().richmenu.revision, 'new');
+  assert.match(menuClient.getSnapshot().notice, /メニューが更新/);
+  await menuClient.clearHistory();
+  assert.equal(menuClient.getSnapshot().richmenu.id, 'main');
+  menuClient.destroy();
+}

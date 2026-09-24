@@ -19,7 +19,7 @@ python3 tools/export_webchat.py \
 
 出力先は未作成・空・このツールで生成済みのディレクトリを指定します。標準出力には生成先とファイル一覧を含むJSONを一件返します。終了コードは成功が`0`、入力・保存エラーが`2`です。
 
-1回の書出しで次の公開6ファイルを生成します。
+1回の書出しで次の公開7ファイルを生成します。
 
 ```text
 index.html
@@ -28,6 +28,7 @@ assets/<内容hash>/app.js
 assets/<内容hash>/style.css
 assets/<内容hash>/ui_logic.js
 assets/<内容hash>/client.js
+assets/<内容hash>/liff-host.js
 ```
 
 同じ出力先へ再生成すると、入口の`index.html`を最後に差し替えます。assetの内容が変われば別のhashディレクトリを使い、旧assetや利用者が追加したファイルは削除しません。

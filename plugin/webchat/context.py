@@ -30,6 +30,12 @@ DEFAULT_ALLOWED_COMMANDS = frozenset({
     '@@set_next_label', '@clear_next_label', '@reset_next_label',
 })
 
+UNSUPPORTED_COMMANDS = frozenset({
+    '@delay', '@遅延',
+    '@group_add', '@グループ追加', '@group_del', '@グループ削除',
+    '@group_clear', '@グループ初期化',
+})
+
 
 class WebchatActionContext(ActionContext):
     """署名済みclient stateだけから動作するWebchat context。"""
@@ -41,6 +47,7 @@ class WebchatActionContext(ActionContext):
             bot_name, 'webchat', interface, user, action, attrs or {})
         self._player_snapshot = copy.deepcopy(player_snapshot or {})
         self._saved_player = None
+        self.constants_override = getattr(interface, 'constants_override', {})
         self.next_label_store = TokenNextLabelStore()
         self.allowed_commands = set(DEFAULT_ALLOWED_COMMANDS)
         self.allowed_commands.update(interface.allowed_commands)
@@ -74,9 +81,12 @@ class WebchatActionContext(ActionContext):
         if self.deadline - time.monotonic() <= 0.5:
             raise TurnDeadlineExceeded(
                 'Webchat turn deadlineを超えました')
-        if command not in self.allowed_commands:
+        allowed = command in self.allowed_commands
+        if command in ('@forward', '@転送'):
+            allowed = callable(getattr(self, 'forward_action', None))
+        if command in UNSUPPORTED_COMMANDS or not allowed:
             raise BotNotWebCompatible(
-                f'Webchatで許可されていないcommandです: {command}')
+                f'Webchatで実行できないcommandです: {command}')
         logging.info(json.dumps({
             'type': 'XSBWebchat',
             'event': 'command',

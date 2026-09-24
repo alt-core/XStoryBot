@@ -42,7 +42,22 @@ class BotRuntime:
         from scenario import ScenarioBuilder, ScenarioSyntaxError
         try:
             tables, constants = self.scenario_loader.load_scenario()
+            from richmenu_spec import menu_definitions, referenced_constants
+            bot_settings = getattr(settings, 'BOTS', {}).get(self.name, {})
+            definitions = menu_definitions(bot_settings)
+            names = set(definitions)
+            ids = {}
+            if definitions:
+                from richmenu_service import build_menu_ids
+                ids = build_menu_ids(self, names)
+                for name in referenced_constants(definitions) & constants.keys() & settings.CONSTANTS.keys():
+                    if constants[name] != settings.CONSTANTS[name]:
+                        logging.warning('メニューと定数Sheetで定数の値が異なります: %s', name)
+            options = {**(options or {}), 'richmenu_names': names,
+                       'richmenu_ids': ids, 'richmenu_require_ids': self.get_interface('line') is not None}
             self.scenario = ScenarioBuilder.build_from_tables(tables, constants, options=options, version=version)
+            if definitions:
+                self.scenario.richmenu_ids = ids
             self.scenario_uri = self.scenario.save_to_storage()
             GlobalBotVariablesDB.save(self.name, self.scenario_uri)
             build_cache.set_cache(f'last_build_result:{self.name}', json.dumps({
@@ -99,14 +114,18 @@ class BotRuntime:
                 logging.exception(f"ビルド済シナリオのロードに失敗しました。\n{err}")
                 return False, err
 
-    def handle_action(self, context):
+    def handle_action(self, context, interface=None):
         context.version = self.scenario.version
         context.state_namespace = self.state_namespace
 
-        if settings.CONSTANTS:
-            context.add_env(settings.CONSTANTS)
+        override = getattr(context, 'constants_override', None)
+        if override:
+            context.add_env(override)
         if self.scenario.constants:
             context.add_env(self.scenario.constants)
+        if settings.CONSTANTS:
+            context.add_env(settings.CONSTANTS)
+        context.richmenu_ids = getattr(self.scenario, 'richmenu_ids', {})
         context.add_env(commands.get_runtime_object_dictionary(context.service_name, context))
         if self.scenario.version >= 3:
             context.add_env({
@@ -117,7 +136,8 @@ class BotRuntime:
                 '$$timestamp': now_str(),
             })
 
-        interface = self.get_interface(context.service_name)
+        if interface is None:
+            interface = self.get_interface(context.service_name)
         retry_count = int(interface.get_retry_count()) + 1
         raise_exceptions = bool(
             getattr(interface, 'should_raise_exceptions', lambda: False)())

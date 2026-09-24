@@ -122,6 +122,10 @@
 
     liff:
       allow_origin: "*"
+      # 実LINEのLIFF APIに必要。LIFFを登録したLINE LoginチャネルのID。
+      login_channel_id: !env LIFF_LOGIN_CHANNEL_ID
+      # 入口の未定義actionだけを空応答にする。内部ジャンプの誤りは検出する。
+      ignore_unhandled_action: false
 
     google_sheets:
       sheet_id: !env SHEETS_ID
@@ -148,6 +152,8 @@
       media_origins: !env XSBOT_WEBCHAT_MEDIA_ORIGINS
       start_action: "##line.follow"
       sender_icon_urls: {}
+      # ページと別Botの対応は、各Botのwebchat.params.liff_appsへ設定する。
+      liff_apps: {}
 
   # Bot設定
   bots:
@@ -220,3 +226,22 @@ local:
         base_url: "http://localhost:8080"
       builder:
         base_url: "http://localhost:8081"
+
+# 各環境セクション内へ追加する例（既存設定と統合してください）。詳細はdocs/richmenu.md。
+# constants:
+#   liff_menu: https://liff.line.me/YOUR_LIFF_ID
+# plugins:
+#   webchat:
+#     constants:
+#       liff_menu: https://pages.example.com/menu/index.html
+# bots:
+#   bot:
+#     default_richmenu: main
+#     richmenus:
+#       main:
+#         image: https://media.example.com/menu.png
+#         size: {width: 2500, height: 843}
+#         chatBarText: メニュー
+#         areas:
+#           - bounds: {x: 0, y: 0, width: 2500, height: 843}
+#             action: {type: postback, data: '#help', label: ヘルプ}

@@ -4,9 +4,32 @@ import datetime
 import re
 import zoneinfo
 from unicodedata import normalize
+import logging
 import json
 import yaml
 import os
+
+
+def normalize_name(value):
+    return normalize('NFKC', value).lower()
+
+
+def normalize_constants(values, scalar_only=False):
+    if not isinstance(values, dict):
+        raise ValueError('constantsはmappingにしてください')
+    result = {}
+    for key, value in values.items():
+        if not isinstance(key, str):
+            raise ValueError('定数名は文字列にしてください')
+        name = normalize_name(key)
+        if name in result:
+            raise ValueError(f'正規化後の定数名が重複しています: {name}')
+        if scalar_only and not isinstance(value, (str, int, float, bool, type(None))):
+            raise ValueError(f'Webchatの定数 {name} はscalarにしてください')
+        if value == '':
+            logging.warning('定数が空文字です: %s', name)
+        result[name] = value
+    return result
 
 
 def to_hankaku(text):

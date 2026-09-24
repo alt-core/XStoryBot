@@ -1,4 +1,5 @@
 import re
+import logging
 from urllib.parse import urlsplit
 
 import commands
@@ -232,14 +233,25 @@ class WebchatTemplateRuntime:
             context, sender, msg, options, children or [])
 
 
+class WebchatRichmenuRuntime:
+    def run_command(self, context, sender, msg, options):
+        from richmenu_spec import resolve_menu_name
+        name = resolve_menu_name(options[0], context.get_interface('webchat').richmenu_specs)
+        if name is not None:
+            context.status.richmenu = name
+        return True
+
+
 def register_runtime():
     runtime = WebchatTemplateRuntime()
     for names in (
             CONFIRM_CMDS, BUTTON_CMDS, PANEL_CMDS, IMAGEMAP_CMDS,
-            FLEX_CMDS, REPLY_CMDS, RICHMENU_CMDS):
+            FLEX_CMDS, REPLY_CMDS):
         commands.register_commands([
             commands.CommandEntry(
                 names=names,
                 child='raw',
                 runtime=runtime,
                 service='webchat')])
+    commands.register_command(commands.CommandEntry(
+        names=RICHMENU_CMDS, options='text', runtime=WebchatRichmenuRuntime(), service='webchat'))

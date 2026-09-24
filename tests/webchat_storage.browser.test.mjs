@@ -61,16 +61,21 @@ export async function runWebchatStorageTests() {
       });
     });
     const requests = [];
-    const newClient = () => {
+    const newClient = (beforeResponse = async () => {}) => {
       const client = createWebchatClient({
         apiBaseUrl: location.origin, bot,
         fetch: async (_url, options) => {
-          requests.push(JSON.parse(options.body));
+          const body = JSON.parse(options.body);
+          requests.push(body);
+          await beforeResponse();
+          const liff = body.input.type === 'liff';
           return new Response(JSON.stringify({
             schema_version: 1, request_id: 'request-1',
             state: { id: 'state-1', revision: 1 }, state_token: 'state-token-1',
             echo_message: null,
-            messages: [{ ...message, id: `${bot}:next-message` }],
+            messages: liff ? [] : [message, { ...message, id: `${bot}:next-message` }],
+            active_message_ids: liff ? [] : [`${bot}:next-message`],
+            ...(liff ? { chat_updated: false, liff_result: ['{"event":"next"}'] } : {}),
           }), { headers: { 'Content-Type': 'application/json' } });
         },
       });
@@ -98,6 +103,11 @@ export async function runWebchatStorageTests() {
     await reopened.sendPostback(
       reopened.getSnapshot().activeResponse[0].actions[0].token);
     assert(test.requests[0].state_token === 'state-token-0', '保存stateを使っていない');
+    const selected = await records(test.key);
+    assert(selected.turns[0].messages.length === 2, '会話履歴から途中応答を落とした');
+    assert(selected.head.activeResponse.length === 1
+      && selected.head.activeResponse[0].id.endsWith(':next-message'),
+    '応答IDから最新応答を保存できていない');
     assert(test.requests[0].input.postback_token === 'choice-token', '選択肢が変わった');
     await reopened.clearHistory();
     assert(reopened.getSnapshot().activeResponse[0].id.endsWith(':next-message'),
@@ -110,6 +120,45 @@ export async function runWebchatStorageTests() {
     await emptyClient.clearHistory();
     assert(emptyClient.getSnapshot().activeResponse.length === 0, '空応答が変わった');
     results.push('空応答を維持');
+
+    const liff = await fixture('LIFF状態のみ');
+    const liffClient = liff.newClient();
+    await liffClient.initialize();
+    const events = await liffClient.requestLiff({ id: 'menu', url: location.origin + '/menu' }, 'next');
+    const afterLiff = await records(liff.key);
+    assert(events[0] === '{"event":"next"}', 'LIFFイベントを返していない');
+    assert(afterLiff.head.stateId === 'state-1' && afterLiff.turns.length === 1,
+      'LIFF状態の保存で会話履歴を増減した');
+    assert(afterLiff.head.activeResponse[0].id === liff.messages[0].id,
+      'LIFF操作で会話の選択肢を消した');
+    results.push('LIFF状態だけを保存し会話履歴と選択肢を維持');
+
+    const focus = await fixture('iframeからのfocus');
+    let resume;
+    let entered;
+    const started = new Promise((resolve) => { entered = resolve; });
+    const responseReady = new Promise((resolve) => { resume = resolve; });
+    const focusClient = focus.newClient(async () => { entered(); await responseReady; });
+    await focusClient.initialize();
+    const sending = focusClient.sendText('処理中');
+    await started;
+    let emissions = 0;
+    let unsubscribe;
+    const focused = new Promise((resolve) => {
+      unsubscribe = focusClient.subscribe(() => {
+        if (++emissions > 1) { unsubscribe(); resolve(); }
+      });
+    });
+    window.dispatchEvent(new Event('focus'));
+    try {
+      await focused;
+      assert(focusClient.getSnapshot().status === 'sending', 'focus復帰で処理中表示を解除した');
+    } finally {
+      resume();
+      await sending;
+    }
+    assert(focusClient.getSnapshot().status === 'ready', '完了後も処理中表示が残った');
+    results.push('iframeからfocusが戻っても通信完了まで処理中表示を維持');
 
     const corrupt = await fixture('不正head');
     const corruptClient = corrupt.newClient();

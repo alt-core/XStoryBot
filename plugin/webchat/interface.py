@@ -8,7 +8,7 @@ import secrets
 import threading
 import time
 from urllib.parse import unquote, urljoin
-from urllib.parse import urlsplit
+from urllib.parse import urlsplit, urlunsplit
 
 import requests
 import utility
@@ -22,6 +22,7 @@ from plugin.webchat.errors import (
 )
 from plugin.webchat.presenter import WebchatPresenter, register_runtime
 from plugin.webchat.token import (
+    BUNDLE_VERSION,
     POSTBACK_TYPE,
     STATE_TYPE,
     TOKEN_VERSION,
@@ -89,13 +90,19 @@ def _normalize_origins(values, allow_empty=False, local_origin=None):
 
 
 class WebchatInterface:
-    def __init__(self, bot_name, params, local_settings=None):
+    supports_task_execution = False
+
+    def __init__(self, bot_name, params, local_settings=None, bot_settings=None, constants=None):
         self.bot_name = bot_name
         self.params = params
         self.local_origin = None
         self.local_media_base = None
         self.local_asset_urls = {}
         self.allow_external_media = True
+        self.liff_apps = {}
+        self.constants_override = {}
+        self.richmenus = None
+        self.richmenu_specs = {}
         if local_settings is not None:
             from cloud_backend import get_provider
             if get_provider() != 'local':
@@ -161,6 +168,14 @@ class WebchatInterface:
             self.media_origins = ()
             return
 
+        try:
+            from richmenu_spec import parse_bot_settings
+            self.constants_override = utility.normalize_constants(params.get('constants', {}), scalar_only=True)
+            self.richmenus = parse_bot_settings(bot_settings or {}, {**(constants or {}), **self.constants_override},
+                                                allow_local_http=self.local_origin is not None)
+        except ValueError as error:
+            raise InvalidWebchatConfiguration(str(error)) from error
+
         self.deployment = str(
             params.get('deployment') or os.getenv('XSBOT_DEPLOY_ENV') or 'prod')
         self.scenario_uri = str(params.get('scenario_uri') or '')
@@ -192,7 +207,59 @@ class WebchatInterface:
             local_origin=self.local_origin)
         for icon_url in self.sender_icon_urls.values():
             self.validate_media_url(icon_url)
+        for name, menu in self.richmenus.menus.items():
+            try:
+                image_url = self.validate_media_url(menu.data['image'])
+            except BotNotWebCompatible as error:
+                raise InvalidWebchatConfiguration(f'リッチメニュー {name}: {error}') from error
+            self.richmenu_specs[name] = menu.webchat_spec(name, image_url)
         self.codec = WebchatTokenCodec(params.get('signing_key'))
+        apps = params.get('liff_apps', {}) or {}
+        if not isinstance(apps, dict):
+            raise InvalidWebchatConfiguration('liff_appsにはページ名ごとの設定を指定してください')
+        pages = set()
+        liff_ids = set()
+        for name, app in apps.items():
+            if (not isinstance(name, str) or not name or not isinstance(app, dict)
+                    or not {'url', 'bot'} <= set(app) or set(app) - {'url', 'bot', 'match', 'liff_id'}
+                    or not isinstance(app['bot'], str) or not app['bot']
+                    or not isinstance(app['url'], str)):
+                raise InvalidWebchatConfiguration('LIFFページにはurlとbotを指定してください')
+            try:
+                parsed = urlsplit(app['url'])
+                origin = _format_origin(parsed)
+            except (ValueError, InvalidWebchatConfiguration) as error:
+                raise InvalidWebchatConfiguration('LIFFページのURLが不正です') from error
+            local_http = (self.local_origin is not None and parsed.scheme == 'http'
+                          and parsed.hostname == '127.0.0.1' and parsed.port is not None)
+            if (not parsed.hostname or (parsed.scheme != 'https' and not local_http)
+                    or parsed.username is not None or parsed.password is not None
+                    or '\\' in app['url'] or any(c.isspace() or ord(c) < 32 for c in app['url'])):
+                raise InvalidWebchatConfiguration('LIFFページにはHTTPS URLを指定してください')
+            page = (origin, parsed.path or '/')
+            if page in pages:
+                raise InvalidWebchatConfiguration('同じLIFFページのoriginとpathを重複登録できません')
+            pages.add(page)
+            matching = app.get('match', 'exact')
+            liff_id = app.get('liff_id')
+            if matching not in ('exact', 'prefix'):
+                raise InvalidWebchatConfiguration('LIFFページのmatchはexactかprefixにしてください')
+            if liff_id is not None:
+                if (not isinstance(liff_id, str) or not re.fullmatch(r'[A-Za-z0-9_-]+', liff_id)
+                        or liff_id in liff_ids):
+                    raise InvalidWebchatConfiguration('liff_idは重複しないLIFF IDを指定してください')
+                liff_ids.add(liff_id)
+            self.liff_apps[name] = {
+                'url': urlunsplit((parsed.scheme, origin.split('://', 1)[1],
+                                  parsed.path or '/', parsed.query, parsed.fragment)),
+                'bot': app['bot'],
+                **({'match': matching} if matching != 'exact' else {}),
+                **({'liff_id': liff_id} if liff_id is not None else {}),
+            }
+
+    def public_liff_apps(self):
+        return [{'id': name, **{key: value for key, value in app.items() if key != 'bot'}}
+                for name, app in self.liff_apps.items()]
 
     @staticmethod
     def _derive_revision(uri):
@@ -387,6 +454,27 @@ class WebchatInterface:
         context.request_id = request_id
         return context
 
+    def current_richmenu(self, player):
+        name = player.get('richmenu')
+        if name and name not in self.richmenu_specs:
+            logging.warning('保存されたリッチメニューが定義にありません: %s', name)
+        if name not in self.richmenu_specs:
+            name = self.richmenus.default if self.richmenus else None
+        return self.richmenu_specs.get(name)
+
+    def richmenu_input(self, input_data, player):
+        menu = self.current_richmenu(player)
+        if menu is None or input_data['menu'] != menu['id'] or input_data['revision'] != menu['revision']:
+            return None
+        index = input_data['area']
+        areas = self.richmenus.menus[menu['id']].data['areas']
+        if index >= len(areas) or areas[index]['action']['type'] == 'uri':
+            raise ValueError('リッチメニューの領域が不正です')
+        action = areas[index]['action']
+        if action['type'] == 'message':
+            return utility.sanitize_action(action['text']), action['text']
+        return action['data'], action.get('displayText')
+
     def create_context_from_state(self, state_payload, action, request_id,
                                   echo_message=None, deadline_seconds=None):
         context = WebchatActionContext(
@@ -441,10 +529,15 @@ class WebchatInterface:
         return re.sub(r'_1024\.', '_240.', url)
 
     def respond_reaction(self, context, reactions):
+        return self.make_response(context, self.present_reactions(context, reactions))
+
+    def present_reactions(self, context, reactions):
         messages = self._presenter.present(context, reactions)
         for index, message in enumerate(messages):
             message['id'] = f'{context.request_id}:{index}'
+        return messages
 
+    def make_response(self, context, messages, peer_players=None, peer_epochs=None):
         next_revision = int(context.state_payload.get('revision', -1)) + 1
         state_payload = {
             'v': TOKEN_VERSION,
@@ -457,8 +550,12 @@ class WebchatInterface:
             'revision': next_revision,
             'player': context.saved_player,
         }
+        if peer_epochs is not None:
+            state_payload['v'] = BUNDLE_VERSION
+            state_payload['peer_players'] = peer_players
+            state_payload['peer_epochs'] = peer_epochs
         state_token = self.codec.dump_state(state_payload)
-        return {
+        result = {
             'schema_version': 1,
             'request_id': context.request_id,
             'state': {
@@ -469,15 +566,27 @@ class WebchatInterface:
             'echo_message': context.echo_message,
             'messages': messages,
         }
+        if self.richmenu_specs:
+            result['richmenu'] = self.current_richmenu(context.saved_player)
+        return result
 
 
 class WebchatInterfaceFactory:
-    def __init__(self, params, local_settings=None):
+    def __init__(self, params, local_settings=None, constants=None):
         self.params = params
         self.local_settings = local_settings
+        self.constants = constants
         register_runtime()
 
-    def create_interface(self, bot_name, params):
+    def create_interface(self, bot_name, params, bot_settings=None):
+        merged = utility.merge_params(self.params, params)
+        try:
+            merged['constants'] = {
+                **utility.normalize_constants(self.params.get('constants', {}), scalar_only=True),
+                **utility.normalize_constants((params or {}).get('constants', {}), scalar_only=True),
+            }
+        except ValueError as error:
+            raise InvalidWebchatConfiguration(str(error)) from error
         return WebchatInterface(
-            bot_name, utility.merge_params(self.params, params),
-            local_settings=self.local_settings)
+            bot_name, merged, local_settings=self.local_settings,
+            bot_settings=bot_settings, constants=self.constants)

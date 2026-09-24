@@ -85,3 +85,33 @@ LINEとのやりとりは`plugin/line/api.py`（reply／push／rich menu紐付�
 外部送信と状態更新は原子的ではありません。切り替え中の二重実行を避けるため、同じWebhookや配信処理を旧環境と新環境で同時に有効にしないでください。
 
 Cloud LoggingからBigQueryへログを出力する場合は、実際に作成されたテーブルとフィールドを基準に集計を作り直します。GAEのrequest logテーブルを前提にしたクエリはCloud Runでは使用できません。
+
+### WebchatのLIFF連携
+
+`liff_apps`を有効にすると、同じプレイに属するLIFF用Botの状態を含むversion 2の署名tokenを返します。既存の単独Botのversion 1セーブは、会話用Botの互換epochが同じなら引き継ぎ、LIFF用Botを未開始から追加します。連携Botの追加や未実行Botの変更・削除では既存セーブを維持します。そのセーブで実行済みのLIFF用Botの互換epoch変更や連携先削除を検出した場合は、状態を黙って捨てずリセットを求めます。namespaceを共有するBotも、実行したBotごとに互換epochを確認します。
+
+version 2を使ったセーブは、この機能に対応しない古いエンジンへ戻すと読めません。旧版へ戻す場合は旧セーブを使うか、明示的にリセットしてください。ページ側はtokenを解釈せず、親Webchatに管理を任せます。
+
+### 転送時のinterface指定
+
+`@forward Bot名 action [interface]`と`@delay 秒 Bot名 action [interface]`の末尾で実行interfaceを指定できます。以前は読み捨てていた位置のセルを使うため、`@forward`の第3引数、`@delay`の第4引数にメモ等を書いている場合はコメント行へ移してから再ビルドしてください。通常の2引数の`@forward`、2・3引数の`@delay`は変更不要です。
+
+非同期転送の指定省略時は、引き続き利用者のサービスで実行します。LINE上のLIFFからの転送では、事前検査も実際に実行する`line`へ揃えました。これまで検査のためだけに必要だった転送先の`liff`は不要です。明示的に`liff`を指定して使うBotには残してください。利用者IDと`state_namespace`の保存キーは変更しません。
+
+interface指定付きtaskを処理するには、API／workerもこの版に更新する必要があります。API／workerを先に更新し、その後にinterface指定を使うシナリオを再ビルドしてください。
+
+### 定数とリッチメニュー
+
+settingsの定数名をNFKC＋小文字化します。大文字・全角のキーが参照できるようになる一方、正規化後に衝突するキーは整理が必要です。また、同名がsettingsと定数Sheetの両方にある場合は、定数Sheetの値を優先します。これまで参照できなかったキーが有効になることで、同名の状態変数より先に見つかる場合もあります。
+
+既存の生IDによる`@richmenu`は変更不要です。論理名へ移す場合は、settingsへ定義 → デプロイ → 管理画面でLINEへ反映 → シナリオの再ビルドの順で行います。Webchatの既存セーブもそのまま読めます。メニュー状態のないセーブは既定メニューを使います。
+
+### LIFFのチャネル検証とページ連携
+
+実LINEのLIFF APIを利用する場合は、`liff.params.login_channel_id`（またはplugin共通設定）へ、LIFFを登録したLINE LoginチャネルIDを文字列で追加してから更新します。テンプレートでは環境変数`LIFF_LOGIN_CHANNEL_ID`を参照します。Messaging APIチャネルIDとは異なります。未設定ではLINE側のLIFF APIが503となり、発行先の違うtokenは401で拒否します。Webchat内だけのLIFF利用にはこの設定は不要です。認証要求のtimeoutは各10秒です。
+
+`@richmenu`はLIFF interfaceでも実行するようになります。LINEでは同じBotのline interfaceが必要で、Webchatでは実行中Botの保存状態を変更します。これまでLIFFへ文字列として返っていた`@richmenu`をイベントとして使っていないことを確認してください。
+
+`ignore_unhandled_action`は既定falseで、従来の未定義ラベルの扱いを維持します。入口に任意イベントを送るページだけtrueにできます。内部ジャンプの誤りは無視しません。
+
+`liff_id`・`match: prefix`は任意です。従来の実ページURL・完全一致・定数上書きも維持します。読替えを使う場合は、親Webchatのclient／参照UI（export版は再export）も更新してください。iframe protocolはversion 1のままです。子ページだけを更新しても、古い親のURL判定やsandboxは変わりません。

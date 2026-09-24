@@ -19,6 +19,7 @@ class TokenPlayerStatus:
         self._action_token = source.get('action_generation')
         self.web_next_label = source.get('web_next_label')
         self.web_next_trigger = source.get('web_next_trigger')
+        self.richmenu = source.get('richmenu')
         if not self._action_token:
             self.renew_action_token()
         self._rollback = self.export()
@@ -89,6 +90,7 @@ class TokenPlayerStatus:
 
     def export(self):
         return {
+            'richmenu': self.richmenu,
             'scene': self._scene,
             'scene_history': copy.deepcopy(self._scene_history),
             'action_generation': self._action_token,
@@ -113,6 +115,7 @@ class TokenPlayerStatus:
         self._action_token = restored._action_token
         self.web_next_label = restored.web_next_label
         self.web_next_trigger = restored.web_next_trigger
+        self.richmenu = restored.richmenu
 
 
 class TokenNextLabelStore:

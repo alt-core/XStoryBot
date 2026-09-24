@@ -212,6 +212,7 @@ def turn(bot_name):
         received_state_id = None
         received_revision = None
         received_scenario_revision = None
+        liff_app = None
         deadline_seconds = _deadline_seconds(interface)
 
         if input_type == 'start':
@@ -243,6 +244,40 @@ def turn(bot_name):
                     input_data.get('postback_token'), state_payload)
                 action = postback['resolved_action']
                 echo_message = postback.get('echo_text')
+            elif input_type == 'liff':
+                _require_exact_keys(input_data, {'type', 'app', 'app_url', 'action'})
+                liff_app = input_data.get('app')
+                app = (interface.liff_apps.get(liff_app)
+                       if isinstance(liff_app, str) else None)
+                if (app is None or input_data.get('app_url') != app['url']
+                        or not isinstance(input_data.get('action'), str)):
+                    raise _invalid_request('LIFFページまたはactionが不正です')
+                target = _get_bot(app['bot'])
+                if target is None or target.get_interface('liff') is None:
+                    raise _invalid_request('LIFF用Botが見つかりません')
+                action = target.get_interface('liff').action_prefix + input_data['action']
+            elif input_type == 'menu':
+                _require_exact_keys(input_data, {'type', 'menu', 'revision', 'area'})
+                if (not isinstance(input_data['menu'], str) or not isinstance(input_data['revision'], str)
+                        or type(input_data['area']) is not int or input_data['area'] < 0):
+                    raise _invalid_request('リッチメニューの入力が不正です')
+                try:
+                    selected = interface.richmenu_input(input_data, state_payload['player'])
+                except ValueError as error:
+                    raise _invalid_request(str(error)) from error
+                if selected is None:
+                    # 古い画面の操作は実行せず、セーブを維持して表示だけ更新する。
+                    _log_event('menu-refreshed', request_id=request_id,
+                               menu=input_data['menu'], area=input_data['area'])
+                    _json_response({
+                        'schema_version': 1, 'request_id': request_id,
+                        'state': {'id': received_state_id, 'revision': state_payload['revision']},
+                        'state_token': state_token, 'messages': [], 'echo_message': None,
+                        'chat_updated': False, 'menu_updated': True,
+                        'richmenu': interface.current_richmenu(state_payload['player']),
+                        'liff_apps': interface.public_liff_apps(),
+                    })
+                action, echo_message = selected
             else:
                 error = WebchatError('input typeが不明です')
                 error.status = 422
@@ -264,6 +299,7 @@ def turn(bot_name):
             current_scenario_revision=interface.scenario_revision,
             compatibility_epoch=interface.compatibility_epoch,
             action=context.action,
+            menu=input_data.get('menu'), area=input_data.get('area'),
             request_bytes=request.content_length,
             state_token_bytes=(
                 len(data['state_token'].encode('utf-8'))
@@ -275,11 +311,15 @@ def turn(bot_name):
             ),
         )
 
-        interface.ensure_scenario(bot)
-        if context.deadline - time.monotonic() <= 0.5:
-            raise TurnDeadlineExceeded(
-                'Webchat turn deadlineを超えました')
-        result = bot.handle_action(context)
+        if interface.liff_apps or 'peer_epochs' in context.state_payload:
+            from plugin.webchat.session import run_session
+            result = run_session(bot, _get_bot, context, liff_app)
+        else:
+            interface.ensure_scenario(bot)
+            if context.deadline - time.monotonic() <= 0.5:
+                raise TurnDeadlineExceeded(
+                    'Webchat turn deadlineを超えました')
+            result = bot.handle_action(context)
         if not isinstance(result, dict):
             raise WebchatError('Webchat responseを生成できませんでした')
         original_player = context.original_player

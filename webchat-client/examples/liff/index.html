@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="ja" data-parent-origin="">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>LIFF連携の動作確認</title>
+  <style>
+    body { font: 16px/1.6 system-ui, sans-serif; margin: 1rem; color: #202532; background: #fff; }
+    button, input { font: inherit; padding: .5rem .75rem; margin: .25rem 0; }
+    button { cursor: pointer; }
+    .actions { display: flex; flex-wrap: wrap; gap: .4rem; }
+    pre { white-space: pre-wrap; overflow-wrap: anywhere; background: #eef1f6; padding: .75rem; }
+    #notice { color: #a12a2a; }
+  </style>
+</head>
+<body>
+  <h1>LIFF連携の動作確認</h1>
+  <p>親WebchatのpostMessage接続を確認し、Botの応答配列を表示します。</p>
+  <p id="notice" role="status">接続中です。</p>
+  <div class="actions">
+    <button data-action="open" disabled>表示を更新</button>
+    <button data-action="bump" disabled>イベントを進める</button>
+    <button data-action="sync" disabled>会話Botへ同期</button>
+  </div>
+  <pre id="events" aria-label="イベント列">[]</pre>
+  <label>自分の発話 <input id="text" value="持ち物"></label>
+  <button id="send" disabled>発話して閉じる</button>
+  <button id="close" disabled>閉じる</button>
+  <script type="module" src="./app.js"></script>
+</body>
+</html>

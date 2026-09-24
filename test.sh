@@ -6,6 +6,9 @@ export XSBOT_CLOUD_PROVIDER=gcp
 
 python3 -m unittest \
     tests.test_settings_configuration \
+    tests.test_richmenu_spec \
+    tests.test_richmenu_service \
+    tests.test_richmenu_runtime \
     tests.test_plugin_loading \
     tests.test_timezone \
     tests.test_cloud_backend_factory \
@@ -14,6 +17,7 @@ python3 -m unittest \
     tests.test_local_scenario \
     tests.test_local_cache \
     tests.test_local_webchat \
+    tests.test_local_process \
     tests.test_local_watch \
     tests.test_local_watch_inputs \
     tests.test_sheets_values \
@@ -44,6 +48,7 @@ python3 -m unittest \
     tests.plugin.test_twilio \
     tests.plugin.test_webchat \
     tests.plugin.test_webchat_runtime_e2e \
+    tests.plugin.test_webchat_liff \
     tests.test_webchat_dev_server \
     tests.test_webchat_export \
     tests.test_webchat_reference_ui \

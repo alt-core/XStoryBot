@@ -221,3 +221,8 @@ export const createVideoCompletionQueue = ({
 
   return { enqueue, flush };
 };
+
+
+export function richmenuOpenState(stored, menu) {
+  return stored?.id === menu.id && typeof stored.open === 'boolean' ? stored.open : menu.selected;
+}

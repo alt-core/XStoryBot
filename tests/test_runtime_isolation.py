@@ -128,7 +128,7 @@ class BuildResultIsolationTest(unittest.TestCase):
             'build_cache': self.cache,
             'models': self.models,
             'scenario': self.scenario,
-            'settings': types.ModuleType('settings'),
+            'settings': types.SimpleNamespace(CONSTANTS={}),
             'commands': types.ModuleType('commands'),
         })
         modules.start()

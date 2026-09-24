@@ -114,9 +114,9 @@ sys.addaudithook(reject_external)
         with self.tsv_path.open('w', encoding='utf-8', newline='') as target:
             csv.writer(target, dialect='excel-tab', lineterminator='\n').writerows(self.rows)
 
-    def _load_config(self, tsv=None):
+    def _load_config(self, tsv=None, command='verify'):
         args = SimpleNamespace(
-            command='verify', settings=str(self.settings_path), bot='bot', tsv=tsv)
+            command=command, settings=str(self.settings_path), bot='bot', tsv=tsv)
         with patch.dict(os.environ, self.environment, clear=True):
             return load_config(args)
 
@@ -197,6 +197,11 @@ sys.addaudithook(reject_external)
         (self.root / 'shared.tsv').write_text('どちら\n左\n右\n', encoding='utf-8')
         self.rows[0][1] = '=_shared!A1&"にしますか"'
         self.rows[1][2:] = ['=_shared!A2', '=_shared!A3']
+        from tests.test_richmenu_spec import menu_settings
+        self.config['*']['bots']['bot'].update(menu_settings())
+        self.config['*']['constants'] = {'menu_url': 'https://pages.example.test/'}
+        self.rows[0][0] = ''
+        self.rows.insert(0, ['##line.follow', '@richmenu', 'main'])
         self._write_rows()
         self._write_settings()
         result = self._run(cases=[
@@ -228,8 +233,9 @@ sys.addaudithook(reject_external)
         self.assertEqual('right', first['case']['steps'][-1]['player']['flags']['$choice'])
         self.assertNotIn('$choice', second['case']['steps'][0]['player']['flags'])
         records = first['case']['steps'][0]['payloads']
-        self.assertEqual('/v2/bot/message/reply', records[0]['path'])
-        self.assertEqual('postback', records[0]['body']['messages'][0]['quickReply']['items'][1]['action']['type'])
+        self.assertTrue(any(record['path'].endswith('/richmenu/xsb-local-main') for record in records))
+        reply = next(record for record in records if record['path'] == '/v2/bot/message/reply')
+        self.assertEqual('postback', reply['body']['messages'][0]['quickReply']['items'][1]['action']['type'])
 
     def test_別呼出しで同じSQLiteを読み更新前のchoiceを更新後に実行する(self):
         options = ['--session', str(self.session)]
@@ -245,6 +251,29 @@ sys.addaudithook(reject_external)
         step = second['cases'][0]['case']['steps'][0]
         self.assertEqual(first['input_hash'], step['previous_input_hash'])
         self.assertEqual('right', step['player']['flags']['$choice'])
+
+    def test_メニューのURLを展開せずビルドし未定義の動的名はverifyで失敗する(self):
+        from tests.test_richmenu_spec import menu_settings
+        self.config['*']['bots']['bot'].update(menu_settings())
+        self._write_settings()
+        self.rows = [
+            ['##line.follow', '@richmenu', 'richmenu-old'], ['', '開始'],
+            ['good', '@set', '$menu', '"MAIN"'], ['', '@richmenu', '{$menu}'], ['', '切替済み'],
+            ['bad', '@set', '$menu', '"missing"'], ['', '@richmenu', '{$menu}'], ['', '進行しました'],
+        ]
+        self._write_rows()
+        result = self._run(cases=[self._case('メニュー', [
+            {'input': {'type': 'start'}, 'expect': {'texts': ['開始']}},
+            {'input': {'type': 'text', 'text': 'good'}, 'expect': {'texts': ['切替済み']}},
+            {'input': {'type': 'text', 'text': 'bad'}, 'expect': {'texts': ['進行しました']}},
+        ])], expected_code=1)
+        first, good, bad = result['cases'][0]['case']['steps']
+        self.assertTrue(first['passed'])
+        self.assertTrue(good['passed'])
+        self.assertEqual('runtime', bad['phase'])
+        self.assertIn('リッチメニュー missing', bad['error'])
+        self.assertNotIn('payloads', bad)
+        self.assertEqual('MAIN', bad['player']['flags']['$menu'])
 
     def test_実行失敗後は以前のchoiceを再利用しない(self):
         options = ['--session', str(self.session)]
@@ -330,6 +359,45 @@ sys.addaudithook(reject_external)
         self.assertEqual(
             {'案内人': 'https://example.invalid/icon.png'},
             config['bots']['bot']['interfaces'][0]['params']['sender_icon_urls'])
+
+    def test_webchatはLIFF連携先の実行設定だけを引き継ぐ(self):
+        self.config['*']['plugins']['liff'] = {'action_prefix': '##menu.'}
+        self.config['*']['bots']['bot']['interfaces'] = [{'type': 'webchat', 'params': {
+            'liff_apps': {'menu': {'bot': 'menu', 'url': 'https://pages.example.test/menu'}},
+        }}]
+        self.config['*']['bots']['menu'] = {
+            'interfaces': [
+                {'type': 'liff'},
+                {'type': 'webchat', 'params': {'scenario_uri': 'local://test/scenario/unused',
+                                               'signing_key': 'SYNTHETIC_UNUSED_KEY'}},
+                {'type': 'line', 'params': {'line_access_token': 'SYNTHETIC_LINE_TOKEN'}},
+            ],
+            'scenario': {'type': 'google_sheets', 'params': {'key_file_json': 'UNUSED_GOOGLE_CREDENTIAL'}},
+        }
+        self._write_settings()
+        config, _environment = self._load_config(command='webchat')
+        self.assertEqual({'bot', 'menu'}, set(config['bots']))
+        peer = config['bots']['menu']
+        self.assertEqual(['liff', 'webchat'], [item['type'] for item in peer['interfaces']])
+        self.assertEqual('local://test/scenario/unused', peer['interfaces'][1]['params']['scenario_uri'])
+        serialized = json.dumps(config)
+        for value in ('SYNTHETIC_UNUSED_KEY', 'SYNTHETIC_LINE_TOKEN', 'UNUSED_GOOGLE_CREDENTIAL'):
+            self.assertNotIn(value, serialized)
+        verified, _environment = self._load_config()
+        self.assertEqual({'bot'}, set(verified['bots']))
+
+    def test_メニュー定義と定数をsnapshotへ持ち越す(self):
+        from tests.test_richmenu_spec import menu_settings
+        self.config['*']['bots']['bot'].update(menu_settings())
+        self.config['*']['constants'] = {'menu_url': 'https://liff.line.me/example'}
+        self.config['*']['plugins']['webchat'] = {'constants': {'menu_url': 'https://pages.example.test/'}}
+        self._write_settings()
+        args = SimpleNamespace(settings=str(self.settings_path), bot='bot', env='', tsv=None, command='build')
+        config, _environment = load_config(args)
+        self.assertEqual('main', config['bots']['bot']['default_richmenu'])
+        self.assertIn('main', config['bots']['bot']['richmenus'])
+        self.assertEqual(self.config['*']['constants'], config['constants'])
+        self.assertEqual(self.config['*']['plugins']['webchat']['constants'], config['plugins']['webchat']['constants'])
 
     def test_インライン資格情報と非有限JSONは値を展開せず拒否する(self):
         self.config['*']['bots']['bot']['scenario'] = {

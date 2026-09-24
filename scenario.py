@@ -1643,6 +1643,8 @@ class Director:
 
         # 実行行の取得
         scene, region, n_lines, match = self.search_block(self.base_scene, action)
+        if scene is None and getattr(self.context, 'ignore_unhandled_action', False):
+            return
 
         flag_error = False
         counter = 0

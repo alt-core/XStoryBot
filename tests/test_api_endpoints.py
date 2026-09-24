@@ -366,6 +366,20 @@ class WebApiTest(unittest.TestCase):
 
         self.assertEqual(response.status_int, 404)
 
+    def test_interface指定は利用者IDを変更せず未登録なら拒否する(self):
+        response = self.client.post(
+            '/api/v1/bots/bot/action',
+            params=self.action_params(user='line:user,example', interface='plaintext'))
+        self.assert_success_response(response)
+        self.assertEqual('line:user,example', self.bot.contexts[-1].user.serialize())
+        for interface, status in [('', 400), ('missing', 404)]:
+            with self.subTest(interface=interface):
+                rejected = self.client.post(
+                    '/api/v1/bots/bot/action',
+                    params=self.action_params(interface=interface), expect_errors=True)
+                self.assertEqual(status, rejected.status_int)
+        self.assertEqual(1, len(self.bot.contexts))
+
     def test_unhandled_action_exception_remains_server_error(self):
         self.bot.handle_action = Mock(side_effect=RuntimeError('action failure'))
 

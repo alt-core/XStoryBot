@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { readFileSync } from 'node:fs';
+import { findLiffApp } from '../webchat-client/liff-host.js';
 
 import {
   classifyUriTarget,
@@ -23,6 +25,39 @@ test('URIは通常HTTPSを埋込み外部指定を新規tabへ分類する', () 
   assert.equal(classifyUriTarget(
     'http://example.test/path?openExternalBrowser=1'), 'external');
   assert.equal(classifyUriTarget('javascript:alert(1)'), 'blocked');
+});
+
+test('登録LIFFでも外部指定を優先し、通常リンクとlocal HTTPの埋込みを維持する', () => {
+  const source = readFileSync(new URL('../static/webchat/app.js', import.meta.url), 'utf8');
+  const start = source.indexOf('const linkAttributes =');
+  const end = source.indexOf('const richmenuStorageKey =');
+  assert.ok(start >= 0 && end > start);
+  const apps = [
+    { id: 'room', url: 'https://pages.example.test/app/', liff_id: '123-room', match: 'prefix' },
+    { id: 'local', url: 'http://127.0.0.1:8766/app/' },
+  ];
+  const document = { createElement: (tag) => ({ tag, dataset: {}, setAttribute() {}, addEventListener() {} }) };
+  const uriControl = new Function('document', 'client', 'findLiffApp', 'classifyUriTarget', 'location',
+    `${source.slice(start, end)}\nreturn uriControl;`)(document, { getSnapshot: () => ({ liffApps: apps }) },
+    findLiffApp, classifyUriTarget, { origin: 'http://127.0.0.1:8765' });
+  for (const [href, mode] of [
+    ['https://pages.example.test/app/words/?openExternalBrowser=1#item', 'external'],
+    ['https://liff.line.me/123-room/words/?openExternalBrowser=1#item', 'external'],
+    ['http://127.0.0.1:8766/app/?openExternalBrowser=1', 'external'],
+    ['https://pages.example.test/app/words/', 'embedded'],
+    ['https://liff.line.me/123-room/words/', 'embedded'],
+    ['http://127.0.0.1:8766/app/', 'embedded'],
+    ['http://127.0.0.1:8766/unregistered/', 'blocked'],
+  ]) {
+    const control = uriControl({ type: 'uri', href, label: '開く' }, 'card-action');
+    assert.equal(control.dataset.linkMode, mode, href);
+    assert.equal(control.tag, mode === 'external' ? 'a' : 'button', href);
+    if (mode === 'external') {
+      assert.equal(control.href, href);
+      assert.equal(control.target, '_blank');
+      assert.equal(control.rel, 'noopener noreferrer');
+    }
+  }
 });
 
 test('controlなし動画は開始しtapごとに一時停止と再生を切り替える', () => {
@@ -191,4 +226,11 @@ test('client request開始との競合だけはpendingへ戻して再試行す�
   assert.equal(attempts, 1);
   assert.equal(await queue.flush(), true);
   assert.equal(attempts, 2);
+});
+
+test('リッチメニューの開閉は同じ名前の利用者操作を維持する', async () => {
+  const {richmenuOpenState} = await import('../static/webchat/ui_logic.mjs');
+  assert.equal(richmenuOpenState(null, {id: 'main', selected: true}), true);
+  assert.equal(richmenuOpenState({id: 'main', open: false}, {id: 'main', selected: true}), false);
+  assert.equal(richmenuOpenState({id: 'old', open: false}, {id: 'main', selected: true}), true);
 });

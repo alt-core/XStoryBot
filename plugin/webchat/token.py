@@ -12,6 +12,7 @@ from plugin.webchat.errors import (
 
 
 TOKEN_VERSION = 1
+BUNDLE_VERSION = 2
 STATE_TYPE = 'xstorybot-webchat-state'
 POSTBACK_TYPE = 'xstorybot-webchat-postback'
 STATE_SALT = 'xstorybot-webchat-client-state-v1'
@@ -56,7 +57,8 @@ class WebchatTokenCodec:
                          compatibility_epoch):
         if not isinstance(payload, dict):
             raise InvalidStateToken('token payloadがobjectではありません')
-        if payload.get('v') != TOKEN_VERSION:
+        versions = (TOKEN_VERSION, BUNDLE_VERSION) if expected_type == STATE_TYPE else (TOKEN_VERSION,)
+        if payload.get('v') not in versions:
             raise InvalidStateToken('token versionが不正です')
         if payload.get('typ') != expected_type:
             raise InvalidStateToken('token typeが不正です')
@@ -89,6 +91,12 @@ class WebchatTokenCodec:
             raise InvalidStateToken('state revisionが不正です')
         if not isinstance(payload.get('player'), dict):
             raise InvalidStateToken('player stateが不正です')
+        if payload['v'] == BUNDLE_VERSION:
+            if (not isinstance(payload.get('peer_players'), dict)
+                    or not isinstance(payload.get('peer_epochs'), dict)):
+                raise InvalidStateToken('連携Botの状態が不正です')
+        elif 'peer_players' in payload or 'peer_epochs' in payload:
+            raise InvalidStateToken('token versionと連携Botの状態が一致しません')
         return payload
 
     def dump_postback(self, payload):

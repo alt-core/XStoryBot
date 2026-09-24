@@ -13,12 +13,18 @@
   "files": [
     "index.js",
     "index.d.ts",
-    "examples"
+    "examples",
+    "liff-host.js",
+    "liff-host.d.ts"
   ],
   "exports": {
     ".": {
       "types": "./index.d.ts",
       "import": "./index.js"
+    },
+    "./liff-host": {
+      "types": "./liff-host.d.ts",
+      "import": "./liff-host.js"
     }
   },
   "types": "./index.d.ts"

@@ -50,10 +50,11 @@ def load_liff_webapi():
     bottle.request = request
     bottle.response = response
     bottle.Bottle = FakeBottle
-    bottle.abort = lambda status, body=None: (_ for _ in ()).throw(AbortError(status, body))
+    bottle.HTTPResponse = lambda body, status, **kwargs: AbortError(status, body)
 
     requests = types.ModuleType('requests')
     requests.get = mock.Mock()
+    requests.RequestException = OSError
     auth = types.ModuleType('auth')
     utility = types.ModuleType('utility')
     utility.make_error_json = lambda code, msg: {'code': code, 'message': msg}
@@ -132,6 +133,7 @@ class ProfileResponse:
 class FakeInterface:
     allow_origin = 'https://liff.example.invalid'
     action_prefix = '##liff.'
+    login_channel_id = '1234567890'
 
     def __init__(self):
         self.context_args = None
@@ -165,23 +167,24 @@ class LiffWebAPITest(unittest.TestCase):
          self.requests, self.main) = load_liff_webapi()
         self.bot = FakeBot()
         self.main.get_bot.return_value = self.bot
-        self.request.headers = {'Authorization': 'Bearer access-token'}
+        self.request.headers = {'Authorization': 'Bearer access-token', 'Origin': 'https://liff.example.invalid'}
         self.request.json = {'action': '選択/1'}
-        self.requests.get.return_value = ProfileResponse(
-            data={'userId': 'U1234567890'})
+        self.verified = ProfileResponse(data={'client_id': '1234567890', 'expires_in': 600})
+        self.profile = ProfileResponse(data={'userId': 'U1234567890'})
+        self.requests.get.side_effect = lambda url, **kwargs: self.verified if '/verify' in url else self.profile
 
     def test_success_keeps_timeout_json_semantics_and_logs(self):
         with self.assertLogs(level='INFO') as captured:
             result = self.module.send_message('testbot')
 
         self.assertEqual(result, ('ok', 'result-json'))
-        self.requests.get.assert_called_once_with(
+        self.requests.get.assert_any_call(
             'https://api.line.me/v2/profile',
             headers={
                 'Content-Type': 'application/json; charset=UTF-8',
                 'Authorization': 'Bearer access-token',
             },
-            timeout=120,
+            timeout=10, allow_redirects=False,
         )
         user, action, attrs = self.bot.interface.context_args
         self.assertEqual((user.service, user.user_id), ('line', 'user,U1234567890'))
@@ -196,15 +199,79 @@ class LiffWebAPITest(unittest.TestCase):
         self.assertIn('LIFF send_message: U1234567890 ##liff.選択/1', output)
         self.assertIn('LIFF result: result-json', output)
 
-    def test_profile_and_json_errors_propagate(self):
-        self.requests.get.side_effect = RuntimeError('接続失敗')
-        with self.assertRaisesRegex(RuntimeError, '接続失敗'):
-            self.module.send_message('testbot')
+    def test_認証の通信失敗と不正JSONはtokenを出さず502にする(self):
+        for failure in (OSError('secret-token-in-url'), ValueError('secret-token-in-json')):
+            with self.subTest(error=type(failure).__name__):
+                if isinstance(failure, OSError):
+                    self.requests.get.side_effect = failure
+                else:
+                    self.requests.get.side_effect = None
+                    self.requests.get.return_value = ProfileResponse(error=failure)
+                with self.assertRaises(AbortError) as raised:
+                    self.module.send_message('testbot')
+                self.assertEqual(502, raised.exception.status)
+                self.assertNotIn('secret-token', str(raised.exception.body))
+                self.assertEqual(0, self.bot.reload_calls)
 
-        self.requests.get.side_effect = None
-        self.requests.get.return_value = ProfileResponse(error=ValueError('不正JSON'))
-        with self.assertRaisesRegex(ValueError, '不正JSON'):
+    def test_発行先と有効期限を検証してからprofileを読む(self):
+        self.module.send_message('testbot')
+        self.assertEqual(2, self.requests.get.call_count)
+        self.requests.get.assert_any_call(
+            'https://api.line.me/oauth2/v2.1/verify', params={'access_token': 'access-token'},
+            timeout=10, allow_redirects=False)
+        for data in ({'client_id': 'other', 'expires_in': 600},
+                     {'client_id': '1234567890', 'expires_in': 0},
+                     {'client_id': '1234567890', 'expires_in': True}):
+            self.requests.get.reset_mock()
+            self.verified.data = data
+            with self.assertRaises(AbortError) as raised:
+                self.module.send_message('testbot')
+            self.assertEqual(401, raised.exception.status)
+            self.assertEqual(1, self.requests.get.call_count)
+        self.bot.interface.login_channel_id = None
+        self.requests.get.reset_mock()
+        with self.assertRaises(AbortError) as raised:
             self.module.send_message('testbot')
+        self.assertEqual(503, raised.exception.status)
+        self.requests.get.assert_not_called()
+
+    def test_CORSは複数originと拒否とエラー応答に適用する(self):
+        self.bot.interface.allow_origin = ['https://liff.example.invalid', 'https://preview.example.invalid']
+        self.request.headers['Origin'] = 'https://preview.example.invalid'
+        self.module.cors('testbot')
+        self.assertEqual('https://preview.example.invalid', self.response.headers['Access-Control-Allow-Origin'])
+        self.assertEqual('Origin', self.response.headers['Vary'])
+        self.verified.status_code = 401
+        with self.assertRaises(AbortError):
+            self.module.send_message('testbot')
+        self.assertEqual('https://preview.example.invalid', self.response.headers['Access-Control-Allow-Origin'])
+        self.requests.get.reset_mock()
+        self.request.headers['Origin'] = 'https://unrelated.example.invalid'
+        self.response.headers.clear()
+        with self.assertRaises(AbortError) as raised:
+            self.module.send_message('testbot')
+        self.assertEqual(403, raised.exception.status)
+        self.assertNotIn('Access-Control-Allow-Origin', self.response.headers)
+        self.requests.get.assert_not_called()
+
+    def test_実WSGIでも認証エラーのCORSヘッダーを保持する(self):
+        import bottle
+        from tests.test_api_endpoints import TestApp
+        self.module.request = bottle.request
+        self.module.response = bottle.response
+        self.module.HTTPResponse = bottle.HTTPResponse
+        self.module.utility.make_error_json = lambda code, msg: json.dumps({'code': code, 'message': msg})
+        app = bottle.Bottle()
+        app.post('/liff/<bot_name>/message')(self.module.send_message)
+        self.bot.interface.allow_origin = ['https://liff.example.invalid', 'https://preview.example.invalid']
+        self.verified.data['client_id'] = 'other-channel'
+        result = TestApp(app).request('POST', '/liff/testbot/message',
+            headers={'Authorization': 'Bearer artificial', 'Origin': 'https://preview.example.invalid'},
+            json_body={'action': 'open'}, expect_errors=True)
+        self.assertEqual(401, result.status_int)
+        self.assertEqual('https://preview.example.invalid', result.headers['Access-Control-Allow-Origin'])
+        self.assertEqual('Origin', result.headers['Vary'])
+        self.assertEqual(401, result.json['code'])
 
     def test_bearer_without_token_is_bad_request_and_none_result_is_preserved(self):
         self.request.headers = {'Authorization': 'Bearer'}
@@ -224,7 +291,8 @@ class LiffWebAPITest(unittest.TestCase):
         result = self.module.send_message('testbot')
         self.assertEqual(result, 'Bad Request')
         self.assertEqual(self.response.status, 400)
-        self.assertEqual(self.bot.reload_calls, 1)
+        self.assertEqual(self.bot.reload_calls, 0)
+        self.requests.get.assert_not_called()
 
 
 class LiffInterfaceTest(unittest.TestCase):

@@ -16,6 +16,7 @@ from unittest.mock import Mock, patch
 from bottle import Bottle
 
 from cloud_backend import factory
+from cloud_backend.contracts import InvalidObjectReferenceError
 from cloud_backend.local.object_store import LocalObjectStore
 from plugin.webchat.errors import BotNotWebCompatible, InvalidWebchatConfiguration
 from plugin.webchat.interface import WebchatInterface
@@ -64,6 +65,40 @@ class LocalWebchatTest(unittest.TestCase):
         params = prepared['bots']['bot']['interfaces'][0]['params']
         with patch.object(factory, '_provider', 'local'):
             return WebchatInterface('bot', params, local_settings=prepared['local'])
+
+    def test_登録LIFF用Botの固定localシナリオだけを残す(self):
+        self.config['bots']['bot']['interfaces'][1]['params']['liff_apps'] = {
+            'menu': {'bot': 'menu', 'url': ORIGIN + '/menu/index.html'},
+        }
+        self.config['bots']['menu'] = {'interfaces': [
+            {'type': 'liff', 'params': {'action_prefix': '##menu.'}},
+            {'type': 'webchat', 'params': {'scenario_uri': self.uri}},
+            {'type': 'line'},
+        ]}
+        prepared = self._prepare()
+        self.assertEqual({'bot', 'menu'}, set(prepared['bots']))
+        peer = prepared['bots']['menu']['interfaces']
+        self.assertEqual(['webchat', 'liff'], [item['type'] for item in peer])
+        self.assertEqual(self.uri, peer[0]['params']['scenario_uri'])
+        self.assertEqual(prepared['bots']['bot']['interfaces'][0]['params']['signing_key'],
+                         peer[0]['params']['signing_key'])
+        self.config['bots']['menu']['interfaces'][1]['params']['scenario_uri'] = 's3://private/scenario/invalid'
+        with self.assertRaises(InvalidObjectReferenceError):
+            self._prepare()
+
+    def test_メニュー定義と定数を残してローカル画像を使う(self):
+        from tests.test_richmenu_spec import menu_settings
+        definition = menu_settings()
+        self.config['bots']['bot'].update(definition)
+        self.config['plugins']['webchat']['constants'] = {'MENU_URL': 'https://pages.example.test/', 'other': 1}
+        self.config['bots']['bot']['interfaces'][1]['params']['constants'] = {'menu_url': ORIGIN + '/menu'}
+        prepared = self._prepare({'https://media.example.test/menu.png': self.media_url})
+        params = prepared['bots']['bot']['interfaces'][0]['params']
+        self.assertEqual({'menu_url': ORIGIN + '/menu', 'other': 1}, params['constants'])
+        with patch.object(factory, '_provider', 'local'):
+            interface = WebchatInterface('bot', params, local_settings=prepared['local'],
+                                         bot_settings=prepared['bots']['bot'])
+        self.assertEqual(self.media_url, interface.current_richmenu({})['image_url'])
 
     def test_設定を変更せず選択Botと完成URIだけを渡し鍵を再利用する(self):
         original = copy.deepcopy(self.config)
@@ -196,7 +231,7 @@ print(json.dumps({'page': page.status_int, 'csp': page.headers['Content-Security
             self.assertEqual("'self'", actual['csp'].split(directive, 1)[1].split(';', 1)[0].strip())
         self.assertEqual({
             '/static/webchat/style.css', '/static/webchat/app.js',
-            '/static/webchat/ui_logic.mjs', '/webchat-client/index.js',
+            '/static/webchat/ui_logic.mjs', '/webchat-client/index.js', '/webchat-client/liff-host.js',
         }, {path for path, _status, _content_type in actual['assets']})
         for path, status, content_type in actual['assets']:
             with self.subTest(path=path):

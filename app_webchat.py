@@ -10,6 +10,8 @@ import log_config
 from plugin.line import quick_reply, quick_reply_v2
 from plugin.webchat.errors import InvalidWebchatConfiguration
 from plugin.webchat.interface import WebchatInterfaceFactory
+from plugin.webchat.session import session_bots
+from plugin.liff.interface import LiffPlugin_Interface
 from plugin.webchat import webapi
 from runtime import BotRuntime
 
@@ -37,6 +39,7 @@ if 'line.more' in settings.PLUGINS:
 
 _factory = WebchatInterfaceFactory(
     _plugin_params('webchat'),
+    constants=settings.CONSTANTS,
     local_settings=(settings.BACKEND_SETTINGS
                     if settings.CLOUD_SETTINGS.get('provider') == 'local' else None))
 _bots = {}
@@ -50,15 +53,25 @@ try:
         if _interface_settings is None:
             continue
         _interface = _factory.create_interface(
-            _name, _interface_settings.get('params', {}))
+            _name, _interface_settings.get('params', {}), bot_settings=_bot_settings)
         if not _interface.enabled:
             continue
+        _interfaces = {'webchat': _interface}
+        _liff_settings = next((item for item in _bot_settings.get('interfaces', [])
+                               if item.get('type') == 'liff'), None)
+        if _liff_settings is not None:
+            _liff_params = _plugin_params('liff')
+            _liff_params.update(_liff_settings.get('params') or {})
+            _liff_params.setdefault('allow_origin', '')
+            _interfaces['liff'] = LiffPlugin_Interface(_name, _liff_params)
         _bots[_name] = BotRuntime(
             _name,
-            {'webchat': _interface},
+            _interfaces,
             scenario_loader=None,
             state_namespace=_bot_settings.get('state_namespace', _name),
         )
+    for _bot in _bots.values():
+        session_bots(_bot, _bots.get)
 except InvalidWebchatConfiguration as error:
     _bots.clear()
     _initialization_error = error
@@ -94,6 +107,8 @@ def chat(bot_name):
     media_sources = ' '.join(interface.media_origins) or 'https:'
     if not interface.allow_external_media:
         media_sources = ''
+    frame_sources = ' '.join({interface._origin(app['url'])
+                              for app in interface.liff_apps.values()})
     return static_file(
         'index.html',
         root='static/webchat',
@@ -105,7 +120,7 @@ def chat(bot_name):
                 "script-src 'self'; style-src 'self' 'unsafe-inline'; "
                 f"connect-src 'self'; img-src 'self' {media_sources}; "
                 f"media-src 'self' {media_sources}; "
-                "frame-src 'self' https:"
+                f"frame-src 'self' https: {frame_sources}"
             ),
             'Referrer-Policy': 'no-referrer',
             'X-Content-Type-Options': 'nosniff',

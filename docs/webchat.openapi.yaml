@@ -16,7 +16,7 @@ paths:
         '403':
           $ref: '#/components/responses/Problem'
     post:
-      summary: 会話を1 turn進める
+      summary: 会話またはLIFF用Botを1 turn進める
       parameters:
         - $ref: '#/components/parameters/Bot'
         - $ref: '#/components/parameters/Origin'
@@ -102,6 +102,8 @@ components:
             - $ref: '#/components/schemas/StartInput'
             - $ref: '#/components/schemas/TextInput'
             - $ref: '#/components/schemas/PostbackInput'
+            - $ref: '#/components/schemas/LiffInput'
+            - $ref: '#/components/schemas/MenuInput'
       additionalProperties: false
       allOf:
         - if:
@@ -141,6 +143,71 @@ components:
         postback_token:
           type: string
       additionalProperties: false
+    LiffInput:
+      type: object
+      required: [type, app, app_url, action]
+      properties:
+        type:
+          const: liff
+        app:
+          type: string
+          description: 登録されたLIFFページの識別子。
+        app_url:
+          type: string
+          format: uri
+          description: liff_appsで受け取ったURL。設定変更後の古いページを拒否するために照合する。
+        action:
+          type: string
+          description: LIFF用Botのaction_prefixを除いた内部action。
+      additionalProperties: false
+    MenuInput:
+      type: object
+      required: [type, menu, revision, area]
+      properties:
+        type: {const: menu}
+        menu: {type: string}
+        revision: {type: string}
+        area: {type: integer, minimum: 0}
+      additionalProperties: false
+    Richmenu:
+      type: object
+      required: [id, revision, chat_bar_text, selected, image_url, width, height, areas]
+      properties:
+        id: {type: string}
+        revision: {type: string}
+        chat_bar_text: {type: string}
+        selected: {type: boolean}
+        image_url: {type: string, format: uri}
+        width: {type: integer, minimum: 1}
+        height: {type: integer, minimum: 1}
+        areas:
+          type: array
+          items:
+            type: object
+            required: [x, y, width, height, action]
+            properties:
+              x: {type: integer, minimum: 0}
+              y: {type: integer, minimum: 0}
+              width: {type: integer, minimum: 1}
+              height: {type: integer, minimum: 1}
+              action:
+                oneOf:
+                  - type: object
+                    required: [type, label, echo_text]
+                    properties:
+                      type: {const: menu}
+                      label: {type: string}
+                      echo_text: {type: [string, 'null']}
+                    additionalProperties: false
+                  - type: object
+                    required: [type, label, href]
+                    properties:
+                      type: {const: uri}
+                      label: {type: string}
+                      href: {type: string, format: uri}
+                    additionalProperties: false
+            additionalProperties: false
+      additionalProperties: false
     TurnResponse:
       type: object
       required: [schema_version, request_id, state, state_token, echo_message, messages]
@@ -167,6 +234,42 @@ components:
           type: array
           items:
             $ref: './webchat-message-spec.schema.json'
+        richmenu:
+          anyOf:
+            - $ref: '#/components/schemas/Richmenu'
+            - type: 'null'
+        menu_updated:
+          type: boolean
+          description: trueなら古いメニュー操作は実行せず、state_tokenを維持して表示だけ更新した。自動再送しない。
+        chat_updated:
+          type: boolean
+          description: falseなら会話履歴とactiveResponseを維持し、セーブだけ更新する。省略時はtrue。
+        active_message_ids:
+          type: array
+          description: messagesのうち最新の会話応答に含めるID。空配列なら選択肢を解除し、省略時はmessages全件を使う。
+          items:
+            type: string
+        liff_result:
+          type: array
+          description: LIFF操作のイベント列。要素は変換しない。
+          items: {}
+        liff_apps:
+          type: array
+          items:
+            type: object
+            required: [id, url]
+            properties:
+              id:
+                type: string
+              url:
+                type: string
+                format: uri
+              match:
+                type: string
+                enum: [exact, prefix]
+              liff_id:
+                type: string
+            additionalProperties: false
       additionalProperties: false
     Problem:
       type: object

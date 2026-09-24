@@ -112,11 +112,15 @@ class ParseCommandArgumentsTest(unittest.TestCase):
 
     def test_delay_is_not_variadic(self):
         self.assertEqual(
-            ['60', 'otherbot', '#later'],
-            self._options(['@delay', '60', 'otherbot', '#later', 'memo']))
+            ['60', 'otherbot', '#later', 'liff'],
+            self._options(['@delay', '60', 'otherbot', '#later', 'liff', 'memo']))
 
-    def test_forward_still_reads_two_cells(self):
-        self.assertEqual(['bot', '#x'], self._options(['@forward', 'bot', '#x', 'extra']))
+    def test_forwardとdelayは省略可能なinterfaceを各versionで読む(self):
+        for version in (1, 2, 3):
+            with self.subTest(version=version):
+                self.assertEqual(['bot', '#x'], self._options(['@forward', 'bot', '#x'], version))
+                self.assertEqual(['bot', '#x', 'liff'], self._options(['@forward', 'bot', '#x', 'liff'], version))
+                self.assertEqual(['60', 'bot', '#x', 'liff'], self._options(['@delay', '60', 'bot', '#x', 'liff'], version))
 
     def test_seq_keeps_sixteen_label_limit(self):
         # 既存 Scenario の意味を変えないため、17個目以降のセルは従来どおり読まない

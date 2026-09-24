@@ -12,6 +12,7 @@ import hub
 import commands
 import utility
 from expression import Expression
+from async_task_processor import get_task_interface
 
 
 IMAGE_CMDS = ('@image', '@画像')
@@ -68,11 +69,13 @@ POSTJSON_RESULT_VARIABLE = '$_result'
 POSTJSON_RESPONSE_VARIABLE = '$_response'
 
 
-def send_request(bot_name, user, action, delay_secs=None):
+def send_request(bot_name, user, action, delay_secs=None, interface_name=None):
     params = {
         'user': user.serialize(),
         'action': action,
     }
+    if interface_name is not None:
+        params['interface'] = interface_name
 
     task = task_client.create_task(
         queue_name='action-queue',
@@ -301,15 +304,21 @@ class CommonCommands_Runtime(object):
                     value = value.eval(context.env, context.env.matches, set_var, set_list, set_dict)
                 context.status[options[0]] = value
         elif msg in FORWARD_CMDS:
-            import main
             bot_name = options[0]
             action = options[1]
+            interface_name = options[2] if len(options) > 2 else None
+            forward = getattr(context, 'forward_action', None)
+            if forward is not None:
+                forward(bot_name, action, interface_name)
+                return True
+            import main
             to_bot = main.get_bot(bot_name)
-            if to_bot is None or to_bot.get_interface(context.service_name) is None:
-                logging.error("invalid bot name: @forward :"+ bot_name)
+            service = context.user.service_name if interface_name is None else interface_name
+            if get_task_interface(to_bot, service) is None:
+                logging.error('invalid bot/interface: @forward: %s/%s', bot_name, service)
                 context.add_reaction(None, "<<@forwardを解釈できませんでした>>")
                 return True
-            send_request(bot_name, context.user, action)
+            send_request(bot_name, context.user, action, interface_name=interface_name)
         elif msg in DELAY_CMDS:
             import main
             delay_secs = int(options[0])
@@ -319,12 +328,14 @@ class CommonCommands_Runtime(object):
             else:
                 bot_name = context.bot_name
                 action = options[1]
+            interface_name = options[3] if len(options) > 3 else None
             to_bot = main.get_bot(bot_name)
-            if to_bot is None or to_bot.get_interface(context.service_name) is None:
-                logging.error("invalid bot name: @delay: " + bot_name)
+            service = context.user.service_name if interface_name is None else interface_name
+            if get_task_interface(to_bot, service) is None:
+                logging.error('invalid bot/interface: @delay: %s/%s', bot_name, service)
                 context.add_reaction(None, "<<@delayを解釈できませんでした>>")
                 return True
-            send_request(bot_name, context.user, action, delay_secs)
+            send_request(bot_name, context.user, action, delay_secs, interface_name)
         elif msg in RESET_NODES_CMDS:
             if len(options) > 0:
                 target_name = options[0]
@@ -563,13 +574,13 @@ def setup(params):
             service='*'),
         commands.CommandEntry(
             names=FORWARD_CMDS,
-            options='hankaku text|label',
+            options='hankaku text|label [hankaku]',
             builder=builder,
             runtime=runtime,
             service='*'),
         commands.CommandEntry(
             names=DELAY_CMDS,
-            options='number text|label [text|label]',
+            options='number text|label [text|label] [hankaku]',
             builder=builder,
             runtime=runtime,
             service='*'),

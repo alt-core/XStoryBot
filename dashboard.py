@@ -542,3 +542,68 @@ def api_retry_failed_group_task(task_id):
 
 if __name__ == "__main__":
     app.run(host='localhost', port=8080, debug=True)
+
+
+# 管理処理は一件ずつ行い、APIの実行時間内に進捗を記録する。
+def _richmenu_operation(bot_name, operation, name=None):
+    response.content_type = 'application/json; charset=UTF-8'
+    def failure(status, message):
+        response.status = status
+        return utility.make_error_json(status, message)
+
+    bot = main.get_bot(bot_name)
+    if bot is None:
+        return failure(404, 'Botが見つかりません')
+    if settings.CLOUD_SETTINGS.get('provider') == 'local':
+        return failure(400, 'local providerからLINEへ反映できません')
+    from richmenu_service import RichmenuService
+    from plugin.line.api import LineApiError
+    from cloud_backend.contracts import ObjectStoreError
+    service = None
+    try:
+        service = RichmenuService(bot, settings.BOTS[bot_name], settings.CONSTANTS)
+        if operation == 'list':
+            result = {'menus': list(service.menus.menus), 'default': service.menus.default}
+        elif operation == 'default-plan':
+            result = service.default_plan()
+        elif operation == 'default-apply':
+            result = service.apply_default()
+        else:
+            result = getattr(service, operation)(name)
+        return utility.make_ok_json('完了', result)
+    except (ValueError, LineApiError, requests.RequestException, ObjectStoreError, TimeoutError) as error:
+        if service is not None:
+            service.log('failed', error_type=type(error).__name__,
+                        status_code=getattr(error, 'status_code', None),
+                        request_id=getattr(error, 'request_id', None))
+        return failure(400 if isinstance(error, ValueError) else 502, str(error))
+
+
+@app.get('/dashboard/api/bots/<bot_name>/richmenus')
+@auth_middleware.auth_required()
+def api_richmenus(bot_name):
+    return _richmenu_operation(bot_name, 'list')
+
+
+@app.get('/dashboard/api/bots/<bot_name>/richmenus/default')
+@auth_middleware.auth_required()
+def api_richmenu_default_plan(bot_name):
+    return _richmenu_operation(bot_name, 'default-plan')
+
+
+@app.post('/dashboard/api/bots/<bot_name>/richmenus/default')
+@auth_middleware.auth_required(state_changing=True)
+def api_richmenu_default_apply(bot_name):
+    return _richmenu_operation(bot_name, 'default-apply')
+
+
+@app.get('/dashboard/api/bots/<bot_name>/richmenus/menus/<name>')
+@auth_middleware.auth_required()
+def api_richmenu_plan(bot_name, name):
+    return _richmenu_operation(bot_name, 'plan', name)
+
+
+@app.post('/dashboard/api/bots/<bot_name>/richmenus/menus/<name>')
+@auth_middleware.auth_required(state_changing=True)
+def api_richmenu_apply(bot_name, name):
+    return _richmenu_operation(bot_name, 'apply', name)

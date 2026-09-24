@@ -8,25 +8,13 @@ import tempfile
 import time
 
 from tools.local_support import LocalInputError
+from tools.local_process import stop_process as _stop_server
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 POLL_SECONDS = 0.2
 DEBOUNCE_SECONDS = 0.5
 READY_TIMEOUT = 15
-STOP_TIMEOUT = 5
-
-
-def _stop_server(process):
-    if process is None:
-        return
-    if process.poll() is None:
-        process.terminate()
-    try:
-        process.wait(timeout=STOP_TIMEOUT)
-    except subprocess.TimeoutExpired:
-        process.kill()
-        process.wait(timeout=STOP_TIMEOUT)
 
 
 def _start_server(built):

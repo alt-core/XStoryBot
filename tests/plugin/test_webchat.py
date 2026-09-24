@@ -265,6 +265,30 @@ class WebchatCommandPolicyTest(unittest.TestCase):
         with self.assertRaises(TurnDeadlineExceeded):
             context.check_command_policy('@log')
 
+    def test_追加許可でも非対応commandを拒否しforwardには同期実行を要求する(self):
+        from common_commands import (
+            DELAY_CMDS, FORWARD_CMDS, GROUP_ADD_CMDS, GROUP_DEL_CMDS, GROUP_CLEAR_CMDS,
+        )
+        from plugin.webchat.context import WebchatActionContext
+        unsupported = DELAY_CMDS + GROUP_ADD_CMDS + GROUP_DEL_CMDS + GROUP_CLEAR_CMDS
+        interface = types.SimpleNamespace(
+            allowed_commands=set(unsupported + FORWARD_CMDS + ('@custom',)),
+            turn_deadline_seconds=29.0)
+        context = WebchatActionContext('bot', interface, 'conversation', '入力', {})
+        context.check_command_policy('@custom')
+        for command in unsupported + FORWARD_CMDS:
+            with self.subTest(command=command), self.assertRaises(BotNotWebCompatible):
+                context.check_command_policy(command)
+        context.forward_action = Mock()
+        context.allowed_commands.difference_update(FORWARD_CMDS)
+        for command in FORWARD_CMDS:
+            context.check_command_policy(command)
+        context.service_name = 'liff'
+        for command in unsupported:
+            with self.subTest(command=command), self.assertRaises(BotNotWebCompatible):
+                context.check_command_policy(command)
+        context.forward_action.assert_not_called()
+
 
 class WebchatMoreRuntimeTest(unittest.TestCase):
     def test_MoreをDynamoDBなしでstate内だけに保持する(self):
@@ -292,6 +316,7 @@ class WebchatMoreRuntimeTest(unittest.TestCase):
 
 class _FakeWebchatInterface:
     def __init__(self):
+        self.liff_apps = {}
         self.actions = []
         self.deadlines = []
         self.turn_deadline_seconds = 29.0
@@ -339,6 +364,7 @@ class _FakeWebchatInterface:
             user=types.SimpleNamespace(user_id='conversation'),
             original_player={'scene': '*test', 'flags': {}},
             saved_player={'scene': '*test'},
+            state_payload={},
         )
 
 

@@ -43,7 +43,7 @@ class WebchatDevServerTest(unittest.TestCase):
                         r"from ['\"]([^'\"]+)['\"]", body.decode('utf-8')))
         self.assertEqual({
             '/static/webchat/style.css', '/static/webchat/app.js',
-            '/static/webchat/ui_logic.mjs', '/webchat-client/index.js',
+            '/static/webchat/ui_logic.mjs', '/webchat-client/index.js', '/webchat-client/liff-host.js',
         }, set(paths))
 
     def test_保存テスト画面は外部moduleを読み込む(self):

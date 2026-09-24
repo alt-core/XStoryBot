@@ -131,6 +131,21 @@ class AwsTaskHandlerTest(unittest.TestCase):
             ['first', 'last'],
         )
 
+    def test_interface指定は利用者IDを変更せず不正指定を既定へ戻さない(self):
+        valid = make_envelope(user='line:user,example', interface='plaintext')
+        missing = make_envelope(interface='missing')
+        malformed = make_envelope(interface=[])
+        response = self.invoke([
+            make_record('valid', valid), make_record('missing', missing),
+            make_record('malformed', malformed),
+        ])
+        self.assertEqual({'batchItemFailures': [
+            {'itemIdentifier': 'missing'}, {'itemIdentifier': 'malformed'},
+        ]}, response)
+        self.assertEqual(1, len(self.bot.handled))
+        self.assertEqual('line:user,example', str(self.bot.handled[0][0]))
+        self.execution_store.complete_task_execution.assert_called_once()
+
     def test_actionとgroupは同じ共通processorへ渡す(self):
         action = make_envelope(action='hello@@action-token')
         group = make_envelope(

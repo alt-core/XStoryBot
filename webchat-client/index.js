@@ -52,6 +52,7 @@ const immutableSnapshot = (value) => deepFreeze({
   turns: [...(value.turns || [])],
   messages: [...(value.messages || [])],
   activeResponse: [...(value.activeResponse || [])],
+  liffApps: [...(value.liffApps || [])],
 });
 
 const emptySnapshot = (persistence = 'memory') => immutableSnapshot({
@@ -62,6 +63,8 @@ const emptySnapshot = (persistence = 'memory') => immutableSnapshot({
   turns: [],
   messages: [],
   activeResponse: [],
+  liffApps: [],
+  richmenu: null,
   error: null,
   notice: persistence === 'memory'
     ? 'このページを閉じると進行が失われます。'
@@ -90,11 +93,13 @@ class MemoryStorage {
     const currentStateId = this.head?.stateId || null;
     if (currentStateId !== baseStateId) throw new StaleStateError();
     const sequence = response.state.revision;
-    const turn = makeTurn(this.key, sequence, response);
-    this.turns = this.turns.filter((item) => item.id !== turn.id);
-    this.turns.push(turn);
-    this.turns.sort((a, b) => a.sequence - b.sequence);
-    this.head = makeHead(this.key, response);
+    if (response.chat_updated !== false) {
+      const turn = makeTurn(this.key, sequence, response);
+      this.turns = this.turns.filter((item) => item.id !== turn.id);
+      this.turns.push(turn);
+      this.turns.sort((a, b) => a.sequence - b.sequence);
+    }
+    this.head = makeHead(this.key, response, this.head);
     return false;
   }
 
@@ -117,13 +122,19 @@ const makeTurn = (key, sequence, response) => ({
   messages: response.messages || [],
 });
 
-const makeHead = (key, response) => ({
+const makeHead = (key, response, previous) => ({
   key,
   schemaVersion: 1,
   stateId: response.state.id,
   stateRevision: response.state.revision,
   stateToken: response.state_token,
-  activeResponse: response.messages || [],
+  activeResponse: response.chat_updated === false
+    ? previous?.activeResponse || []
+    : response.active_message_ids == null
+      ? response.messages || []
+      : response.messages.filter((message) => response.active_message_ids.includes(message.id)),
+  liffApps: response.liff_apps || [],
+  richmenu: response.richmenu ?? null,
   updatedAt: Date.now(),
 });
 
@@ -176,6 +187,8 @@ class IndexedDbStorage {
       && Number.isInteger(stored.head.stateRevision)
       && typeof stored.head.stateToken === 'string'
       && Array.isArray(stored.head.activeResponse)
+      && (stored.head.liffApps == null || validLiffApps(stored.head.liffApps))
+      && validRichmenu(stored.head.richmenu)
     );
     const validTurns = stored.turns.every((turn) => (
       typeof turn.id === 'string'
@@ -215,11 +228,13 @@ class IndexedDbStorage {
           return;
         }
         const sequence = response.state.revision;
-        const turnRequest = turns.put(makeTurn(this.key, sequence, response));
-        const headPutRequest = conversations.put(makeHead(this.key, response));
-        turnRequest.onerror = (event) => {
-          failure = event.target?.error || failure;
-        };
+        if (response.chat_updated !== false) {
+          const turnRequest = turns.put(makeTurn(this.key, sequence, response));
+          turnRequest.onerror = (event) => {
+            failure = event.target?.error || failure;
+          };
+        }
+        const headPutRequest = conversations.put(makeHead(this.key, response, current));
         headPutRequest.onerror = (event) => {
           failure = event.target?.error || failure;
         };
@@ -297,6 +312,8 @@ const snapshotFromStorage = (stored, persistence, overrides = {}) => {
     turns,
     messages,
     activeResponse: stored.head?.activeResponse || [],
+    liffApps: stored.head?.liffApps || [],
+    richmenu: stored.head?.richmenu ?? null,
     error: null,
     notice: persistence === 'memory'
       ? 'このページを閉じると進行が失われます。'
@@ -304,6 +321,20 @@ const snapshotFromStorage = (stored, persistence, overrides = {}) => {
     ...overrides,
   };
 };
+
+const validRichmenu = (menu) => menu == null || (
+  typeof menu.id === 'string' && typeof menu.revision === 'string'
+  && typeof menu.image_url === 'string' && typeof menu.chat_bar_text === 'string'
+  && typeof menu.selected === 'boolean'
+  && Number.isInteger(menu.width) && menu.width > 0
+  && Number.isInteger(menu.height) && menu.height > 0 && Array.isArray(menu.areas)
+  && menu.areas.every((area) => ['x', 'y', 'width', 'height'].every((key) => Number.isInteger(area?.[key]))
+    && ['menu', 'uri'].includes(area.action?.type) && typeof area.action.label === 'string')
+);
+
+const validLiffApps = (apps) => Array.isArray(apps) && apps.every((app) => (
+  typeof app?.id === 'string' && typeof app?.url === 'string'
+));
 
 export function createWebchatClient(options) {
   if (!options?.apiBaseUrl || !options?.bot) {
@@ -331,12 +362,15 @@ export function createWebchatClient(options) {
     for (const listener of listeners) listener(snapshot);
   };
 
-  const refresh = async (notice = null) => {
+  const refresh = async (notice = null, preserveSending = false) => {
     const stored = await storage.load();
     if (!notice && snapshot.stateId && !stored.head) {
       notice = '保存された進行が見つからないため、「最初から」で再開してください。';
     }
-    emit(snapshotFromStorage(stored, storage.kind, { notice }));
+    emit(snapshotFromStorage(stored, storage.kind, {
+      notice,
+      ...(preserveSending && inFlight ? { status: 'sending' } : {}),
+    }));
     return snapshot;
   };
 
@@ -392,7 +426,7 @@ export function createWebchatClient(options) {
         channel = new globalThis.BroadcastChannel(channelName);
         channel.onmessage = (event) => {
           if (event.data?.type === 'updated') {
-            refresh('別のタブの最新状態を表示しました。').catch(() => {});
+            refresh('別のタブの最新状態を表示しました。', true).catch(() => {});
           }
         };
       }
@@ -505,6 +539,13 @@ export function createWebchatClient(options) {
       || typeof value.state_token !== 'string'
       || !Array.isArray(value.messages)
       || !(value.echo_message == null || typeof value.echo_message === 'string')
+      || !(value.chat_updated == null || typeof value.chat_updated === 'boolean')
+      || !(value.active_message_ids == null || (Array.isArray(value.active_message_ids)
+        && value.active_message_ids.every((id) => typeof id === 'string')))
+      || !(value.liff_apps == null || validLiffApps(value.liff_apps))
+      || !validRichmenu(value.richmenu)
+      || !(value.menu_updated == null || typeof value.menu_updated === 'boolean')
+      || (body.input.type === 'liff' && !Array.isArray(value.liff_result))
     ) {
       throw new WebchatClientError('Webchat responseの形式が不正です', {
         code: 'invalid-response',
@@ -533,7 +574,10 @@ export function createWebchatClient(options) {
         await initialize();
         const before = await storage.load();
         const baseStateId = before.head?.stateId || null;
-        if (requestedStateId !== baseStateId) {
+        if (input.type === 'liff' && !before.head?.stateToken) {
+          throw new WebchatClientError('先にWebchatを開始してください', { code: 'invalid-state' });
+        }
+        if (input.type !== 'liff' && requestedStateId !== baseStateId) {
           await refresh(silent
             ? null
             : '別のタブで会話が進んだため、最新履歴を表示しました。');
@@ -567,11 +611,12 @@ export function createWebchatClient(options) {
             memoryFallback = true;
           }
           if (!memoryFallback) notify();
-          return refresh(memoryFallback
+          const nextSnapshot = await refresh(memoryFallback
             ? 'browserへ永続保存できないため、このページだけで進行を保持します。'
             : (historyPruned
               ? 'browserの保存容量に合わせ、古い履歴を削除しました。'
-              : null));
+              : (response.menu_updated ? 'メニューが更新されました。表示を確認してもう一度選んでください。' : null)));
+          return input.type === 'liff' ? cloneData(response.liff_result) : nextSnapshot;
         } catch (error) {
           if (error instanceof StaleStateError) {
             await refresh(silent
@@ -612,18 +657,21 @@ export function createWebchatClient(options) {
       throw persistenceError;
     } finally {
       inFlight = false;
+      if (snapshot.status === 'sending') {
+        emit({ ...snapshot, status: snapshot.stateId ? 'ready' : 'idle' });
+      }
     }
   };
 
   const onStorage = (event) => {
     if (event.key === `xstorybot-webchat-beacon:${key}`) {
-      refresh('別のタブの最新状態を表示しました。').catch(() => {});
+      refresh('別のタブの最新状態を表示しました。', true).catch(() => {});
     }
   };
-  const onFocus = () => refresh().catch(() => {});
+  const onFocus = () => refresh(null, true).catch(() => {});
   const onVisibility = () => {
     if (globalThis.document?.visibilityState === 'visible') {
-      refresh().catch(() => {});
+      refresh(null, true).catch(() => {});
     }
   };
 
@@ -637,6 +685,17 @@ export function createWebchatClient(options) {
     async sendText(text) {
       if (typeof text !== 'string') throw new TypeError('textは文字列です');
       return transact({ type: 'text', text });
+    },
+    async sendMenu(menu, area, revision) {
+      if (typeof menu !== 'string' || typeof revision !== 'string' || !Number.isInteger(area) || area < 0) {
+        throw new TypeError('メニュー名・領域番号・revisionを指定してください');
+      }
+      return transact({ type: 'menu', menu, area, revision });
+    },
+    async requestLiff(app, action) {
+      if (typeof app?.id !== 'string' || typeof app?.url !== 'string'
+          || typeof action !== 'string') throw new TypeError('LIFFページとactionを指定してください');
+      return transact({ type: 'liff', app: app.id, app_url: app.url, action }, { silent: true });
     },
     async sendPostback(token, options = {}) {
       if (typeof token !== 'string') throw new TypeError('tokenは文字列です');

@@ -46,7 +46,7 @@ class WebchatExportTest(unittest.TestCase):
         self.assertTrue(result['revision'])
         asset_root = f'assets/{result["revision"]}'
         expected = {'index.html', 'LICENSE'} | {
-            f'{asset_root}/{name}' for name in ('app.js', 'style.css', 'ui_logic.js', 'client.js')}
+            f'{asset_root}/{name}' for name in ('app.js', 'style.css', 'ui_logic.js', 'client.js', 'liff-host.js')}
         self.assertEqual(expected, set(result['files']))
         self.assertEqual(expected, {
             str(path.relative_to(self.output)) for path in self.output.rglob('*') if path.is_file()})
@@ -73,7 +73,7 @@ class WebchatExportTest(unittest.TestCase):
                           if tag == 'link' and attrs.get('rel') == 'stylesheet')
         imports = re.findall(r"from ['\"]([^'\"]+)['\"]",
                              (self.output / asset_root / 'app.js').read_text(encoding='utf-8'))
-        self.assertEqual({'./client.js', './ui_logic.js'}, set(imports))
+        self.assertEqual({'./client.js', './ui_logic.js', './liff-host.js'}, set(imports))
         for page_url in ('https://www.example.test/games/story/',
                          'https://www.example.test/games/story/index.html'):
             with self.subTest(page=page_url):

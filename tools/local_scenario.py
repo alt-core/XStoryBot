@@ -27,11 +27,12 @@ if str(PROJECT_ROOT) not in sys.path:
 from tools.local_support import (
     LocalInputError, read_json, require_keys, validate_suite, write_bytes, write_json,
 )
+from tools.local_process import run_process, stop_on_sigterm
 
 
 ALLOWED_PLUGINS = frozenset({
     'line', 'line.quick_reply', 'line.quick_reply_v2', 'line.image_text',
-    'line.more', 'google_sheets', 'tsv', 'webchat',
+    'line.more', 'google_sheets', 'tsv', 'webchat', 'liff',
 })
 SHARED_TABLE_PARAMS = frozenset({
     'evaluate_formula', 'script_sheet', 'constant_sheet', 'ignore_sheet',
@@ -81,7 +82,7 @@ def _file_path(value, base, label):
 def load_config(args):
     # 実settingsより先に確認し、親のクラウド資格情報処理へ入らない。
     import yaml
-    from utility import deep_merge, load_settings_yaml
+    from utility import deep_merge, load_settings_yaml, merge_params
     path = Path(args.settings).resolve()
     try:
         source = _mapping(load_settings_yaml(path), 'settings')
@@ -175,7 +176,7 @@ def load_config(args):
         raise LocalInputError('interfacesは配列にしてください')
     for interface in configured_interfaces:
         _mapping(interface, 'interface')
-        if interface.get('type') not in ('line', 'webchat'):
+        if interface.get('type') not in ('line', 'webchat', 'liff'):
             continue
         interface = copy.deepcopy(interface)
         interface_params = _mapping(interface.get('params') or {}, 'interface.params')
@@ -188,8 +189,37 @@ def load_config(args):
         'cloud': {'provider': 'local'}, 'local': local,
         'auth': {}, 'options': options, 'plugins': plugins,
         'constants': copy.deepcopy(merged.get('constants', {})),
-        'bots': {args.bot: {'scenario': scenario, 'state_namespace': namespace, 'interfaces': interfaces}},
+        'bots': {args.bot: {'scenario': scenario, 'state_namespace': namespace, 'interfaces': interfaces,
+                            **{key: copy.deepcopy(bot[key]) for key in ('richmenus', 'default_richmenu') if key in bot}}},
     }
+    if args.command == 'webchat':
+        webchat_params = merge_params(plugins.get('webchat', {}), next((
+            item['params'] for item in interfaces if item['type'] == 'webchat'), {}))
+        apps = _mapping(webchat_params.get('liff_apps') or {}, 'liff_apps')
+        for app in apps.values():
+            name = _mapping(app, 'LIFFページ').get('bot')
+            if not isinstance(name, str) or not name or name not in bots:
+                raise LocalInputError('LIFF連携先のBotが設定にありません')
+            if name in config['bots']:
+                continue
+            peer = _mapping(bots[name], 'LIFF連携先Bot')
+            peer_interfaces = peer.get('interfaces', [])
+            if not isinstance(peer_interfaces, list):
+                raise LocalInputError('LIFF連携先のinterfacesは配列にしてください')
+            selected_interfaces = []
+            for item in peer_interfaces:
+                _mapping(item, 'LIFF連携先interface')
+                if item.get('type') not in ('webchat', 'liff'):
+                    continue
+                peer_params = copy.deepcopy(_mapping(item.get('params') or {}, 'interface.params'))
+                for key in ('access_token', 'channel_secret', 'line_access_token', 'line_channel_secret', 'signing_key'):
+                    peer_params.pop(key, None)
+                selected_interfaces.append({'type': item['type'], 'params': peer_params})
+            peer_namespace = peer.get('state_namespace', name)
+            if not isinstance(peer_namespace, str) or not peer_namespace:
+                raise LocalInputError('state_namespaceは空でない文字列にしてください')
+            # 固定URIの実行設定だけを残し、BのSheets等の資格情報を取得しない。
+            config['bots'][name] = {'state_namespace': peer_namespace, 'interfaces': selected_interfaces}
     return config, environment
 
 
@@ -486,7 +516,7 @@ def run_worker(config, environment, request, directory, timeout):
     env = {**os.environ, 'XSBOT_CLOUD_PROVIDER': 'local',
            'XSBOT_DEPLOY_ENV': environment, 'XSBOT_SETTINGS_FILE': str(config_path)}
     try:
-        completed = subprocess.run(
+        completed = run_process(
             [sys.executable, str(Path(__file__).resolve()), '_worker', str(request_path)],
             cwd=PROJECT_ROOT, env=env, timeout=timeout, stdout=sys.stderr,
         )
@@ -600,7 +630,7 @@ def execute(args, serve=True, expected_identity=None):
             env = {**os.environ, 'XSBOT_CLOUD_PROVIDER': 'local', 'XSBOT_DEPLOY_ENV': environment,
                    'XSBOT_SETTINGS_FILE': str(serve_path)}
             try:
-                completed = subprocess.run(
+                completed = run_process(
                     [sys.executable, '-m', 'tools.local_webchat'], cwd=PROJECT_ROOT,
                     env=env, stdout=sys.stderr)
                 result['exit_code'] = completed.returncode
@@ -620,7 +650,7 @@ def main(argv=None):
     command = argv[0] if argv else None
     try:
         args = parse_args(argv)
-        with contextlib.redirect_stdout(sys.stderr):
+        with stop_on_sigterm(), contextlib.redirect_stdout(sys.stderr):
             result = execute(args)
     except KeyboardInterrupt:
         result = {'ok': False, 'exit_code': 130, 'error': '処理を中断しました'}

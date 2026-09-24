@@ -86,6 +86,17 @@ class LineDefaultCommandsPlugin_Builder(object):
             builder.msg_count -= 1 # REPLY_CMDSはメッセージ数を消費しない
 
         elif msg in RICHMENU_CMDS:
+            if 'richmenu_names' in builder.options:
+                from richmenu_spec import resolve_menu_name
+                arg = options[0]
+                if '{' not in arg:
+                    try:
+                        name = resolve_menu_name(arg, builder.options['richmenu_names'])
+                    except ValueError as error:
+                        builder.raise_error(str(error))
+                    if (name is not None and builder.options['richmenu_require_ids']
+                            and name not in builder.options['richmenu_ids']):
+                        builder.raise_error(f'リッチメニュー {arg} をLINEへ反映してからビルドしてください')
             builder.add_command(sender, msg, options, children)
 
         else:
@@ -101,8 +112,7 @@ class LineDefaultCommandsPlugin_Builder(object):
         builder.msg_count = 0
 
     def build_plain_text(self, builder, sender, msg, options):
-        # 通常のテキストメッセージ表示
-        # 仕様書に記述がないが、おそらく300文字が上限
+        # シナリオの通常テキストは300文字まで検査する。
         builder.assert_strlen(msg, 300)
         builder.msg_count += 1
         builder.add_command(sender, msg, options, None)
@@ -163,6 +173,13 @@ class LineDefaultCommandsPlugin_Runtime(object):
             logging.warning("sender_icon_urls is not a dictionary. Please check settings.yaml.")
             self.sender_icon_urls = {}
         self.reply_fallback_message = params.get('reply_fallback_message', '...')
+
+    def run_command(self, context, sender, msg, options, children=None):
+        if msg in RICHMENU_CMDS:
+            from richmenu_spec import resolve_line_id
+            # 動的な論理名も、状態保存やLINEへの送信より前に検査する。
+            resolve_line_id(options[0], getattr(context, 'richmenu_ids', {}))
+        return False
 
     def _build_actions(self, choices, action_token):
         """選択肢 [label, 値, ジャンプ先] の list を LINE の action object の list にする。"""
@@ -299,7 +316,8 @@ class LineDefaultCommandsPlugin_Runtime(object):
             context.response[-1]['quickReply'] = line_messages.quick_reply(
                 self._build_actions(children, context.status.action_token))
         elif msg in RICHMENU_CMDS:
-            richmenu_id = options[0]
+            from richmenu_spec import resolve_line_id
+            richmenu_id = resolve_line_id(options[0], getattr(context, 'richmenu_ids', {}))
             interface = context.get_interface('line')
             if interface:
                 interface.api.link_rich_menu(context.source_id, richmenu_id)

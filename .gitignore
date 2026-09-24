@@ -64,7 +64,7 @@ instance/
 # Scrapy stuff:
 .scrapy
 
-# ローカル作業用の指示と合意
+# ローカル開発用ファイルと生成物
 /AGENTS.md
 /.planning/
 /outputs/

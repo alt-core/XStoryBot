@@ -28,7 +28,7 @@ def _origin(public_base_url):
 
 
 def prepare_settings(config, bot_name, scenario_uri, asset_urls):
-    """実settingsをimportせず、選択Botだけのserve用設定を作る。"""
+    """実settingsをimportせず、選択Botと固定済みのLIFF連携先を準備する。"""
     if config.get('cloud', {}).get('provider') != 'local':
         raise ValueError('ローカルWebchatにはcloud.provider=localが必要です')
     if bot_name not in config.get('bots', {}):
@@ -68,6 +68,10 @@ def prepare_settings(config, bot_name, scenario_uri, asset_urls):
                              if item.get('type') == 'webchat'), {})
     params = utility.merge_params(
         prepared.get('plugins', {}).get('webchat', {}), interface_params)
+    params['constants'] = {
+        **utility.normalize_constants(prepared.get('plugins', {}).get('webchat', {}).get('constants', {}), scalar_only=True),
+        **utility.normalize_constants(interface_params.get('constants', {}), scalar_only=True),
+    }
     origin = _origin(store.public_base_url)
     params.update({
         'enabled': True,
@@ -81,11 +85,44 @@ def prepare_settings(config, bot_name, scenario_uri, asset_urls):
         'external_http_origins': [],
         'allowed_commands': [],
     })
-    bot['interfaces'] = [{'type': 'webchat', 'params': params}]
-    prepared['bots'] = {bot_name: bot}
+    def liff_interfaces(definition):
+        return [item for item in definition.get('interfaces', []) if item.get('type') == 'liff']
+
+    bot['interfaces'] = [{'type': 'webchat', 'params': params}] + liff_interfaces(bot)
+    selected = {bot_name: bot}
+    apps = params.get('liff_apps', {}) or {}
+    if not isinstance(apps, dict):
+        raise ValueError('liff_appsにはページ名ごとの設定を指定してください')
+    for app in apps.values():
+        name = app.get('bot') if isinstance(app, dict) else None
+        if name in selected:
+            continue
+        peer = prepared['bots'].get(name)
+        if peer is None or not liff_interfaces(peer):
+            raise ValueError('LIFF連携先のBotとliff interfaceを設定してください')
+        peer_options = next((item.get('params') or {} for item in peer.get('interfaces', [])
+                             if item.get('type') == 'webchat'), {})
+        peer_params = utility.merge_params(prepared.get('plugins', {}).get('webchat', {}), peer_options)
+        peer_params['constants'] = {
+            **utility.normalize_constants(prepared.get('plugins', {}).get('webchat', {}).get('constants', {}), scalar_only=True),
+            **utility.normalize_constants(peer_options.get('constants', {}), scalar_only=True),
+        }
+        peer_uri = peer_params.get('scenario_uri')
+        if not peer_uri:
+            raise ValueError('LIFF連携先のwebchat.scenario_uriに、このrootのビルド済みURIを指定してください')
+        store.load_scenario(peer_uri)
+        for key in ('enabled', 'signing_key', 'deployment', 'self_origin', 'allowed_origins',
+                    'external_http_origins', 'allowed_commands'):
+            peer_params[key] = copy.deepcopy(params[key])
+        peer_params['scenario_compatibility_epoch'] = peer_params.get('scenario_compatibility_epoch') or 'local-v1'
+        peer_params['start_action'] = peer_params.get('start_action') or '##line.follow'
+        peer_params['liff_apps'] = {}
+        peer['interfaces'] = [{'type': 'webchat', 'params': peer_params}] + liff_interfaces(peer)
+        selected[name] = peer
+    prepared['bots'] = selected
     prepared['plugins'] = {
         name: values for name, values in prepared.get('plugins', {}).items()
-        if name in ('line.quick_reply', 'line.quick_reply_v2', 'line.more')
+        if name in ('line.quick_reply', 'line.quick_reply_v2', 'line.more', 'liff')
     }
     prepared['auth'] = {}
     prepared['local'].pop('assets', None)

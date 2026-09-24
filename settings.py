@@ -3,7 +3,7 @@
 import os
 
 from cloud_backend import configure as configure_cloud_backend
-from utility import deep_merge, load_settings_yaml
+from utility import deep_merge, load_settings_yaml, normalize_constants
 
 
 DEPLOY_ENV = os.getenv('XSBOT_DEPLOY_ENV', '')
@@ -53,7 +53,7 @@ AUTH_SETTINGS = settings['auth']
 OPTIONS = settings.get('options', {})
 PLUGINS = settings.get('plugins', {})
 BOTS = settings['bots']
-CONSTANTS = settings.get('constants', {})
+CONSTANTS = normalize_constants(settings.get('constants', {}))
 
 
 # 設定を読む時点で、このプロセスが使うクラウドを一度だけ確定する。

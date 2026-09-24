@@ -11,6 +11,7 @@ from functools import wraps
 from pathlib import Path
 from unittest.mock import Mock, patch
 from urllib.parse import urlencode
+from requests.exceptions import RequestException
 from wsgiref.util import setup_testing_defaults
 
 
@@ -52,6 +53,7 @@ def load_dashboard():
     """外部サービスを初期化せずにdashboard moduleを読み込む。"""
     settings = types.ModuleType('settings')
     settings.DEPLOY_ENV = 'prod'
+    settings.CONSTANTS = {}
     settings.CLOUD_SETTINGS = {'provider': 'gcp'}
     settings.BOTS = {
         'zeta': {
@@ -142,6 +144,7 @@ def load_dashboard():
     auth.get_api_token = Mock(return_value='shared-api-token')
 
     requests = types.ModuleType('requests')
+    requests.RequestException = RequestException
     requests.post = Mock(return_value=types.SimpleNamespace(text='builder body'))
 
     replacements = {
@@ -280,6 +283,9 @@ class DashboardTest(unittest.TestCase):
     def test_every_management_api_is_authenticated_and_no_duplicate_routes(self):
         expected_rules = {
             '/dashboard/api/config',
+            '/dashboard/api/bots/<bot_name>/richmenus',
+            '/dashboard/api/bots/<bot_name>/richmenus/menus/<name>',
+            '/dashboard/api/bots/<bot_name>/richmenus/default',
             '/dashboard/build_async/<bot_name>',
             '/dashboard/last_build_result/<bot_name>',
             '/dashboard/api/groups',
@@ -309,6 +315,8 @@ class DashboardTest(unittest.TestCase):
 
     def test_状態変更APIだけCSRF検証付き認証にする(self):
         expected_state_changing = {
+            '/dashboard/api/bots/<bot_name>/richmenus/menus/<name>',
+            '/dashboard/api/bots/<bot_name>/richmenus/default',
             '/dashboard/logout',
             '/dashboard/build_async/<bot_name>',
             '/dashboard/api/remove_member',
@@ -324,6 +332,24 @@ class DashboardTest(unittest.TestCase):
         }
 
         self.assertEqual(expected_state_changing, actual)
+
+    def test_リッチメニューは対象ごとに処理し失敗をJSONで返す(self):
+        service = Mock()
+        service.menus = types.SimpleNamespace(menus={'main': object()}, default='main')
+        service.plan.return_value = {'name': 'main', 'status': 'create'}
+        service.apply.return_value = {'name': 'main', 'status': 'create', 'new_id': 'id'}
+        with patch('richmenu_service.RichmenuService', return_value=service):
+            status, _headers, body = call_wsgi(self.module.app, 'GET', '/dashboard/api/bots/alpha/richmenus')
+            self.assertEqual(200, status)
+            self.assertEqual(['main'], json.loads(body)['data']['menus'])
+            call_wsgi(self.module.app, 'GET', '/dashboard/api/bots/alpha/richmenus/menus/main')
+            service.apply.assert_not_called()
+            call_wsgi(self.module.app, 'POST', '/dashboard/api/bots/alpha/richmenus/menus/main')
+            service.apply.assert_called_once_with('main')
+            service.plan.side_effect = ValueError('画像が不正です')
+            status, _headers, body = call_wsgi(self.module.app, 'GET', '/dashboard/api/bots/alpha/richmenus/menus/main')
+            self.assertEqual(400, status)
+            self.assertIn('画像が不正', json.loads(body)['message'])
 
     def test_loginはOrigin確認後に署名Cookieを発行する(self):
         status, headers, body = call_wsgi(
@@ -577,6 +603,53 @@ class DashboardTemplateTest(unittest.TestCase):
         cls.template = (
             PROJECT_ROOT / 'template' / 'dashboard.tpl'
         ).read_text(encoding='utf-8')
+
+    @unittest.skipUnless(shutil.which('node'), 'Node.jsが利用できないため省略')
+    def test_メニュー反映は一件ずつ行い失敗後に既定を変更しない(self):
+        start = self.template.index('    let richmenuPlan = null;')
+        end = self.template.index('    $(function(){', start)
+        script = r"""
+const assert = require('node:assert/strict');
+let botName = 'alpha', csrfToken = 'artificial', fail = true;
+const calls = [], completed = new Set(), created = [];
+const fields = new Map();
+const $ = (key) => ({prop() {return this;}, text(value) {
+  if (value === undefined) return fields.get(key) || '';
+  fields.set(key, value); return this;
+}});
+const confirm = () => true;
+const fetch = async (url, options) => {
+  calls.push([url, options.method]);
+  const name = url.split('/menus/')[1];
+  let data;
+  if (name) {
+    const status = completed.has(name) ? 'unchanged' : 'create';
+    if (options.method === 'POST') {
+      assert.equal(options.headers['X-CSRF-Token'], csrfToken);
+      if (name === 'extra' && fail) return {ok: false, status: 502, json: async () => ({result: 'Error', message: '人工失敗'})};
+      if (status === 'create') {completed.add(name); created.push(name);}
+    }
+    data = {name, status, current_id: completed.has(name) ? name : null};
+  } else if (url.endsWith('/default')) data = {configured: 'main', action: 'set_default'};
+  else data = {menus: ['main', 'extra'], default: 'main'};
+  return {ok: true, json: async () => ({result: 'Success', data})};
+};
+""" + self.template[start:end] + r"""
+(async () => {
+  await runRichmenus(false);
+  assert.equal(calls.filter((call) => call[1] === 'POST').length, 0);
+  await runRichmenus(true);
+  assert.deepEqual(created, ['main']);
+  assert.equal(calls.some(([url, method]) => url.endsWith('/default') && method === 'POST'), false);
+  fail = false;
+  await runRichmenus(false);
+  await runRichmenus(true);
+  assert.deepEqual(created, ['main', 'extra']);
+  assert.deepEqual(calls.at(-1), ['/dashboard/api/bots/alpha/richmenus/default', 'POST']);
+})().catch((error) => { console.error(error); process.exitCode = 1; });
+"""
+        completed = subprocess.run(['node', '-e', script], capture_output=True, text=True)
+        self.assertEqual(0, completed.returncode, completed.stderr)
 
     @unittest.skipUnless(shutil.which('node'), 'Node.jsが利用できないため省略')
     def test_escape_html_function_escapes_five_html_characters(self):

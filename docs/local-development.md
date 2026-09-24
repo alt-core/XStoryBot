@@ -99,6 +99,14 @@ plugins:
 
 Sheets同期CLIが作ったコピーでは、書き戻しと同じ値変換を使います。元が数値なら`+01`は`1`、元が真偽値なら`TRUE`は`True`として読み、元から文字列だった未変更の`=A1`等は文字列のまま扱います。元の数値・真偽値として読めない編集は文字列として受け入れるため、説明行の挿入や定数ブロックの移動もできます。この扱いは式評価の有無によらず同じで、TSVファイル自体は書き換えません。型付きの基準はシートごとに読み、全シート分を常駐させません。
 
+## LIFF用Botとの連携
+
+[LIFF連携仕様](liff-webchat-api.md)の`liff_apps`を使えます。LIFF用Botは先に`build --settings settings.yaml --bot menu`でビルドし、結果の`scenario_uri`をそのBotの`webchat.params.scenario_uri`へ指定してください。会話用Botと同じ`local.storage_root`でビルドした固定URIを使います。Sheets等の入力設定や資格情報は、連携先の実行時設定へ持ち越しません。
+
+その後、会話用Botを通常の`webchat --settings settings.yaml --bot bot`で起動します。参照UIの同梱確認ページは`http://127.0.0.1:8765/webchat-client/examples/liff/index.html`です。LIFF用Botの`open`、`bump`、`sync`を用意すると、連携を確認できます。
+
+`--watch`による自動ビルドの対象は選択した会話用Botです。LIFF用Botを変更した場合は別途buildし、固定URIを更新してください。LIFF用Botの画像は、同じrootで生成済みのlocal媒体URLを使います。
+
 ## 更新とセーブ
 
 WebchatをCtrl-Cで停止し、同じコマンドを再実行すると再ビルドして起動します。TSVの編集を自動で反映する場合は`--watch`を付けます。

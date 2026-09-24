@@ -113,10 +113,17 @@ Sheet名には次の規則があります。
 | `/loop` | `/seq`と同じで、最後まで行くと最初の枝に戻る |
 | `/random` | `/else`で区切った枝からランダムに1つ実行(直前と同じ枝は続けて選ばれない) |
 | `@log` | `@log 分類 値` — 分析用の記録を残す。表示はされない |
-| `@delay` | `@delay 秒 action` — 指定秒後にactionを実行する。`@delay 秒 Bot名 action`と書くと別のBotで実行する。Webchatでは使えない |
+| `@forward` | `@forward Bot名 action [interface]` — 別のBotへ転送する。末尾のinterfaceは省略できる |
+| `@delay` | `@delay 秒 action` — 指定秒後にactionを実行する。`@delay 秒 Bot名 action [interface]`と書くとBotとinterfaceを選べる。Webchatでは使えない |
 
 - commandは`@`と`/`のどちらで書いても同じです(`@if`=`/if`)。日本語名もあります(`/ランダム`など)。
 - `/if`の式では変数の比較が書けます。例: `$flag == "on"`、`$count >= 3`、`!$visited`(未設定)、`&&`(かつ)`||`(または)。
+
+`@forward`／`@delay`のinterface指定は、転送先Botに設定された実行方法を選びます。ユーザーIDは変えず、保存先は転送先Botの`state_namespace`に従います。例えば`@forward story #更新 liff`は、LINE利用者のままLIFFの解釈とJSON応答を使います。転送先にも`liff` interfaceが必要です。
+
+通常の非同期転送でinterfaceを省略すると、利用者のサービスを使います。LINE上のLIFFから省略して転送した場合も`line`で実行し、応答があればpushします。`liff`指定の実行自体はLINEへ送信しませんが、その先の転送や遅延処理には指定を自動継承しません。通知したくない一連の処理では、後続の転送先・interfaceもシナリオで指定してください。interfaceは応答形式に加えて実行時コマンドの解釈も切り替えます。
+
+非同期転送のJSON応答は、転送元のLIFFページへ返りません。Webchatの同期転送では、会話用Botへは`webchat`、登録したLIFF用Botへは`liff`が省略時の実行方法です。明示指定できる範囲とイベントの返却は[LIFF連携ガイド](./liff-webchat-api.md)を参照してください。
 
 version 3では、未設定の変数を文章に埋め込むと`None`、真偽値は`True`・`False`と表示されます。「未入手」などの表示にしたい場合は、`/if`で台詞を分けます。
 
@@ -224,3 +231,11 @@ Carousel、Imagemap、Flex、続きを読む(More)、グループ配信、外部
 - `@webhook URL key value key value ...`: URLへPOSTします。URLの後ろにkeyとvalueを交互に並べると、その組をform dataとして送ります。URLだけなら本文なしで送ります。途中の空セルは空文字のvalueとして位置を保ち、最後のkeyにvalueが無ければ空文字を送ります。
 - commandの引数で空セルを挟むと、後続の引数が前へ詰められます（`@seq #a <空> #c`は`#a`と`#c`の2択）。`@webhook`だけは例外で、keyとvalueの対応を保つため詰めません。
 - ChatGPTや外部APIなど時間のかかる処理は、LINEに返事をしたあと`@delay 0 #続き`で別のlabelへ回し、そこで呼び出して結果をpushで返す形にします。webhookの応答中に長い外部呼出しを書くと、reply tokenの期限（1分）やAWS Lambdaの30秒に収まりません。
+
+## 定数とリッチメニュー
+
+settingsの`constants`へ本文等から参照する値を定義できます。名前はNFKCと小文字化で照合し、同じ設定層で正規化後の名前が重複する場合はエラーです。定数に秘密値を置かないでください。`!env`の未設定値は空文字となり、定数名だけを警告します。
+
+値の優先順位は、定数Sheet → settings定数 → 実行時オブジェクト → `$$`変数 → 状態変数です。Webchatでは`plugins.webchat.constants`とBotのwebchat interfaceの`params.constants`をキー単位で合成した上書きを最優先にします。Bot側の値が優先します。これはWebchat内のLIFF用Botにも、そのBotの設定で適用されます。
+
+`@richmenu main`で定義済みのメニューを選びます。`@richmenu {メニュー名}`で定数の値を使うことも、生のLINE IDを指定することもできます。詳細は[リッチメニュー](./richmenu.md)を参照してください。

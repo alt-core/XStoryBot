@@ -122,6 +122,14 @@
 
         <hr>
 
+        <section class="my-3" aria-label="リッチメニュー管理">
+            <h3>リッチメニュー</h3>
+            <p>論理名で新しいメニューを使うには、LINEへの反映後にシナリオをビルドしてください。</p>
+            <button type="button" id="richmenu-plan" class="btn btn-secondary">差分を確認</button>
+            <button type="button" id="richmenu-apply" class="btn btn-primary" disabled>LINEへ反映</button>
+            <pre id="richmenu-result" class="mt-2" style="white-space:pre-wrap" role="status"></pre>
+        </section>
+
         <!-- グループ管理機能 -->
         <div class="row mt-4">
             <div class="col">
@@ -973,8 +981,55 @@
         }
     }
 
+    let richmenuPlan = null;
+    let richmenuBusy = false;
+    async function richmenuRequest(bot, path, write = false) {
+        const result = await fetch(`/dashboard/api/bots/${encodeURIComponent(bot)}/richmenus${path}`, {
+            method: write ? 'POST' : 'GET', cache: 'no-store',
+            headers: write ? {'X-CSRF-Token': csrfToken} : {},
+        });
+        const data = await result.json();
+        if (!result.ok || data.result !== 'Success') throw new Error(data.message || `HTTP ${result.status}`);
+        return data.data;
+    }
+    async function runRichmenus(apply) {
+        if (richmenuBusy) return;
+        const selected = botName;
+        if (apply && (!richmenuPlan || richmenuPlan.bot !== selected)) return;
+        if (apply && !confirm('LINEへリッチメニューを反映します。旧メニューは削除しません。よろしいですか？')) return;
+        richmenuBusy = true;
+        $('#richmenu-plan, #richmenu-apply').prop('disabled', true);
+        const output = $('#richmenu-result');
+        output.text(`Bot: ${selected}\n`);
+        const append = (text) => output.text(output.text() + text + '\n');
+        try {
+            const info = await richmenuRequest(selected, '');
+            let changed = false;
+            for (const name of info.menus) {
+                const item = await richmenuRequest(selected, `/menus/${encodeURIComponent(name)}`, apply);
+                changed ||= item.status !== 'unchanged';
+                const label = {unchanged: '変更なし', create: '新規作成', update: '内容変更', recreate: '再作成'}[item.status];
+                append(`${name}: ${label} ${item.new_id || item.current_id || ''}`);
+            }
+            const def = await richmenuRequest(selected, '/default', apply);
+            append(`既定メニュー: ${def.configured || '変更しない'}${def.external ? '（現在は外部管理）' : ''}${def.action === 'set_default' ? ' → 設定' : ''}`);
+            richmenuPlan = {bot: selected, changed: changed || def.action === 'set_default'};
+            if (apply && changed) append('新しいメニューをシナリオで使うには、ビルドしてください。');
+            if (apply) richmenuPlan = null;
+        } catch (error) {
+            append(`失敗: ${error.message}。完了した分は記録済みです。差分を確認して再実行できます。`);
+            richmenuPlan = null;
+        } finally {
+            richmenuBusy = false;
+            $('#richmenu-plan').prop('disabled', false);
+            $('#richmenu-apply').prop('disabled', !richmenuPlan?.changed || richmenuPlan.bot !== botName);
+        }
+    }
+
     $(function(){
         initializeDashboard();
+        $("#richmenu-plan").on("click", () => runRichmenus(false));
+        $("#richmenu-apply").on("click", () => runRichmenus(true));
 
         function buildEndpoint() {
             return `/dashboard/build_async/${botName}`;

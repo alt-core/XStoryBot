@@ -24,15 +24,17 @@ QUICK_REPLY_PROMPT = (
     '試したい機能名を入力するか、以下のボタンから選んでください。')
 
 
-def _state_token(bot, revision):
+def _state_token(bot, revision, liff_count=0, richmenu=False):
     raw = json.dumps({
         'bot': bot,
         'revision': revision,
+        'liff_count': liff_count,
+        'richmenu': richmenu,
     }, separators=(',', ':')).encode('utf-8')
     return base64.urlsafe_b64encode(raw).decode('ascii').rstrip('=')
 
 
-def _state_revision(token, bot):
+def _state_data(token, bot):
     if not isinstance(token, str) or not token:
         raise ValueError('state tokenがありません')
     try:
@@ -43,7 +45,7 @@ def _state_revision(token, bot):
         raise ValueError('state tokenが不正です') from error
     if value.get('bot') != bot or not isinstance(value.get('revision'), int):
         raise ValueError('state tokenが不正です')
-    return value['revision']
+    return value
 
 
 def _action(action_type, label, value, echo=None):
@@ -103,13 +105,19 @@ def build_turn(bot, body, base_url, sleep=time.sleep):
     if not isinstance(input_data, dict):
         return 400, {'code': 'invalid-request', 'title': 'invalid-request'}
     input_type = input_data.get('type')
+    liff_count = 0
+    richmenu = False
+    liff_url = base_url + '/webchat-client/examples/liff/index.html'
     if input_type == 'start':
         revision = 0
         keyword = 'start'
         echo = None
     else:
         try:
-            revision = _state_revision(body.get('state_token'), bot) + 1
+            previous = _state_data(body.get('state_token'), bot)
+            revision = previous['revision'] + 1
+            liff_count = previous.get('liff_count', 0)
+            richmenu = previous.get('richmenu', False)
         except ValueError:
             return 401, {'code': 'invalid-state', 'title': 'invalid-state'}
         if input_type == 'text' and isinstance(input_data.get('text'), str):
@@ -125,6 +133,13 @@ def build_turn(bot, body, base_url, sleep=time.sleep):
                 echo = '続きを読む'
             else:
                 echo = None
+        elif input_type == 'menu' and input_data.get('menu') == 'sample' and input_data.get('area') == 0:
+            keyword = 'メニューからの入力'; echo = keyword
+        elif (input_type == 'liff' and input_data.get('app') == 'menu'
+              and input_data.get('app_url') == liff_url
+              and isinstance(input_data.get('action'), str)):
+            keyword = 'liff-request'
+            echo = None
         else:
             return 400, {'code': 'invalid-request', 'title': 'invalid-request'}
 
@@ -158,6 +173,17 @@ def build_turn(bot, body, base_url, sleep=time.sleep):
                 ]),
             _quick_reply_prompt(request_id, 2, guide),
         ]
+    elif keyword == 'richmenu':
+        messages = [_message('text', request_id, 0, guide, text='リッチメニューを開いて操作できます。')]
+    elif keyword == 'liff':
+        messages = [_message('button', request_id, 0, guide,
+                             title='LIFF連携', text='状態を持つページを開きます。',
+                             image_url=None, actions=[_action('uri', 'メニューを開く', liff_url)])]
+    elif keyword == 'liff-request':
+        if input_data['action'] == 'bump':
+            liff_count += 1
+        if input_data['action'] == 'sync':
+            messages = [_message('text', request_id, 0, guide, text=f'LIFFから同期しました: {liff_count}')]
     elif keyword == 'image':
         messages = [_message(
             'image', request_id, 0, guide,
@@ -243,12 +269,13 @@ def build_turn(bot, body, base_url, sleep=time.sleep):
             'text', request_id, 0, guide,
             text=f'入力を受け取りました: {keyword}')]
 
-    if keyword not in ('start', 'menu', 'long', 'long-2'):
+    if keyword not in ('start', 'menu', 'long', 'long-2', 'liff-request'):
         messages.append(
             _quick_reply_prompt(request_id, len(messages), guide))
 
-    token = _state_token(bot, revision)
-    return 200, {
+    richmenu = richmenu or keyword == 'richmenu'
+    token = _state_token(bot, revision, liff_count, richmenu)
+    result = {
         'schema_version': 1,
         'request_id': request_id,
         'state': {
@@ -258,7 +285,23 @@ def build_turn(bot, body, base_url, sleep=time.sleep):
         'state_token': token,
         'echo_message': echo,
         'messages': messages,
+        'liff_apps': [{'id': 'menu', 'url': liff_url}],
     }
+    if richmenu:
+        result['richmenu'] = {
+            'id': 'sample', 'revision': 'sample-1', 'chat_bar_text': 'メニュー', 'selected': True,
+            'image_url': base_url + '/devmedia/richmenu.svg', 'width': 800, 'height': 400,
+            'areas': [
+                {'x': 0, 'y': 0, 'width': 400, 'height': 400,
+                 'action': {'type': 'menu', 'label': '話す', 'echo_text': 'メニューからの入力'}},
+                {'x': 400, 'y': 0, 'width': 400, 'height': 400,
+                 'action': {'type': 'uri', 'label': 'LIFFを開く', 'href': liff_url}},
+            ],
+        }
+    if input_type == 'liff':
+        result['chat_updated'] = bool(messages)
+        result['liff_result'] = [json.dumps({'count': liff_count})]
+    return 200, result
 
 
 def _scene_svg(title, show_play=False):
@@ -342,7 +385,7 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
-    def _serve_file(self, relative):
+    def _serve_file(self, relative, frame_ancestors=None):
         path = (PROJECT_ROOT / relative).resolve()
         try:
             path.relative_to(PROJECT_ROOT)
@@ -353,7 +396,8 @@ class Handler(BaseHTTPRequestHandler):
             self.send_error(404)
             return
         content_type = mimetypes.guess_type(path.name)[0] or 'application/octet-stream'
-        self._send(200, path.read_bytes(), content_type, 'no-cache')
+        options = {'frame_ancestors': frame_ancestors} if frame_ancestors is not None else {}
+        self._send(200, path.read_bytes(), content_type, 'no-cache', **options)
 
     def do_GET(self):
         path = urlsplit(self.path).path
@@ -384,9 +428,10 @@ class Handler(BaseHTTPRequestHandler):
             self._serve_file(path.lstrip('/'))
             return
         if path.startswith('/webchat-client/'):
-            self._serve_file(path.lstrip('/'))
+            self._serve_file(path.lstrip('/'), frame_ancestors="'self'")
             return
         media = {
+            '/devmedia/richmenu.svg': '<svg xmlns="http://www.w3.org/2000/svg" width="800" height="400"><rect width="400" height="400" fill="#cee"/><rect x="400" width="400" height="400" fill="#ecd"/><text x="140" y="200" font-size="40">話す</text><text x="470" y="200" font-size="40">LIFF</text></svg>'.encode(),
             '/devmedia/avatar-brown.svg': _avatar_svg('#8d655c'),
             '/devmedia/card.svg': _scene_svg('表示デモ'),
             '/devmedia/photo.svg': _scene_svg('夕暮れの街並み'),

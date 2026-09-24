@@ -46,11 +46,12 @@ def _do_action_iter(result, bot, user, action, attrs, level=0):
         abort_json(error.status_code, error.public_message)
 
 
-def process_action_task(bot, user_str, action, attrs):
+def process_action_task(bot, user_str, action, attrs, interface_name=None):
     """HTTPとSQSから同じaction処理を呼ぶための共通入口。"""
     return async_task_processor.process_decoded_action(
         bot, user_str, action, attrs,
         users.User, users.get_group_members, settings.OPTIONS, time.sleep,
+        interface_name=interface_name,
     )
 
 
@@ -83,6 +84,7 @@ def do_action(bot_name):
     try:
         result = process_action_task(
             bot, user_str, action, attrs,
+            interface_name=request.params.getunicode('interface'),
         )
     except async_task_processor.TaskProcessingError as error:
         abort_json(error.status_code, error.public_message)

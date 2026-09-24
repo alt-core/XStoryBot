@@ -1,6 +1,8 @@
-import { createWebchatClient } from '../../webchat-client/index.js';
+import { createWebchatClient, WebchatClientError } from '../../webchat-client/index.js';
+import { attachLiffFrame, findLiffApp, resolveLiffLink } from '../../webchat-client/liff-host.js';
 import {
   classifyUriTarget,
+  richmenuOpenState,
   createBottomResizeFollower,
   createControlActivator,
   createHorizontalDragController,
@@ -24,6 +26,8 @@ const draft = document.querySelector('#draft');
 const sendButton = document.querySelector('#send');
 const resetButton = document.querySelector('#reset');
 const jumpButton = document.querySelector('#jump');
+const richmenuElement = document.querySelector('#richmenu');
+const richmenuToggle = document.querySelector('#richmenu-toggle');
 const mediaViewer = document.querySelector('#media-viewer');
 const mediaViewerClose = document.querySelector('#media-viewer-close');
 const nativeMediaViewer = (
@@ -72,13 +76,12 @@ const refocusDraft = () => {
 
 const submitText = async () => {
   const text = draft.value;
-  if (!text.trim() || client.getSnapshot().status === 'sending') return;
+  if (!text.trim() || actionLock || client.getSnapshot().status === 'sending') return;
   draft.value = '';
   autosize();
   updateSendState();
-  pendingEcho = text;
   try {
-    await client.sendText(text);
+    await activate({ type: 'message', text }, true);
   } catch (_error) {
     // 文言はsnapshotのerrorに表示済み。未入力なら下書きを復元する。
     if (!draft.value) {
@@ -93,19 +96,26 @@ const submitText = async () => {
 // clientが'sending'をemitするまでの短い窓だけ同期lockで塞ぐ。
 let actionLock = false;
 
-const activate = async (action) => {
-  if (actionLock || client.getSnapshot().status === 'sending') return false;
+const activate = async (action, propagateError = false) => {
+  if (actionLock || client.getSnapshot().status === 'sending') {
+    if (propagateError) throw new WebchatClientError('処理中です', { code: 'request-in-flight' });
+    return false;
+  }
   actionLock = true;
   try {
     if (action.type === 'message') {
       pendingEcho = action.text;
       await client.sendText(action.text);
+    } else if (action.type === 'menu') {
+      pendingEcho = action.echo_text ?? null;
+      await client.sendMenu(action.menu, action.area, action.revision);
     } else if (action.type === 'postback') {
       pendingEcho = action.echo_text ?? null;
       await client.sendPostback(action.token);
     }
-  } catch (_error) {
+  } catch (error) {
     // 状態と文言はsnapshotへ反映済み。
+    if (propagateError) throw error;
   } finally {
     actionLock = false;
   }
@@ -133,8 +143,11 @@ const videoCompletionQueue = createVideoCompletionQueue({
 // ---- メディア拡大表示 ----
 
 let mediaViewerReturnFocus = null;
+let liffConnection = null;
 
 const clearMediaViewer = () => {
+  liffConnection?.destroy();
+  liffConnection = null;
   for (const child of [...mediaViewer.children]) {
     if (child !== mediaViewerClose) child.remove();
   }
@@ -226,13 +239,36 @@ const openMediaViewer = (message, trigger, pointerOpened) => {
 };
 
 const openLinkViewer = (href, label, trigger, pointerOpened) => {
+  if (mediaViewer.hasAttribute('open')) return;
+  const resolved = resolveLiffLink(href, client.getSnapshot().liffApps);
+  if (resolved && (actionLock || client.getSnapshot().status === 'sending')) return;
   const frame = document.createElement('iframe');
   frame.className = 'link-viewer-frame';
-  frame.src = href;
+  const app = resolved?.app;
+  const url = new URL(resolved?.url || href);
+  if (app) {
+    url.searchParams.set('xsb_client', 'webchat');
+    liffConnection = attachLiffFrame(frame, {
+      app,
+      request: async (action) => {
+        if (actionLock || client.getSnapshot().status === 'sending') {
+          throw new WebchatClientError('処理中です', { code: 'request-in-flight' });
+        }
+        actionLock = true;
+        pendingEcho = null;
+        try { return await client.requestLiff(app, action); }
+        finally { actionLock = false; }
+      },
+      sendText: (text) => activate({ type: 'message', text }, true),
+      close: closeMediaViewer,
+    });
+  }
+  frame.src = url.href;
   frame.title = label || 'リンク先';
   frame.referrerPolicy = 'no-referrer';
   frame.setAttribute(
-    'sandbox', 'allow-forms allow-scripts allow-same-origin');
+    'sandbox', 'allow-forms allow-scripts allow-same-origin'
+      + (app ? ' allow-popups allow-popups-to-escape-sandbox' : ''));
   showMediaViewer(frame, trigger, 'link', pointerOpened);
 };
 
@@ -264,7 +300,9 @@ const linkAttributes = (link, href, external = false) => {
 
 const uriControl = (action, className, hideLabel = false) => {
   const label = action.label || action.href || 'リンク';
-  const mode = classifyUriTarget(action.href, location.origin);
+  const liffApp = findLiffApp(action.href, client.getSnapshot().liffApps);
+  const targetMode = classifyUriTarget(action.href, location.origin);
+  const mode = liffApp && targetMode === 'blocked' ? 'embedded' : targetMode;
   let control;
   if (mode === 'embedded') {
     control = document.createElement('button');
@@ -290,6 +328,74 @@ const uriControl = (action, className, hideLabel = false) => {
       ? `${label}（この環境では開けません）` : label);
   if (!hideLabel) control.textContent = label;
   return control;
+};
+
+const richmenuStorageKey = `xstorybot-webchat-richmenu:${apiBaseUrl}|${bot}`;
+let richmenuState = null;
+try { richmenuState = JSON.parse(localStorage.getItem(richmenuStorageKey)); } catch (_error) {}
+let renderedRichmenu = null;
+const setRichmenuOpen = (open) => {
+  richmenuElement.hidden = !open;
+  richmenuToggle.setAttribute('aria-expanded', String(open));
+};
+richmenuToggle.addEventListener('click', () => {
+  const wasBottom = stick;
+  richmenuState = { id: client.getSnapshot().richmenu.id, open: richmenuElement.hidden };
+  setRichmenuOpen(richmenuState.open);
+  try { localStorage.setItem(richmenuStorageKey, JSON.stringify(richmenuState)); } catch (_error) {}
+  if (wasBottom) requestAnimationFrame(() => scrollToBottom(false));
+});
+const syncRichmenu = (snapshot) => {
+  const menu = snapshot.richmenu;
+  richmenuToggle.hidden = !menu;
+  if (!menu) {
+    richmenuElement.hidden = true;
+    richmenuElement.replaceChildren();
+    const changed = renderedRichmenu !== null;
+    renderedRichmenu = null;
+    return changed;
+  }
+  const signature = JSON.stringify(menu);
+  const changed = signature !== renderedRichmenu;
+  if (changed) {
+    renderedRichmenu = signature;
+    richmenuElement.replaceChildren();
+    richmenuToggle.textContent = menu.chat_bar_text;
+    richmenuElement.style.aspectRatio = `${menu.width} / ${menu.height}`;
+    richmenuElement.style.width = `min(100%, ${40 * menu.width / menu.height}vh)`;
+    const image = document.createElement('img');
+    image.src = menu.image_url;
+    image.alt = menu.chat_bar_text;
+    richmenuElement.append(image);
+    menu.areas.forEach((area, index) => {
+      const action = area.action;
+      const control = action.type === 'uri'
+        ? uriControl(action, 'hotspot', true) : document.createElement('button');
+      if (action.type === 'menu') {
+        control.type = 'button'; control.className = 'hotspot';
+        control.setAttribute('aria-label', action.label);
+        bindAction(control, { ...action, menu: menu.id, area: index, revision: menu.revision });
+      }
+      control.addEventListener('click', (event) => {
+        if (client.getSnapshot().status === 'sending') { event.preventDefault(); event.stopImmediatePropagation(); }
+      }, true);
+      control.style.left = `${100 * area.x / menu.width}%`;
+      control.style.top = `${100 * area.y / menu.height}%`;
+      control.style.width = `${100 * area.width / menu.width}%`;
+      control.style.height = `${100 * area.height / menu.height}%`;
+      richmenuElement.append(control);
+    });
+    richmenuState = { id: menu.id, open: richmenuOpenState(richmenuState, menu) };
+    setRichmenuOpen(richmenuState.open);
+  }
+  for (const control of richmenuElement.querySelectorAll('.hotspot')) {
+    const disabled = snapshot.status === 'sending' || control.dataset.alwaysDisabled === 'true';
+    control.disabled = disabled;
+    control.style.pointerEvents = disabled ? 'none' : '';
+    control.setAttribute('aria-disabled', String(disabled));
+    control.tabIndex = disabled ? -1 : 0;
+  }
+  return changed;
 };
 
 const watchMediaLoad = (element) => {
@@ -790,8 +896,9 @@ const render = (snapshot) => {
   const grewEphemeral = syncEphemeral(snapshot);
   syncBanner(snapshot);
   syncControls(snapshot);
+  const changedRichmenu = syncRichmenu(snapshot);
   videoCompletionQueue.flush();
-  if (grewHistory || grewEphemeral) {
+  if (grewHistory || grewEphemeral || changedRichmenu) {
     if (snapshot.status === 'sending' || wasStick || firstRender) {
       scrollToBottom(!firstRender);
     } else {

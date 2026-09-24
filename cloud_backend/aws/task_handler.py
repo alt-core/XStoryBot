@@ -151,6 +151,7 @@ def _process_record(record, dependencies, owner):
             dependencies['options'],
             log_values=True,
             failures=failures,
+            interface_name=params.get('interface'),
         )
         if failures:
             # 送信まで完了できなかった。claim を complete せず SQS の再試行と DLQ に任せる

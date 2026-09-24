@@ -1,5 +1,5 @@
 # coding: utf-8
-"""LINE Messaging API の呼出し。使うのは reply、push、rich menu の紐付けの3つだけ。
+"""LINE Messaging API の呼出し。reply、push、rich menuの管理と紐付けを扱う。
 
 https://developers.line.biz/ja/reference/messaging-api/
 
@@ -44,13 +44,14 @@ class LineApiError(Exception):
 
 
 class LineApiClient:
-    def __init__(self, channel_access_token, timeout=DEFAULT_TIMEOUT, endpoint=API_ENDPOINT):
+    def __init__(self, channel_access_token, timeout=DEFAULT_TIMEOUT, endpoint=API_ENDPOINT, data_endpoint='https://api-data.line.me'):
         self._headers = {
             'Authorization': f'Bearer {channel_access_token}',
             'Content-Type': 'application/json',
         }
         self._timeout = timeout
         self._endpoint = endpoint
+        self._data_endpoint = data_endpoint
 
     def reply(self, reply_token, messages):
         self._post('/v2/bot/message/reply', {
@@ -78,3 +79,42 @@ class LineApiClient:
             timeout=self._timeout)
         if not 200 <= response.status_code < 300:
             raise LineApiError.from_response(response)
+
+
+    def _request(self, method, url, *, body=None, data=None, content_type=None, timeout=None):
+        headers = dict(self._headers)
+        if content_type:
+            headers['Content-Type'] = content_type
+        response = requests.request(method, url, headers=headers,
+                                    data=json.dumps(body) if body is not None else data,
+                                    timeout=timeout or self._timeout)
+        if not 200 <= response.status_code < 300:
+            raise LineApiError.from_response(response)
+        return response.json() if response.content else {}
+
+    def create_rich_menu(self, menu, timeout=None):
+        return self._request('POST', self._endpoint + '/v2/bot/richmenu',
+                             body=menu, timeout=timeout)['richMenuId']
+
+    def upload_rich_menu_image(self, rich_menu_id, data, content_type, timeout=None):
+        self._request('POST', self._data_endpoint + f'/v2/bot/richmenu/{rich_menu_id}/content',
+                      data=data, content_type=content_type, timeout=timeout)
+
+    def get_rich_menu(self, rich_menu_id, timeout=None):
+        try:
+            return self._request('GET', self._endpoint + f'/v2/bot/richmenu/{rich_menu_id}', timeout=timeout)
+        except LineApiError as error:
+            if error.status_code == 404:
+                return None
+            raise
+
+    def get_default_rich_menu_id(self, timeout=None):
+        try:
+            return self._request('GET', self._endpoint + '/v2/bot/user/all/richmenu', timeout=timeout)['richMenuId']
+        except LineApiError as error:
+            if error.status_code == 404:
+                return None
+            raise
+
+    def set_default_rich_menu(self, rich_menu_id, timeout=None):
+        self._request('POST', self._endpoint + f'/v2/bot/user/all/richmenu/{rich_menu_id}', timeout=timeout)

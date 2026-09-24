@@ -79,6 +79,8 @@ npm等への公開は別作業です。現時点ではrepository内のpackageを
 
 参照UIのモックと回帰テストは[開発用確認手順](./webchat-development.md)へ分けています。
 
+LINEとWebchatでLIFFページのコードを共用できます。[LIFF連携仕様](./liff-webchat-api.md)に、LIFF用Botの状態遷移、イベント列、メニューからの発話、連携Botの設定をまとめています。
+
 ## browser保存と複数tab
 
 headless clientはstateと履歴をIndexedDB transactionで同時に更新します。Web Locksが利用できるbrowserでは同じ会話のnetwork requestも直列化し、利用できない場合はIndexedDBのstate ID比較で先にcommitされた応答だけを採用して履歴破損を防ぎます。
@@ -103,18 +105,24 @@ URI actionの通常HTTPS URLはsandbox付きiframeでチャット内viewerへ表
 
 Imagemapのactionは画像上のfocus可能なhotspotとして表示し、支援技術向けの`aria-label`を付けます。画像内の隠し要素や物語上の選択肢を一覧化しないため、可視fallback buttonは自動生成しません。画像が読めない利用者にも導線を明示する必要があるScenarioでは、画像のaltまたは前後のtextで必要な説明を用意してください。
 
+`liff_apps`を設定したWebchatでは、登録Botへの`@forward`を同じリクエスト内で順に実行します。会話とLIFFの状態を一式で保存し、LINE用の非同期転送は維持します。詳細は[LIFF連携仕様](./liff-webchat-api.md)を参照してください。
+
 次は初期対象外です。
 
-- `@delay`、`@forward`
+- `@delay`
 - group操作
 - server push
 - Carousel／Panel
 - Flex
 
-Rich menuはWebchatではno-opです。未知commandはdefault denyで`bot-not-web-compatible`を返します。対象Scenarioの導線で非対応機能が必要になった場合は、共通機能を増やす前にScenario導線の単純化または対象Botだけのserver保存型を検討してください。
+`allowed_commands`による追加許可でも、`@delay`とgroup操作は実行できません。`@forward`はLIFF連携の同期実行が用意された場合だけ使えます。Webchatの署名セーブを、通常の非同期タスクへ渡して実行することはできません。
+
+リッチメニューは[Bot単位の定義](./richmenu.md)を表示し、開閉・message／postback／URI操作に対応します。生のLINE IDによる指定はno-opです。未知commandはdefault denyで`bot-not-web-compatible`を返します。対象Scenarioの導線で非対応機能が必要になった場合は、共通機能を増やす前にScenario導線の単純化または対象Botだけのserver保存型を検討してください。
 
 ## ログ
 
 検証済みturnはrequest ID、conversation ID、state ID、revision、action、Scenario revision、scene、生成件数で追跡できます。外部HTTPはmethod、origin、status、byte数を記録します。
 
 raw state／postback token、署名鍵、認証header、API token、秘密設定は記録しません。例外は型とstack frameを記録しますが、秘密値を含み得る例外messageはWebchatのerror logへ出しません。
+
+会話とLIFFが同じ進行を共有する場合は、`liff_apps.<name>.bot`に会話Bot自身を指定できます。そのBotへ`webchat`と`liff`を設定し、LIFF操作では`$$service_name`が`liff`になります。フラグだけでなく現在のシーンも共有します。複数ページの登録、LINE用URLの読替え、LINE側の認証設定は[LIFF連携ガイド](./liff-webchat-api.md)を参照してください。

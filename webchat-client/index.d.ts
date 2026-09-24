@@ -1,3 +1,5 @@
+import type { LiffApp } from './liff-host.js';
+
 export type WebchatSender = {
   name: string;
   icon_url: string | null;
@@ -48,6 +50,14 @@ export type WebchatTurn = {
   messages: WebchatMessage[];
 };
 
+export type WebchatRichmenu = {
+  id: string; revision: string; image_url: string; width: number; height: number;
+  chat_bar_text: string; selected: boolean;
+  areas: Array<{ x: number; y: number; width: number; height: number;
+    action: { type: 'menu'; label: string; echo_text: string | null }
+      | { type: 'uri'; label: string; href: string } }>;
+};
+
 export type WebchatSnapshot = {
   status: 'idle' | 'loading' | 'ready' | 'sending' | 'error';
   persistence: 'indexeddb' | 'memory';
@@ -56,6 +66,8 @@ export type WebchatSnapshot = {
   turns: WebchatTurn[];
   messages: WebchatMessage[];
   activeResponse: WebchatMessage[];
+  richmenu: WebchatRichmenu | null;
+  liffApps: LiffApp[];
   error: WebchatClientError | null;
   notice: string | null;
 };
@@ -71,6 +83,8 @@ export type WebchatClient = {
   initialize(): Promise<WebchatSnapshot>;
   start(): Promise<WebchatSnapshot>;
   sendText(text: string): Promise<WebchatSnapshot>;
+  sendMenu(menu: string, area: number, revision: string): Promise<WebchatSnapshot>;
+  requestLiff(app: { id: string; url: string }, action: string): Promise<unknown[]>;
   sendPostback(
     token: string,
     options?: { silent?: boolean },

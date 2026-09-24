@@ -18,6 +18,7 @@ ASSET_SOURCES = {
     'style.css': 'static/webchat/style.css',
     'ui_logic.js': 'static/webchat/ui_logic.mjs',
     'client.js': 'webchat-client/index.js',
+    'liff-host.js': 'webchat-client/liff-host.js',
 }
 
 
@@ -56,7 +57,7 @@ def _page(source, api_base_url, bot, revision, origin):
         "default-src 'self'; base-uri 'none'; object-src 'none'; "
         "form-action 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
         f"connect-src 'self' {origin}; img-src 'self' https: {origin}; "
-        f"media-src 'self' https: {origin}; frame-src 'self' https:"
+        f"media-src 'self' https: {origin}; frame-src 'self' https: {origin}"
     )
     replacements = (
         ('data-webchat-api-base-url=""',
@@ -98,6 +99,7 @@ def export_webchat(api_base_url, bot, output):
     assets = {name: (PROJECT_ROOT / path).read_bytes() for name, path in ASSET_SOURCES.items()}
     script = assets['app.js'].decode('utf-8')
     script = _replace_once(script, "'../../webchat-client/index.js'", "'./client.js'")
+    script = _replace_once(script, "'../../webchat-client/liff-host.js'", "'./liff-host.js'")
     script = _replace_once(script, "'./ui_logic.mjs'", "'./ui_logic.js'")
     assets['app.js'] = script.encode('utf-8')
     digest = hashlib.sha256()
