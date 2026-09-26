@@ -68,11 +68,25 @@ class WebchatDevServerTest(unittest.TestCase):
                 self.assertIn('javascript', content_type)
                 handler.send_error.assert_not_called()
 
+    def test_画面テストは実UIを同originのiframeで検証し固定moduleだけを配信する(self):
+        page = self._get('/devtest/flow')
+        status, body, content_type = page._send.call_args.args
+        self.assertEqual(200, status)
+        self.assertIn('text/html', content_type)
+        self.assertIn(b'id="flow-test-result"', body)
+        self.assertIn(b'src="/devtest/flow.mjs"', body)
+        script = self._get('/devtest/flow.mjs?path=settings.yaml')
+        self.assertEqual((Path(__file__).parent / 'webchat_flow.browser.test.mjs').read_bytes(),
+                         script._send.call_args.args[1])
+        chat = self._get('/chat/ui-test')
+        self.assertEqual("'self'", chat._send.call_args.kwargs['frame_ancestors'])
+
     def test_保存テストrouteは任意pathを配信しない(self):
         for path in (
                 '/devtest/settings.yaml', '/devtest/../settings.yaml',
                 '/devtest/%2e%2e/settings.yaml',
                 '/devtest/storage.mjs/../settings.yaml',
+                '/devtest/flow.mjs/../settings.yaml',
                 '/tests/webchat_storage.browser.test.mjs'):
             with self.subTest(path=path):
                 handler = self._get(path)

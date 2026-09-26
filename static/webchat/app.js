@@ -167,8 +167,8 @@ const closeMediaViewer = () => {
     mediaViewer.close();
   } else {
     mediaViewer.removeAttribute('open');
-    clearMediaViewer();
   }
+  clearMediaViewer();
 };
 
 const showMediaViewer = (
@@ -286,7 +286,10 @@ mediaViewer.addEventListener('keydown', (event) => {
   event.preventDefault();
   closeMediaViewer();
 });
-mediaViewer.addEventListener('close', clearMediaViewer);
+mediaViewer.addEventListener('close', () => {
+  // 閉じた直後に開き直したviewerを、遅れて届くcloseで消さない。
+  if (!mediaViewer.hasAttribute('open')) clearMediaViewer();
+});
 
 // ---- メッセージのDOM生成 ----
 

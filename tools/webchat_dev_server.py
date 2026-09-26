@@ -401,6 +401,19 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         path = urlsplit(self.path).path
+        if path == '/devtest/flow':
+            body = '''<!doctype html><html lang="ja"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Webchat画面テスト</title></head><body>
+<h1>Webchat画面テスト</h1><pre id="flow-test-result">確認中</pre>
+<div id="flow-test-stage" style="max-width:100%;overflow:auto"></div>
+<script type="module" src="/devtest/flow.mjs"></script>
+</body></html>'''.encode('utf-8')
+            self._send(200, body, 'text/html; charset=utf-8')
+            return
+        if path == '/devtest/flow.mjs':
+            self._serve_file('tests/webchat_flow.browser.test.mjs')
+            return
         if path == '/devtest/storage':
             body = '''<!doctype html><html lang="ja"><head><meta charset="utf-8">
 <title>Webchat保存テスト</title></head><body>
@@ -422,7 +435,7 @@ class Handler(BaseHTTPRequestHandler):
                 frame_ancestors="'self'")
             return
         if re.fullmatch(r'/chat/[^/]+', path):
-            self._serve_file('static/webchat/index.html')
+            self._serve_file('static/webchat/index.html', frame_ancestors="'self'")
             return
         if path.startswith('/static/webchat/'):
             self._serve_file(path.lstrip('/'))
