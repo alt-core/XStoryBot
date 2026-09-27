@@ -21,7 +21,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from tools.export_webchat import ASSET_SOURCES, Parser, _page, _replace_once, write_site
+from tools.export_webchat import ASSET_SOURCES, Parser, _page, _replace_once, write_site, add_page_arguments, read_theme
 from tools.local_support import LocalInputError, read_json, write_json
 from tools.local_process import stop_on_sigterm
 
@@ -253,17 +253,18 @@ def worker(path):
     return result.get('exit_code', 0)
 
 
-def package_site(program, media_files, output):
+def package_site(program, media_files, output, *, title='Webchat', storage='indexeddb', theme_assets=None):
     sources = {**ASSET_SOURCES, **EXTRA_ASSETS}
     assets = {name: (PROJECT_ROOT / path).read_bytes() for name, path in sources.items()}
+    assets.update(theme_assets or {})
     script = assets['app.js'].decode('utf-8')
     script = _replace_once(script,
         "import { createWebchatClient, WebchatClientError } from '../../webchat-client/index.js';",
         "import { WebchatClientError } from './client.js';\nimport { createTrialClient } from './trial.js';")
     script = _replace_once(script, "'../../webchat-client/liff-host.js'", "'./liff-host.js'")
     script = _replace_once(script, "'./ui_logic.mjs'", "'./ui_logic.js'")
-    script = _replace_once(script, 'const client = createWebchatClient({ apiBaseUrl, bot });',
-                           "const client = createTrialClient({ bot, programUrl: new URL('./scenario.json', import.meta.url) });")
+    script = _replace_once(script, 'const client = createWebchatClient({ apiBaseUrl, bot, storage });',
+                           "const client = createTrialClient({ bot, programUrl: new URL('./scenario.json', import.meta.url), storage });")
     script = _replace_once(script, '`xstorybot-webchat-richmenu:${apiBaseUrl}|${bot}`', '`xstorybot-webchat-richmenu:trial:${bot}`')
     assets['app.js'] = script.encode('utf-8')
     for name in EXTRA_ASSETS:
@@ -278,11 +279,13 @@ def package_site(program, media_files, output):
     files['LICENSE'] = (PROJECT_ROOT / 'LICENSE').read_bytes()
     frame_origins = sorted({f"{urlsplit(app['url']).scheme}://{urlsplit(app['url']).netloc}"
                             for app in program['liff_apps'].values() if app['url'].startswith('http:')})
-    files['index.html'] = _page((PROJECT_ROOT / 'static/webchat/index.html').read_text(), '', program['bot'], revision, '', marker=MARKER, frame_origins=frame_origins)
+    files['index.html'] = _page((PROJECT_ROOT / 'static/webchat/index.html').read_text(), '', program['bot'], revision, '',
+                              marker=MARKER, frame_origins=frame_origins,
+                              title=title, storage=storage, themed=bool(theme_assets))
     entry = write_site(output, files, marker=MARKER,
                        inputs={(PROJECT_ROOT / path).resolve() for path in sources.values()} | {(PROJECT_ROOT / 'static/webchat/index.html').resolve(), (PROJECT_ROOT / 'LICENSE').resolve()})
     return {'ok': True, 'output': str(Path(output).resolve()), 'entry': entry,
-            'bot': program['bot'], 'revision': revision, 'files': sorted(files)}
+            'bot': program['bot'], 'revision': revision, 'files': sorted(files), 'title': title, 'storage': storage}
 
 
 def export_trial(args):
@@ -290,6 +293,7 @@ def export_trial(args):
     settings_path = Path(args.settings).resolve()
     cache = settings_path.parent / 'outputs' / '.trial-cache' / args.bot
     output = Path(args.output).resolve()
+    theme_assets = read_theme(args.theme, output)
     if output.is_relative_to(cache) or cache.is_relative_to(output):
         raise LocalInputError('公開先とビルドcacheは別のディレクトリにしてください')
     local_args = SimpleNamespace(**vars(args), command='build')
@@ -313,7 +317,8 @@ def export_trial(args):
             return {**built, 'warnings': warnings}
         program = read_json(program_path)
         warnings.extend(local_url_warnings(program))
-        result = package_site(program, built['media_files'], output)
+        result = package_site(program, built['media_files'], output,
+                              title=args.title, storage=args.storage, theme_assets=theme_assets)
         result['warnings'] = warnings
         result['sheets'] = source.get('source', {}).get('sheets', built['sheets'])
         return result
@@ -329,6 +334,7 @@ def main(argv=None):
     parser.add_argument('--tsv')
     parser.add_argument('--output', required=True)
     parser.add_argument('--timeout', type=float, default=600)
+    add_page_arguments(parser)
     try:
         args = parser.parse_args(argv)
         if not math.isfinite(args.timeout) or args.timeout <= 0:

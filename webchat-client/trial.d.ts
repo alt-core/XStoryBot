@@ -5,5 +5,6 @@ export function createTrialClient(options: {
   bot: string;
   programUrl: string | URL;
   fetch?: typeof globalThis.fetch;
+  storage?: 'indexeddb' | 'memory';
   indexedDB?: IDBFactory;
 }): WebchatClient;

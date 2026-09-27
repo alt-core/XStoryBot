@@ -118,6 +118,71 @@ async function storage(program, createTrialClient, programUrl) {
   } finally { clients.forEach(client => client.destroy()); await cleanSave(`trial:${bot}`); }
 }
 
+// 同じBotの永続保存とmemoryページを並べ、相互に影響しないことを確認する。
+async function exportOptions() {
+  await cleanSave(key);
+  const frames = [];
+  const opened = frame => waitFor(() => frame.contentDocument?.querySelector('#messages')?.textContent.includes('どちらの道') && frame.contentDocument, '初期画面を表示できません');
+  const open = async (path, width, scheme = 'normal') => {
+    const frame = document.createElement('iframe');
+    frame.src = path;
+    frame.style.cssText = `width:${width}px;height:844px;border:0;color-scheme:${scheme}`;
+    frames.push(frame); stage.append(frame);
+    return [frame, await opened(frame)];
+  };
+  const choose = async doc => {
+    [...doc.querySelectorAll('button')].find(button => button.textContent === '左の道').click();
+    await waitFor(() => doc.querySelector('#messages').textContent.includes('広場に着きました'), '会話が進みません');
+  };
+  try {
+    const [savedFrame, saved] = await open('./index.html', 390);
+    await choose(saved);
+    saved.querySelector('#richmenu-toggle').click();
+    const menuKey = `xstorybot-webchat-richmenu:${key}`;
+    const savedMenu = localStorage.getItem(menuKey);
+    const [oneFrame, one] = await open('./memory/index.html', 320, 'light');
+    const [, two] = await open('./memory/index.html', 1440, 'dark');
+    for (const doc of [one, two]) {
+      assert(doc.documentElement.dataset.webchatStorage === 'memory', 'memory指定がありません');
+      const title = doc.querySelector('#chat-title');
+      assert(doc.title !== 'Webchat' && doc.title === title.textContent, '題名が一致しません');
+      assert(title.getBoundingClientRect().right <= doc.querySelector('#reset').getBoundingClientRect().left, '題名が操作ボタンに重なります');
+      assert(!doc.querySelector('#richmenu').hidden, '他ページのメニュー保存を読みました');
+      const styles = doc.defaultView.getComputedStyle(doc.documentElement);
+      const dark = doc.defaultView.matchMedia('(prefers-color-scheme: dark)').matches;
+      assert(dark === (doc === two), '明暗の検証条件を適用できません');
+      assert(styles.getPropertyValue('--accent').trim() === (dark ? '#8cd0c7' : '#28716a'), 'テーマが配色に反映されません');
+      const background = doc.defaultView.getComputedStyle(doc.querySelector('.chat-header')).backgroundImage;
+      assert(background.includes('/theme/header.svg'), 'テーマの画像参照がありません');
+      const image = new Image(); image.src = background.slice(5, -2);
+      await image.decode();
+    }
+    await choose(one);
+    one.querySelector('#richmenu [aria-label="ページを開く"]').click();
+    const child = await waitFor(() => one.querySelector('.link-viewer-frame')?.contentDocument?.querySelector('#events')?.textContent.includes('広場') && one.querySelector('.link-viewer-frame').contentDocument, 'memoryのLIFFが親の進行を取得できません');
+    child.querySelector('[data-action="bump"]').click();
+    await waitFor(() => child.querySelector('#events').textContent.includes('展望台'), 'memoryのLIFFが進みません');
+    child.querySelector('#send').click();
+    await waitFor(() => one.querySelector('#messages').textContent.includes('持ち物を確認しました'), 'memoryのLIFFから発話できません');
+    assert(!two.querySelector('#messages').textContent.includes('広場に着きました'), '別のmemoryページが進みました');
+    one.querySelector('#richmenu-toggle').click();
+    assert(one.querySelector('#richmenu').hidden, 'memory内でメニューを閉じられません');
+    one.querySelector('#richmenu-toggle').click();
+    assert(localStorage.getItem(menuKey) === savedMenu, 'memoryがメニューの永続保存を書き換えました');
+    one.querySelector('#richmenu-toggle').click();
+    oneFrame.contentWindow.location.reload();
+    await waitFor(() => oneFrame.contentDocument !== one, 'memoryを再読み込みできません');
+    const fresh = await opened(oneFrame);
+    await waitFor(() => fresh.querySelector('#richmenu .hotspot'), 'memoryのメニューを読み込めません');
+    assert(!fresh.querySelector('#richmenu').hidden, '再読み込み後もメニューを保持しています');
+    savedFrame.contentWindow.location.reload();
+    const restored = await waitFor(() => savedFrame.contentDocument !== saved && savedFrame.contentDocument?.querySelector('#messages')?.textContent.includes('広場に着きました') && savedFrame.contentDocument, '永続保存が失われました');
+    assert(!restored.querySelector('#messages').textContent.includes('持ち物を確認しました'), 'memoryの進行が永続保存へ混入しました');
+    await waitFor(() => restored.querySelector('#richmenu .hotspot'), '保存したメニューを読み込めません');
+    assert(restored.querySelector('#richmenu').hidden, '永続保存のメニュー開閉が失われました');
+  } finally { frames.forEach(frame => frame.remove()); await cleanSave(key); }
+}
+
 try {
   assert(location.hostname === '127.0.0.1', 'このテストは127.0.0.1の専用静的サーバーで実行してください');
   const html = new DOMParser().parseFromString(await (await fetch('./index.html')).text(), 'text/html');
@@ -134,6 +199,10 @@ try {
   }
   await storage(program, createTrialClient, programUrl);
   output.textContent += '\n実IndexedDB・並行入力・epoch更新・reset・履歴削除に成功';
+  if (new URLSearchParams(location.search).has('options')) {
+    await exportOptions();
+    output.textContent += '\nmemoryのページ分離・LIFF・再読み込み・題名・テーマ・素材読込に成功';
+  }
   output.dataset.status = 'passed';
 } catch (error) {
   output.textContent += `\n失敗: ${error.message || error}`;

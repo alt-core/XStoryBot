@@ -24,15 +24,23 @@ await client.start();
 
 pageを破棄する時は`unsubscribe()`と`client.destroy()`を呼びます。
 
+## 保存方式
+
+`createWebchatClient`と`createTrialClient`は、`storage: 'indexeddb' | 'memory'`を受け付けます。既定は`indexeddb`で、ブラウザ保存が利用できない場合は従来どおりメモリーへ切り替えます。
+
+`storage: 'memory'`では、そのclientの進行・履歴をページ内だけに保持し、IndexedDB・localStorage・タブ間通知・共有lockを使いません。同じBotのclientを別タブで作っても独立し、`reset()`や`clearHistory()`は他のclientや過去の永続保存を変更しません。再読み込みや新規タブでは新しく開始し、タブの切替やブラウザの「戻る・進む」によるページ復元では進行を維持します。LIFFも親clientと同じ進行を使います。
+
+`indexedDB`引数はテスト等のfactory差替え用です。メモリー保存の指定には`storage`を使ってください。参照UIは`<html data-webchat-storage="memory">`でも指定でき、[書き出しCLI](../docs/webchat-export.md)の`--storage memory`はこの設定を生成します。参照UIのメニュー開閉もmemory時は永続保存しません。
+
 ## 公開API
 
-- `initialize()`: IndexedDBとtab間通知を初期化し、保存済み状態を読み込みます。
+- `initialize()`: 選択した保存方式を初期化します。indexeddbではtab間通知と保存済み状態の読込も行います。
 - `start()`: stateがなければ新しい会話を開始します。既存stateがあればrequestを送りません。
 - `sendText(text)`: 通常textを1 turn送ります。
 - `requestLiff(app, action)`: snapshotの`liffApps`から選んだページのBotを実行し、保存後にイベント配列を返します。
 - `sendPostback(token)`: APIから受け取ったopaque postback tokenを送ります。
 - `sendMenu(menu, area, revision)`: 表示中のリッチメニューの領域を操作します。
-- `reset()`: このBotのbrowser保存を消し、新しい会話を開始します。
+- `reset()`: 選択した保存先の進行と履歴を消し、新しい会話を開始します。
 - `clearHistory()`: 最新stateを残し、表示履歴だけを消します。
 - `subscribe(listener)`: immutable snapshotを購読します。
 - `getSnapshot()`／`getServerSnapshot()`: client／SSR用snapshotを返します。

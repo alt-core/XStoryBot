@@ -52,7 +52,50 @@ def _replace_once(source, old, new):
     return source.replace(old, new, 1)
 
 
-def _page(source, api_base_url, bot, revision, origin, marker=EXPORT_MARKER, frame_origins=()):
+def _title_argument(value):
+    if not value.strip():
+        raise argparse.ArgumentTypeError('題名には空でない文字列を指定してください')
+    return value
+
+
+def add_page_arguments(parser):
+    parser.add_argument('--title', default='Webchat', type=_title_argument, help='画面とブラウザのタブに表示する題名')
+    parser.add_argument('--storage', choices=('indexeddb', 'memory'), default='indexeddb', help='進行の保存方式')
+    parser.add_argument('--theme', help='style.cssと公開する素材を入れたフォルダ')
+
+
+def read_theme(theme, output):
+    """明示された公開用フォルダだけを、相対参照を保って同梱する。"""
+    if theme is None:
+        return {}
+    root, output = Path(theme).resolve(), Path(output).resolve()
+    if not root.is_dir() or not (root / 'style.css').is_file():
+        raise ValueError('テーマフォルダの直下にstyle.cssを置いてください')
+    if root.is_relative_to(output) or output.is_relative_to(root):
+        raise ValueError('テーマと出力先は互いに含まれない別のフォルダにしてください')
+    def scan_error(error):
+        raise error
+    assets = {}
+    for directory, folders, filenames in os.walk(root, onerror=scan_error):
+        folders[:] = sorted(name for name in folders if not name.startswith('.'))
+        filenames = sorted(name for name in filenames if not name.startswith('.'))
+        for name in folders + filenames:
+            if (Path(directory) / name).is_symlink():
+                raise ValueError('テーマ内のシンボリックリンクは同梱できません')
+        for name in filenames:
+            path = Path(directory) / name
+            if not path.is_file():
+                raise ValueError('テーマには通常のファイルとフォルダを置いてください')
+            assets['theme/' + path.relative_to(root).as_posix()] = path.read_bytes()
+    return assets
+
+
+def _page(source, api_base_url, bot, revision, origin, marker=EXPORT_MARKER, frame_origins=(),
+          *, title='Webchat', storage='indexeddb', themed=False):
+    if not isinstance(title, str) or not title.strip():
+        raise ValueError('題名には空でない文字列を指定してください')
+    if storage not in ('indexeddb', 'memory'):
+        raise ValueError('storageはindexeddbかmemoryを指定してください')
     policy = (
         "default-src 'self'; base-uri 'none'; object-src 'none'; "
         "form-action 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
@@ -63,10 +106,15 @@ def _page(source, api_base_url, bot, revision, origin, marker=EXPORT_MARKER, fra
         ('data-webchat-api-base-url=""',
          f'data-webchat-api-base-url="{escape(api_base_url, quote=True)}" {marker}'),
         ('data-webchat-bot=""', f'data-webchat-bot="{escape(bot, quote=True)}"'),
+        ('data-webchat-storage="indexeddb"', f'data-webchat-storage="{storage}"'),
+        ('<title>Webchat</title>', f'<title>{escape(title)}</title>'),
+        ('<h1 id="chat-title">Webchat</h1>', f'<h1 id="chat-title">{escape(title)}</h1>'),
         ('<!-- WEBCHAT_EXPORT_META -->',
          f'<meta http-equiv="Content-Security-Policy" content="{escape(policy, quote=True)}">\n'
          '  <meta name="referrer" content="no-referrer">'),
-        ('href="/static/webchat/style.css"', f'href="./assets/{revision}/style.css"'),
+        ('<link rel="stylesheet" href="/static/webchat/style.css">',
+         f'<link rel="stylesheet" href="./assets/{revision}/style.css">'
+         + (f'\n  <link rel="stylesheet" href="./assets/{revision}/theme/style.css">' if themed else '')),
         ('src="/static/webchat/app.js"', f'src="./assets/{revision}/app.js"'),
     )
     for old, new in replacements:
@@ -119,7 +167,7 @@ def write_site(output, files, *, inputs=(), marker=EXPORT_MARKER):
     return str(entry)
 
 
-def export_webchat(api_base_url, bot, output):
+def export_webchat(api_base_url, bot, output, *, title='Webchat', storage='indexeddb', theme=None):
     api_base_url, origin = _api_url(api_base_url)
     if not isinstance(bot, str) or not bot.strip():
         raise ValueError('Bot名を指定してください')
@@ -127,8 +175,10 @@ def export_webchat(api_base_url, bot, output):
     if output.exists() and not output.is_dir():
         raise ValueError('出力先にはディレクトリを指定してください')
 
-    # 固定した公開ソースだけを読む。settingsやScenario、媒体は取り込まない。
+    # 参照UIと明示された公開テーマを読む。Bot設定やScenarioは取り込まない。
     assets = {name: (PROJECT_ROOT / path).read_bytes() for name, path in ASSET_SOURCES.items()}
+    theme_assets = read_theme(theme, output)
+    assets.update(theme_assets)
     script = assets['app.js'].decode('utf-8')
     script = _replace_once(script, "'../../webchat-client/index.js'", "'./client.js'")
     script = _replace_once(script, "'../../webchat-client/liff-host.js'", "'./liff-host.js'")
@@ -139,7 +189,7 @@ def export_webchat(api_base_url, bot, output):
         digest.update(name.encode('utf-8') + b'\0' + data + b'\0')
     revision = digest.hexdigest()[:16]
     page = _page((PROJECT_ROOT / 'static/webchat/index.html').read_text(encoding='utf-8'),
-                 api_base_url, bot, revision, origin)
+                 api_base_url, bot, revision, origin, title=title, storage=storage, themed=bool(theme_assets))
     files = {f'assets/{revision}/{name}': data for name, data in assets.items()}
     files['LICENSE'] = (PROJECT_ROOT / 'LICENSE').read_bytes()
     files['index.html'] = page
@@ -151,6 +201,7 @@ def export_webchat(api_base_url, bot, output):
     return {
         'ok': True, 'output': str(output), 'entry': str(entry),
         'api_base_url': api_base_url, 'bot': bot,
+        'title': title, 'storage': storage,
         'revision': revision, 'files': sorted(files),
     }
 
@@ -160,9 +211,11 @@ def main(argv=None):
     parser.add_argument('--api-base-url', required=True, help='Chat APIのHTTP/HTTPS基点URL')
     parser.add_argument('--bot', required=True, help='接続するBot名')
     parser.add_argument('--output', required=True, help='静的ファイルの出力ディレクトリ')
+    add_page_arguments(parser)
     try:
         args = parser.parse_args(argv)
-        result = export_webchat(args.api_base_url, args.bot, args.output)
+        result = export_webchat(args.api_base_url, args.bot, args.output,
+                               title=args.title, storage=args.storage, theme=args.theme)
     except (OSError, ValueError) as error:
         print(json.dumps({'ok': False, 'error': str(error)}, ensure_ascii=False))
         return 2

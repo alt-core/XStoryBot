@@ -12,7 +12,7 @@ function resolveUrls(value, base) {
   ]));
 }
 
-export function createTrialClient({ bot, programUrl, fetch: fetchImpl = globalThis.fetch?.bind(globalThis), indexedDB } = {}) {
+export function createTrialClient({ bot, programUrl, fetch: fetchImpl = globalThis.fetch?.bind(globalThis), indexedDB, storage } = {}) {
   if (!bot || !programUrl) throw new TypeError('botとprogramUrlが必要です');
   let runtime = null;
   const local = {
@@ -33,5 +33,5 @@ export function createTrialClient({ bot, programUrl, fetch: fetchImpl = globalTh
     restore: head => runtime.restore(head),
     execute: body => runtime.execute(body),
   };
-  return _createWebchatSession({ bot, indexedDB }, local);
+  return _createWebchatSession({ bot, indexedDB, storage }, local);
 }

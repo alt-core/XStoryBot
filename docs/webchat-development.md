@@ -49,7 +49,7 @@ image / audio / video / button / imagemap / long / more / slow / error / liff
 ## Node回帰テスト
 
 ```sh
-node --test webchat-client/test.mjs webchat-client/liff-host.test.mjs tests/webchat_ui_logic.test.mjs
+node --test webchat-client/test.mjs webchat-client/storage.test.mjs webchat-client/trial.test.mjs webchat-client/liff-host.test.mjs tests/webchat_ui_logic.test.mjs
 ```
 
 headless clientに加え、同一controlの二重発火防止、動画完了actionの送信中待機と一回送信、controlなし動画の再生切替、URIのiframe／外部tab分類を確認します。

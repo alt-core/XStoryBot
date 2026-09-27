@@ -14,7 +14,8 @@ const pathParts = location.pathname.split('/').filter(Boolean);
 const pageConfig = document.documentElement.dataset;
 const bot = pageConfig.webchatBot || decodeURIComponent(pathParts[pathParts.length - 1] || 'bot');
 const apiBaseUrl = pageConfig.webchatApiBaseUrl || location.origin;
-const client = createWebchatClient({ apiBaseUrl, bot });
+const storage = pageConfig.webchatStorage || 'indexeddb';
+const client = createWebchatClient({ apiBaseUrl, bot, storage });
 
 const scroller = document.querySelector('#scroller');
 const messagesElement = document.querySelector('#messages');
@@ -335,7 +336,9 @@ const uriControl = (action, className, hideLabel = false) => {
 
 const richmenuStorageKey = `xstorybot-webchat-richmenu:${apiBaseUrl}|${bot}`;
 let richmenuState = null;
-try { richmenuState = JSON.parse(localStorage.getItem(richmenuStorageKey)); } catch (_error) {}
+if (storage !== 'memory') {
+  try { richmenuState = JSON.parse(localStorage.getItem(richmenuStorageKey)); } catch (_error) {}
+}
 let renderedRichmenu = null;
 const setRichmenuOpen = (open) => {
   richmenuElement.hidden = !open;
@@ -345,7 +348,9 @@ richmenuToggle.addEventListener('click', () => {
   const wasBottom = stick;
   richmenuState = { id: client.getSnapshot().richmenu.id, open: richmenuElement.hidden };
   setRichmenuOpen(richmenuState.open);
-  try { localStorage.setItem(richmenuStorageKey, JSON.stringify(richmenuState)); } catch (_error) {}
+  if (storage !== 'memory') {
+    try { localStorage.setItem(richmenuStorageKey, JSON.stringify(richmenuState)); } catch (_error) {}
+  }
   if (wasBottom) requestAnimationFrame(() => scrollToBottom(false));
 });
 const syncRichmenu = (snapshot) => {
@@ -943,7 +948,9 @@ draft.addEventListener('keydown', (event) => {
 
 resetButton.addEventListener('click', () => {
   const message = '会話を最初からはじめますか?\n'
-    + 'このブラウザに保存された履歴も削除されます。';
+    + (client.getSnapshot().persistence === 'memory'
+      ? 'このページの履歴も削除されます。'
+      : 'このブラウザに保存された履歴も削除されます。');
   if (!window.confirm(message)) return;
   client.reset().catch(() => {});
 });

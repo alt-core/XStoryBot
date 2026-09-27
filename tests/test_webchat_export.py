@@ -107,6 +107,66 @@ class WebchatExportTest(unittest.TestCase):
             self.assertEqual(data, (self.output / name).read_bytes())
         self.assertEqual(b'keep user file', own_file.read_bytes())
 
+    def test_題名と保存方式とテーマをCLIで指定し相対素材を維持する(self):
+        theme = self.root / 'theme'
+        (theme / 'fonts').mkdir(parents=True)
+        (theme / 'style.css').write_text('@import "./colors.css";\n@font-face {font-family: Demo; src: url("./fonts/demo.woff2");}')
+        (theme / 'colors.css').write_text(':root {--accent: #334455;}')
+        (theme / 'fonts/demo.woff2').write_bytes(b'artificial-font')
+        (theme / '.DS_Store').write_bytes(b'not public')
+        (theme / '.private').mkdir()
+        (theme / '.private/key').write_bytes(b'not public')
+        title = '作品<&"</title><script>test</script>'
+        stdout = io.StringIO()
+        with contextlib.redirect_stdout(stdout):
+            code = export_webchat.main(['--api-base-url', 'https://api.example.test', '--bot', 'bot',
+                '--output', str(self.output), '--title', title, '--storage', 'memory', '--theme', str(theme)])
+        self.assertEqual(0, code)
+        result = json.loads(stdout.getvalue())
+        html = (self.output / 'index.html').read_text()
+        page = Page(html)
+        self.assertIn('&lt;/title&gt;&lt;script&gt;', html)
+        self.assertEqual(1, sum(tag == 'script' for tag, _attrs in page.tags))
+        self.assertEqual(2, html.count(export_webchat.escape(title)))
+        self.assertEqual('memory', next(attrs for tag, attrs in page.tags if tag == 'html')['data-webchat-storage'])
+        links = [attrs['href'] for tag, attrs in page.tags if tag == 'link' and attrs.get('rel') == 'stylesheet']
+        self.assertEqual([f'./assets/{result["revision"]}/style.css', f'./assets/{result["revision"]}/theme/style.css'], links)
+        prefix = f'assets/{result["revision"]}/theme/'
+        self.assertEqual({'style.css', 'colors.css', 'fonts/demo.woff2'},
+                         {name.removeprefix(prefix) for name in result['files'] if name.startswith(prefix)})
+        page_url = 'https://static.example.test/games/demo/index.html'
+        font_url = urljoin(urljoin(page_url, links[-1]), 'fonts/demo.woff2')
+        self.assertEqual(b'artificial-font', (self.output / urlsplit(font_url).path.removeprefix('/games/demo/')).read_bytes())
+        (theme / 'fonts/demo.woff2').write_bytes(b'changed-font')
+        updated = export_webchat.export_webchat('https://api.example.test', 'bot', self.output, theme=theme)
+        self.assertNotEqual(result['revision'], updated['revision'])
+        self.assertTrue((self.output / prefix / 'fonts/demo.woff2').exists())
+
+    def test_テーマの参照範囲と不正設定を検査し公開済み入口を保つ(self):
+        export_webchat.export_webchat('https://api.example.test', 'bot', self.output)
+        before = (self.output / 'index.html').read_bytes()
+        theme = self.root / 'theme'
+        theme.mkdir()
+        for options in ({'theme': theme}, {'title': '  '}, {'storage': 'unknown'}):
+            with self.subTest(options=options), self.assertRaises(ValueError):
+                export_webchat.export_webchat('https://api.example.test', 'bot', self.output, **options)
+            self.assertEqual(before, (self.output / 'index.html').read_bytes())
+        (theme / 'style.css').write_text(':root {}')
+        for target in (self.root / 'secret', self.root / 'other'):
+            if target.name == 'secret':
+                target.write_text('非公開')
+            else:
+                target.mkdir()
+            link = theme / 'linked'
+            link.symlink_to(target)
+            with self.assertRaises(ValueError):
+                export_webchat.export_webchat('https://api.example.test', 'bot', self.output, theme=theme)
+            self.assertEqual(before, (self.output / 'index.html').read_bytes())
+            link.unlink()
+        for output in (theme, theme / 'site', self.root):
+            with self.subTest(output=output), self.assertRaises(ValueError):
+                export_webchat.read_theme(theme, output)
+
     def test_無関係なdirと不正入力は既存内容を変更しない(self):
         self.output.mkdir()
         existing = self.output / 'index.html'
@@ -200,6 +260,24 @@ runpy.run_path(sys.argv[0], run_name='__main__')
                 self.assertFalse(json.loads(stdout.getvalue())['ok'])
                 self.assertNotIn('Traceback', stdout.getvalue() + stderr.getvalue())
         self.assertEqual(b'preserve', target.read_bytes())
+
+    def test_空題名は両CLIとも書出し処理を始める前に診断する(self):
+        from tools import export_webchat_trial
+        cases = (
+            (export_webchat, 'export_webchat', ['--api-base-url', 'https://api.example.test']),
+            (export_webchat_trial, 'export_trial', ['--settings', str(self.root / 'unread.yaml')]),
+        )
+        for module, entry, extra in cases:
+            for title in ('', ' \t\n'):
+                with self.subTest(cli=entry, title=title), patch.object(module, entry,
+                        side_effect=AssertionError('設定読込・取得・ビルドは不要です')) as run:
+                    output = io.StringIO()
+                    with contextlib.redirect_stdout(output):
+                        code = module.main([*extra, '--bot', 'bot', '--output', str(self.output), '--title', title])
+                    self.assertEqual(2, code)
+                    self.assertIn('題名', json.loads(output.getvalue())['error'])
+                    run.assert_not_called()
+                    self.assertFalse(self.output.exists())
 
 
 if __name__ == '__main__':

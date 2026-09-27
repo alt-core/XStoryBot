@@ -345,6 +345,11 @@ export function _createWebchatSession(options, local = null) {
   if (!options?.bot || (!local && !options?.apiBaseUrl)) {
     throw new TypeError('apiBaseUrlとbotが必要です');
   }
+  const storageMode = options.storage ?? 'indexeddb';
+  if (!['indexeddb', 'memory'].includes(storageMode)) {
+    throw new TypeError('storageはindexeddbかmemoryを指定してください');
+  }
+  const memoryOnly = storageMode === 'memory';
   const apiBaseUrl = local ? null : String(options.apiBaseUrl).replace(/\/+$/, '');
   const bot = String(options.bot);
   const key = local ? `trial:${bot}` : `${apiBaseUrl}|${bot}`;
@@ -388,6 +393,7 @@ export function _createWebchatSession(options, local = null) {
   };
 
   const notify = () => {
+    if (storage.kind !== 'indexeddb') return;
     if (channel) {
       channel.postMessage({ type: 'updated' });
       return;
@@ -426,7 +432,7 @@ export function _createWebchatSession(options, local = null) {
         }
         if (generation !== lifecycle) return snapshot;
       }
-      if (options.indexedDB || globalThis.indexedDB) {
+      if (!memoryOnly && (options.indexedDB || globalThis.indexedDB)) {
         try {
           const candidate = new IndexedDbStorage(
             options.indexedDB || globalThis.indexedDB, key);
@@ -578,7 +584,7 @@ export function _createWebchatSession(options, local = null) {
   };
 
   const runLocked = async (callback) => {
-    if (globalThis.navigator?.locks?.request) {
+    if (!memoryOnly && globalThis.navigator?.locks?.request) {
       return globalThis.navigator.locks.request(lockName, callback);
     }
     return callback();

@@ -101,5 +101,6 @@ export function createWebchatClient(options: {
   apiBaseUrl: string;
   bot: string;
   fetch?: typeof globalThis.fetch;
+  storage?: 'indexeddb' | 'memory';
   indexedDB?: IDBFactory;
 }): WebchatClient;

@@ -112,6 +112,10 @@ button, a { -webkit-tap-highlight-color: transparent; }
 }
 
 .chat-header h1 {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   margin: 0;
   font-size: 1.0625rem;
   font-weight: 650;
@@ -119,6 +123,7 @@ button, a { -webkit-tap-highlight-color: transparent; }
 }
 
 .header-button {
+  flex-shrink: 0;
   border: 1px solid var(--hairline);
   border-radius: 999px;
   background: transparent;

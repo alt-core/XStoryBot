@@ -51,10 +51,10 @@ class TrialExportTest(unittest.TestCase):
         self.case._write_rows()
         self.case._write_settings()
 
-    def run_export(self, expected=0):
+    def run_export(self, expected=0, extra=()):
         completed = subprocess.run([
             sys.executable, str(CLI), '--settings', str(self.case.settings_path), '--bot', 'bot',
-            '--tsv', str(self.case.manifest_path), '--output', str(self.output), '--timeout', '10',
+            '--tsv', str(self.case.manifest_path), '--output', str(self.output), '--timeout', '10', *extra,
         ], env=self.case.environment, cwd=self.case.root, capture_output=True, text=True, timeout=25)
         self.assertNotIn(fixture.GUARD_MARKER, completed.stdout + completed.stderr)
         self.assertEqual(expected, completed.returncode, completed.stdout + '\n' + completed.stderr)
@@ -78,6 +78,19 @@ class TrialExportTest(unittest.TestCase):
         app = (self.output / f"assets/{result['revision']}/app.js").read_text()
         self.assertIn('createTrialClient({ bot, programUrl:', app)
         self.assertIn('xstorybot-webchat-richmenu:trial:', app)
+
+    def test_体験版も題名とメモリー保存とテーマを同じ指定で配布する(self):
+        theme = self.case.root / 'theme'
+        theme.mkdir()
+        (theme / 'style.css').write_text(':root {--accent: #123456;}')
+        result = self.run_export(extra=['--title', '短い体験', '--storage', 'memory', '--theme', str(theme)])
+        html = (self.output / 'index.html').read_text()
+        self.assertIn('<title>短い体験</title>', html)
+        self.assertIn('<h1 id="chat-title">短い体験</h1>', html)
+        self.assertIn('data-webchat-storage="memory"', html)
+        root = self.output / 'assets' / result['revision']
+        self.assertEqual((theme / 'style.css').read_bytes(), (root / 'theme/style.css').read_bytes())
+        self.assertIn("programUrl: new URL('./scenario.json', import.meta.url), storage", (root / 'app.js').read_text())
 
     def test_参照媒体だけを同梱し再生成で旧assetと利用者fileを保つ(self):
         image = self.case.root / 'picture.png'

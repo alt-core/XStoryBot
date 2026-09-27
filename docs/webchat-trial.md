@@ -25,6 +25,8 @@ python3 -m http.server 8767 --bind 127.0.0.1 --directory outputs/trial-site
 
 同梱ページは親子通信の動作確認用です。アプリケーション向けのページ側SDKはXStoryLIFFで管理します。実際の公開では、設定中のLIFFページURLを公開先へ変更し、ページのparentOriginと配信元のframe-ancestorsをWebchatの配信元へ合わせてください。
 
+書き出しには`--title '短い物語' --storage memory --theme examples/webchat-theme`も指定できます。`memory`なら再読み込みや新規タブで最初から始まり、他タブや以前の保存へ影響しません。未指定ならブラウザ保存で続行します。題名・公開テーマフォルダの形式は[API版と共通](webchat-export.md#題名保存方式見た目を指定する)です。
+
 ## 入力と設定
 
 体験版は、例のような**書き出し専用の設定ファイル**で管理することを推奨します。同じSheetsドキュメントを参照でき、シートを別のファイルへ複製する必要はありません。設定項目の形式は通常版と共通ですが、体験版Botをサーバーが読む本番設定へ追加する必要はありません。
@@ -148,7 +150,7 @@ LIFFやメニュー等のURL欄に`127.0.0.1`、`localhost`、`::1`等のloopbac
 - ビルド時は外部画像の取得があり得ます。`local.assets`で手元のファイルを対応付けられ、`local.allow_external_media: false`ならビルド時の外部媒体取得を禁止できます。
 - 非公開のビルドcacheは設定ファイル横の`outputs/.trial-cache/<bot>`へ置きます。cache、元設定、資格情報、pickle、SQLiteは配布しません。別のコンテンツ用リポジトリでも`.trial-cache/`をGit管理から除外してください。
 - 再生成では内容hash付きのassetを先に置き、index.htmlを最後に更新します。旧assetと利用者が追加したページは自動削除しません。アップロードも入口を最後にしてください。
-- 進行は配信originとBot名に対応する体験版専用キーで保存し、通常版と混ぜません。同じoriginで複数の体験版を分離する場合はBot名も分けます。
+- 既定では進行を配信originとBot名に対応する体験版専用キーで保存し、通常版と混ぜません。同じoriginで複数の体験版を分離する場合はBot名も分けます。`--storage memory`なら各ページ内だけで保持します。
 - 台詞・媒体だけの修正ではepochを維持できます。シーン・生成ラベル・待ち状態等を非互換に変える場合は`scenario_compatibility_epoch`を変えます。不一致では保存を黙って捨てず「最初から」を案内します。
 - ブラウザ保存が使えなければ、そのページ内だけの進行へ切り替えて通知します。複数タブの競合では先に確定した保存を維持します。
 
@@ -162,7 +164,7 @@ LIFFやメニュー等のURL欄に`127.0.0.1`、`localhost`、`::1`等のloopbac
 
 ```sh
 ./test.sh
-node --test webchat-client/test.mjs webchat-client/trial.test.mjs webchat-client/liff-host.test.mjs tests/webchat_ui_logic.test.mjs
+node --test webchat-client/test.mjs webchat-client/storage.test.mjs webchat-client/trial.test.mjs webchat-client/liff-host.test.mjs tests/webchat_ui_logic.test.mjs
 ```
 
 PythonとJSは`tests/fixtures/trial/`の台本・期待値を共有します。通常テストはfixtureを書き換えません。意図して書き出し形式を変えた場合だけ、`python3 -m tests.test_trial_scenario --write-fixture`でprogram.jsonを生成し、差分を確認してください。
@@ -175,3 +177,15 @@ cp examples/trial/test.html outputs/trial-site/trial-test.html
 ```
 
 [画面・保存テスト](http://127.0.0.1:8767/trial-test.html)で、4画面サイズの選択・媒体・メニュー・LIFF・再開、実IndexedDB、並行入力、epoch変更、reset、履歴削除を検証します。実機のキーボードや各モバイルブラウザ固有の挙動までは再現しません。
+
+保存方式とテーマも確認する場合は、同じ例を追加で書き出します。
+
+```sh
+python3 tools/export_webchat_trial.py \
+  --settings examples/trial/settings.yaml --bot trial-demo \
+  --output outputs/trial-site/memory --storage memory \
+  --title 'スマートフォンの幅でも操作しやすい長い題名の例' \
+  --theme examples/webchat-theme
+```
+
+[追加オプションの画面テスト](http://127.0.0.1:8767/trial-test.html?options=1)では、同一Botの永続保存と複数のmemoryページを同時に開き、進行・LIFF・メニュー開閉が混ざらないこと、題名とテーマが反映されることも確認します。
