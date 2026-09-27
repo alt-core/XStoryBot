@@ -68,6 +68,7 @@ instance/
 /AGENTS.md
 /.planning/
 /outputs/
+.trial-cache/
 
 # PyBuilder
 target/

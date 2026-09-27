@@ -1,0 +1,49 @@
+{
+  "tables": [
+    ["体験版", [
+      ["##line.follow", "案内役:\n入口です"],
+      ["", "＞", "左", "右"],
+      ["", "左の道"],
+      ["", "*終点"],
+      ["", "/else"],
+      ["", "右の道"],
+      ["", "*終点"],
+      ["", "/end"],
+      ["##please-select", "選択してください"],
+      ["", "@show_quick_reply_choices"],
+      ["##error_unhandled_action", "入力が見つかりません"],
+      ["##error_invalid_label", "移動先が見つかりません"],
+      ["##liff.open", "{{\"event\":\"open\"}}"],
+      ["##liff.move", "*終点"],
+      ["#help", "説明です"],
+      ["*終点", "到着しました"],
+      ["/yes/NLX", "正規表現に一致"],
+      ["hello", "こんにちは"],
+      ["/#help/", "文字として受信しました"],
+      ["順送り", "@or"],
+      ["次のブロック", "条件を調べずに続行しました"]
+    ]]
+  ],
+  "cases": [
+    {"name": "選択待ちと再提示", "steps": [
+      {"input": {"type":"start"}, "expect": {"texts":["入口です"],"choices":["左","右"],"scene":"体験版/","waiting":true}},
+      {"input": {"type":"text","text":"不明"}, "expect": {"texts":["選択してください"],"choices":["左","右"],"scene":"体験版/","waiting":true}},
+      {"input": {"type":"choice","index":0}, "expect": {"texts":["左の道","到着しました"],"choices":[],"scene":"体験版/終点","waiting":false}},
+      {"input": {"type":"text","text":"ＹＥＳ"}, "expect": {"texts":["正規表現に一致"],"choices":[],"scene":"体験版/終点","waiting":false}},
+      {"input": {"type":"text","text":"say HELLO"}, "expect": {"texts":["こんにちは"],"choices":[],"scene":"体験版/終点","waiting":false}},
+      {"input": {"type":"text","text":"#help"}, "expect": {"texts":["文字として受信しました"],"choices":[],"scene":"体験版/終点","waiting":false}},
+      {"input": {"type":"text","text":"順送り"}, "expect": {"texts":["条件を調べずに続行しました"],"choices":[],"scene":"体験版/終点","waiting":false}},
+      {"input": {"type":"text","text":"!!reset!!"}, "expect": {"texts":["リセットしました"],"choices":[],"scene":null,"waiting":false}}
+    ]},
+    {"name":"手入力とLIFF", "steps":[
+      {"input":{"type":"start"},"expect":{"texts":["入口です"],"choices":["左","右"],"scene":"体験版/","waiting":true}},
+      {"input":{"type":"liff","action":"open"},"expect":{"texts":[],"events":["{\"event\":\"open\"}"],"chat_updated":false,"choices":["左","右"],"scene":"体験版/","waiting":true}},
+      {"input":{"type":"text","text":"右"},"expect":{"texts":["右の道","到着しました"],"choices":[],"scene":"体験版/終点","waiting":false}},
+      {"input":{"type":"liff","action":"missing"},"expect":{"texts":[],"events":[],"chat_updated":false,"choices":[],"scene":"体験版/終点","waiting":false}}
+    ]},
+    {"name":"LIFFのシーン移動", "steps":[
+      {"input":{"type":"start"},"expect":{"texts":["入口です"],"choices":["左","右"],"scene":"体験版/","waiting":true}},
+      {"input":{"type":"liff","action":"move"},"expect":{"texts":[],"events":["到着しました"],"chat_updated":true,"choices":[],"scene":"体験版/終点","waiting":true}}
+    ]}
+  ]
+}

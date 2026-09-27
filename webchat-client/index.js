@@ -337,12 +337,17 @@ const validLiffApps = (apps) => Array.isArray(apps) && apps.every((app) => (
 ));
 
 export function createWebchatClient(options) {
-  if (!options?.apiBaseUrl || !options?.bot) {
+  return _createWebchatSession(options);
+}
+
+// 体験版との内部共用口。任意runtimeを登録する公開APIではない。
+export function _createWebchatSession(options, local = null) {
+  if (!options?.bot || (!local && !options?.apiBaseUrl)) {
     throw new TypeError('apiBaseUrlとbotが必要です');
   }
-  const apiBaseUrl = String(options.apiBaseUrl).replace(/\/+$/, '');
+  const apiBaseUrl = local ? null : String(options.apiBaseUrl).replace(/\/+$/, '');
   const bot = String(options.bot);
-  const key = `${apiBaseUrl}|${bot}`;
+  const key = local ? `trial:${bot}` : `${apiBaseUrl}|${bot}`;
   const fetchImpl = options.fetch || globalThis.fetch?.bind(globalThis);
 
   let storage = new MemoryStorage(key);
@@ -364,11 +369,19 @@ export function createWebchatClient(options) {
 
   const refresh = async (notice = null, preserveSending = false) => {
     const stored = await storage.load();
+    let metadata = {};
+    if (local) {
+      try { metadata = local.restore(stored.head); }
+      catch (error) {
+        emit({ ...snapshot, persistence: storage.kind, notice: null, status: 'error', error });
+        throw error;
+      }
+    }
     if (!notice && snapshot.stateId && !stored.head) {
       notice = '保存された進行が見つからないため、「最初から」で再開してください。';
     }
     emit(snapshotFromStorage(stored, storage.kind, {
-      notice,
+      ...metadata, notice,
       ...(preserveSending && inFlight ? { status: 'sending' } : {}),
     }));
     return snapshot;
@@ -404,6 +417,15 @@ export function createWebchatClient(options) {
     if (initializePromise) return initializePromise;
     const generation = lifecycle;
     initializePromise = (async () => {
+      if (local) {
+        try { await local.prepare(); }
+        catch (error) {
+          if (generation !== lifecycle) return snapshot;
+          emit({ ...snapshot, status: 'error', error });
+          throw error;
+        }
+        if (generation !== lifecycle) return snapshot;
+      }
       if (options.indexedDB || globalThis.indexedDB) {
         try {
           const candidate = new IndexedDbStorage(
@@ -442,6 +464,7 @@ export function createWebchatClient(options) {
       try {
         return await refresh();
       } catch (error) {
+        if (local && error instanceof WebchatClientError) throw error;
         if (error instanceof CorruptStorageError) {
           const corruptError = new WebchatClientError(
             '保存した進行の形式が不正です。「最初から」で再開してください。',
@@ -592,7 +615,7 @@ export function createWebchatClient(options) {
         const body = { input };
         if (before.head?.stateToken) body.state_token = before.head.stateToken;
         try {
-          const response = await postTurn(body);
+          const response = await (local ? local.execute(body) : postTurn(body));
           let historyPruned = false;
           let memoryFallback = false;
           try {

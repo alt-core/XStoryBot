@@ -63,3 +63,7 @@ Svelte例はtext送受信だけを示す最小例です。Quick Reply、Button�
 `@xstorybot/webchat-client/liff-host`は親Webchat用の接続処理です。`resolveLiffLink()`で登録ページと表示URLを選び、`attachLiffFrame()`へ`requestLiff()`・通常発話・閉じる処理を渡します。セーブとAPI通信は親Webchatが管理します。
 
 ページ側の接続実装はページのアプリケーションで管理します。HTTP・postMessageの契約と設定は[LIFF連携仕様](../docs/liff-webchat-api.md)を参照してください。同梱の確認ページはprotocol検証用で、ページ側SDKではありません。
+
+## API不要の体験版
+
+`./trial`の`createTrialClient({bot, programUrl})`は、書き出した台本JSONを読み込み、同じ操作APIとブラウザ保存で会話を実行します。書き出しと対応範囲は[体験版ガイド](../docs/webchat-trial.md)を参照してください。通常の`createWebchatClient`の設定や保存形式は変わりません。

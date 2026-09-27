@@ -23,6 +23,7 @@ class SheetSelector:
         self.script_sheet = re.compile(params.get('script_sheet', r'^[^$]'), re.IGNORECASE)
         self.constant_sheet = re.compile(params.get('constant_sheet', r'^\$'), re.IGNORECASE)
         self.ignore_sheet = re.compile(params.get('ignore_sheet', r'^_'), re.IGNORECASE)
+        self.selected = ()
 
     def select(self, sheet_titles, environment):
         selected = []
@@ -36,6 +37,7 @@ class SheetSelector:
             is_constant = bool(self.constant_sheet.match(name))
             if is_constant or (name != '' and self.script_sheet.match(name)):
                 selected.append((title, name, is_constant))
+        self.selected = tuple(selected)
         return selected
 
 

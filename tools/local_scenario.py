@@ -79,7 +79,7 @@ def _file_path(value, base, label):
     return str((base / value).resolve())
 
 
-def load_config(args):
+def load_config(args, *, local_override=None):
     # 実settingsより先に確認し、親のクラウド資格情報処理へ入らない。
     import yaml
     from utility import deep_merge, load_settings_yaml, merge_params
@@ -94,6 +94,9 @@ def load_config(args):
     merged = deep_merge(
         _mapping(source.get('*', {}), 'settings.*'),
         _mapping(source.get(environment, {}), '環境別設定'))
+    if local_override is not None:
+        merged['cloud'] = {'provider': 'local'}
+        merged['local'] = {**_mapping(merged.get('local', {}), 'local'), **local_override}
     if _mapping(merged.get('cloud', {}), 'cloud').get('provider') != 'local':
         raise LocalInputError('local用settingsのcloud.providerにlocalを指定してください')
     if not re.fullmatch(r'[-_a-zA-Z0-9]+', args.bot):
@@ -342,6 +345,8 @@ def _prepare_source(request):
         loader = GoogleSheetPlugin_Loader(scenario['params'])
         source = {'type': 'google_sheets', 'sheet_id': scenario['params']['sheet_id']}
     tables, constants = loader.load_scenario()
+    source['sheets'] = [title for title, _name, _constant in
+                        getattr(getattr(loader, 'sheet_selector', None), 'selected', ())]
     encoded = pickle.dumps((tables, constants), protocol=4)
     write_bytes(request['source_path'], encoded)
     source['sha256'] = hashlib.sha256(encoded).hexdigest()
@@ -505,7 +510,7 @@ def worker(request_path):
     return code
 
 
-def run_worker(config, environment, request, directory, timeout):
+def run_worker(config, environment, request, directory, timeout, *, worker_script=None):
     directory.mkdir(parents=True, exist_ok=True)
     config_path = directory / 'settings.yaml'
     save_settings(config_path, config)
@@ -517,7 +522,7 @@ def run_worker(config, environment, request, directory, timeout):
            'XSBOT_DEPLOY_ENV': environment, 'XSBOT_SETTINGS_FILE': str(config_path)}
     try:
         completed = run_process(
-            [sys.executable, str(Path(__file__).resolve()), '_worker', str(request_path)],
+            [sys.executable, str(worker_script or Path(__file__).resolve()), '_worker', str(request_path)],
             cwd=PROJECT_ROOT, env=env, timeout=timeout, stdout=sys.stderr,
         )
     except subprocess.TimeoutExpired:

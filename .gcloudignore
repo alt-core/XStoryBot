@@ -46,6 +46,7 @@ ENV/
 # 文書
 .planning/
 /outputs/
+.trial-cache/
 *.md
 docs/
 

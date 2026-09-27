@@ -89,6 +89,54 @@ def _normalize_origins(values, allow_empty=False, local_origin=None):
     return tuple(result)
 
 
+def normalize_liff_apps(apps, allow_local_http=False):
+    """公開・体験版で共用する、LIFFページ登録の検査とURL正規化。"""
+    apps = apps or {}
+    result = {}
+    if not isinstance(apps, dict):
+        raise InvalidWebchatConfiguration('liff_appsにはページ名ごとの設定を指定してください')
+    pages = set()
+    liff_ids = set()
+    for name, app in apps.items():
+        if (not isinstance(name, str) or not name or not isinstance(app, dict)
+                or not {'url', 'bot'} <= set(app) or set(app) - {'url', 'bot', 'match', 'liff_id'}
+                or not isinstance(app['bot'], str) or not app['bot']
+                or not isinstance(app['url'], str)):
+            raise InvalidWebchatConfiguration('LIFFページにはurlとbotを指定してください')
+        try:
+            parsed = urlsplit(app['url'])
+            origin = _format_origin(parsed)
+        except (ValueError, InvalidWebchatConfiguration) as error:
+            raise InvalidWebchatConfiguration('LIFFページのURLが不正です') from error
+        local_http = (allow_local_http and parsed.scheme == 'http'
+                      and parsed.hostname == '127.0.0.1' and parsed.port is not None)
+        if (not parsed.hostname or (parsed.scheme != 'https' and not local_http)
+                or parsed.username is not None or parsed.password is not None
+                or '\\' in app['url'] or any(c.isspace() or ord(c) < 32 for c in app['url'])):
+            raise InvalidWebchatConfiguration('LIFFページにはHTTPS URLを指定してください')
+        page = (origin, parsed.path or '/')
+        if page in pages:
+            raise InvalidWebchatConfiguration('同じLIFFページのoriginとpathを重複登録できません')
+        pages.add(page)
+        matching = app.get('match', 'exact')
+        liff_id = app.get('liff_id')
+        if matching not in ('exact', 'prefix'):
+            raise InvalidWebchatConfiguration('LIFFページのmatchはexactかprefixにしてください')
+        if liff_id is not None:
+            if (not isinstance(liff_id, str) or not re.fullmatch(r'[A-Za-z0-9_-]+', liff_id)
+                    or liff_id in liff_ids):
+                raise InvalidWebchatConfiguration('liff_idは重複しないLIFF IDを指定してください')
+            liff_ids.add(liff_id)
+        result[name] = {
+            'url': urlunsplit((parsed.scheme, origin.split('://', 1)[1],
+                              parsed.path or '/', parsed.query, parsed.fragment)),
+            'bot': app['bot'],
+            **({'match': matching} if matching != 'exact' else {}),
+            **({'liff_id': liff_id} if liff_id is not None else {}),
+        }
+    return result
+
+
 class WebchatInterface:
     supports_task_execution = False
 
@@ -214,48 +262,7 @@ class WebchatInterface:
                 raise InvalidWebchatConfiguration(f'リッチメニュー {name}: {error}') from error
             self.richmenu_specs[name] = menu.webchat_spec(name, image_url)
         self.codec = WebchatTokenCodec(params.get('signing_key'))
-        apps = params.get('liff_apps', {}) or {}
-        if not isinstance(apps, dict):
-            raise InvalidWebchatConfiguration('liff_appsにはページ名ごとの設定を指定してください')
-        pages = set()
-        liff_ids = set()
-        for name, app in apps.items():
-            if (not isinstance(name, str) or not name or not isinstance(app, dict)
-                    or not {'url', 'bot'} <= set(app) or set(app) - {'url', 'bot', 'match', 'liff_id'}
-                    or not isinstance(app['bot'], str) or not app['bot']
-                    or not isinstance(app['url'], str)):
-                raise InvalidWebchatConfiguration('LIFFページにはurlとbotを指定してください')
-            try:
-                parsed = urlsplit(app['url'])
-                origin = _format_origin(parsed)
-            except (ValueError, InvalidWebchatConfiguration) as error:
-                raise InvalidWebchatConfiguration('LIFFページのURLが不正です') from error
-            local_http = (self.local_origin is not None and parsed.scheme == 'http'
-                          and parsed.hostname == '127.0.0.1' and parsed.port is not None)
-            if (not parsed.hostname or (parsed.scheme != 'https' and not local_http)
-                    or parsed.username is not None or parsed.password is not None
-                    or '\\' in app['url'] or any(c.isspace() or ord(c) < 32 for c in app['url'])):
-                raise InvalidWebchatConfiguration('LIFFページにはHTTPS URLを指定してください')
-            page = (origin, parsed.path or '/')
-            if page in pages:
-                raise InvalidWebchatConfiguration('同じLIFFページのoriginとpathを重複登録できません')
-            pages.add(page)
-            matching = app.get('match', 'exact')
-            liff_id = app.get('liff_id')
-            if matching not in ('exact', 'prefix'):
-                raise InvalidWebchatConfiguration('LIFFページのmatchはexactかprefixにしてください')
-            if liff_id is not None:
-                if (not isinstance(liff_id, str) or not re.fullmatch(r'[A-Za-z0-9_-]+', liff_id)
-                        or liff_id in liff_ids):
-                    raise InvalidWebchatConfiguration('liff_idは重複しないLIFF IDを指定してください')
-                liff_ids.add(liff_id)
-            self.liff_apps[name] = {
-                'url': urlunsplit((parsed.scheme, origin.split('://', 1)[1],
-                                  parsed.path or '/', parsed.query, parsed.fragment)),
-                'bot': app['bot'],
-                **({'match': matching} if matching != 'exact' else {}),
-                **({'liff_id': liff_id} if liff_id is not None else {}),
-            }
+        self.liff_apps = normalize_liff_apps(params.get('liff_apps'), self.local_origin is not None)
 
     def public_liff_apps(self):
         return [{'id': name, **{key: value for key, value in app.items() if key != 'bot'}}

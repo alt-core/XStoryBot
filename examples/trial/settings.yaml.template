@@ -1,0 +1,47 @@
+"*":
+  options:
+    scenario_version: 3
+    timezone: Asia/Tokyo
+    reset_keyword: "!reset"
+  plugins:
+    line:
+      alt_text: 選択してください
+    line.quick_reply:
+      command: ["＞"]
+      default_reply: 続きを読む
+      please_select_quick_reply_label: "##please"
+      ignore_pattern: '^#help$'
+  local:
+    assets:
+      https://media.example.test/trial-menu.svg: assets/menu.svg
+      https://media.example.test/trial-image.svg: assets/image.svg
+  bots:
+    trial-demo:
+      scenario:
+        type: tsv
+        params:
+          manifest: manifest.json
+      default_richmenu: main
+      richmenus:
+        main:
+          image: https://media.example.test/trial-menu.svg
+          size: {width: 800, height: 400}
+          chatBarText: メニュー
+          selected: true
+          areas:
+            - bounds: {x: 0, y: 0, width: 400, height: 400}
+              action: {type: postback, data: '#help', displayText: ヘルプ, label: ヘルプ}
+            - bounds: {x: 400, y: 0, width: 400, height: 400}
+              action: {type: uri, uri: 'http://127.0.0.1:8767/liff/index.html', label: ページを開く}
+      interfaces:
+        - type: webchat
+          params:
+            enabled: false
+            start_action: '##line.follow'
+            scenario_compatibility_epoch: trial-demo-v1
+            liff_apps:
+              menu: {bot: trial-demo, url: 'http://127.0.0.1:8767/liff/index.html'}
+        - type: liff
+          params:
+            action_prefix: '##liff.'
+            ignore_unhandled_action: true

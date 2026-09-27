@@ -53,6 +53,7 @@ plugin によって拡張可能な設計になっています。
 - WebAPI（認証付き action API）
 - Webchat（AWSの署名付きclient state方式）
   - 導入方法、対応範囲、client組込みは[Webchatガイド](./docs/webchat.md)を参照してください。
+  - 限定したシナリオは[API不要の体験版](./docs/webchat-trial.md)として静的ファイルだけで配信できます。
   - API契約は[OpenAPI 3.1](./docs/webchat.openapi.yaml)、表示データは[JSON Schema](./docs/webchat-message-spec.schema.json)で公開しています。
 
 ### IoT 機器などとの連携

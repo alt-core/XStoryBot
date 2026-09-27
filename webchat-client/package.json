@@ -15,7 +15,10 @@
     "index.d.ts",
     "examples",
     "liff-host.js",
-    "liff-host.d.ts"
+    "liff-host.d.ts",
+    "trial.js",
+    "trial-runtime.js",
+    "trial.d.ts"
   ],
   "exports": {
     ".": {
@@ -25,6 +28,10 @@
     "./liff-host": {
       "types": "./liff-host.d.ts",
       "import": "./liff-host.js"
+    },
+    "./trial": {
+      "types": "./trial.d.ts",
+      "import": "./trial.js"
     }
   },
   "types": "./index.d.ts"

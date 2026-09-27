@@ -1,0 +1,27 @@
+##line.follow	*入口
+##please	候補から選んでください
+	@show_quick_reply_choices
+#help	選択肢で道を選び、メニューからページを開けます。
+持ち物	持ち物を確認しました。
+##error_unhandled_action	もう一度入力してください。
+##error_invalid_label	今はその操作を使えません。
+*入口	"案内役:
+小さな物語を始めましょう。"
+	@rawimage	https://media.example.test/trial-image.svg	https://media.example.test/trial-image.svg
+	どちらの道へ進みますか。
+	＞	左の道	右の道
+	左の道を選びました。
+	*広場
+	/else
+	右の道を選びました。
+	*広場
+	/end
+##liff.open	"{{""place"":""入口""}}"
+*広場	"案内役:
+広場に着きました。メニューからページを開いてみてください。"
+##liff.open	"{{""place"":""広場""}}"
+##liff.bump	*展望台#event
+*展望台	展望台です。
+##liff.open	"{{""place"":""展望台""}}"
+##liff.bump	#event
+#event	"{{""place"":""展望台"",""event"":""arrived""}}"

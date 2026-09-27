@@ -45,6 +45,7 @@ ENV/
 # 文書とデプロイツール
 .planning/
 /outputs/
+.trial-cache/
 *.md
 docs/
 tools/

@@ -52,16 +52,16 @@ def _replace_once(source, old, new):
     return source.replace(old, new, 1)
 
 
-def _page(source, api_base_url, bot, revision, origin):
+def _page(source, api_base_url, bot, revision, origin, marker=EXPORT_MARKER, frame_origins=()):
     policy = (
         "default-src 'self'; base-uri 'none'; object-src 'none'; "
         "form-action 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
         f"connect-src 'self' {origin}; img-src 'self' https: {origin}; "
-        f"media-src 'self' https: {origin}; frame-src 'self' https: {origin}"
+        f"media-src 'self' https: {origin}; frame-src 'self' https: {origin} {' '.join(frame_origins)}"
     )
     replacements = (
         ('data-webchat-api-base-url=""',
-         f'data-webchat-api-base-url="{escape(api_base_url, quote=True)}" {EXPORT_MARKER}'),
+         f'data-webchat-api-base-url="{escape(api_base_url, quote=True)}" {marker}'),
         ('data-webchat-bot=""', f'data-webchat-bot="{escape(bot, quote=True)}"'),
         ('<!-- WEBCHAT_EXPORT_META -->',
          f'<meta http-equiv="Content-Security-Policy" content="{escape(policy, quote=True)}">\n'
@@ -85,6 +85,38 @@ def _write_public(path, data):
             os.replace(temporary, path)
         finally:
             temporary.unlink(missing_ok=True)
+
+
+def write_site(output, files, *, inputs=(), marker=EXPORT_MARKER):
+    """所有印と出力先を確認し、公開入口を最後に差し替える。"""
+    output = Path(output).resolve()
+    if output.exists() and not output.is_dir():
+        raise ValueError('出力先にはディレクトリを指定してください')
+    for name in files:
+        target = (output / name).resolve()
+        if not target.is_relative_to(output) or target in inputs:
+            raise ValueError('出力先が配布ディレクトリ外や元のソースを指しています')
+    entry = output / 'index.html'
+    generated = output.exists() and any(output.iterdir())
+    if generated:
+        if not entry.is_file() or marker not in entry.read_text(encoding='utf-8'):
+            raise ValueError('出力先には空のディレクトリか、このツールの生成済みディレクトリを指定してください')
+
+    # 初回は完成したフォルダを公開し、失敗時に半端な出力を残さない。
+    if not generated:
+        output.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix='.webchat-export-', dir=output.parent) as temporary:
+            ready = Path(temporary) / 'ready'
+            for name, data in files.items():
+                _write_public(ready / name, data)
+            if output.exists():
+                output.rmdir()
+            ready.rename(output)
+    else:
+        # 公開入口は最後に差し替える。古いassetは既存ページのために残す。
+        for name, data in files.items():
+            _write_public(output / name, data)
+    return str(entry)
 
 
 def export_webchat(api_base_url, bot, output):
@@ -115,30 +147,7 @@ def export_webchat(api_base_url, bot, output):
     inputs = {(PROJECT_ROOT / path).resolve() for path in ASSET_SOURCES.values()}
     inputs.update({(PROJECT_ROOT / 'LICENSE').resolve(),
                    (PROJECT_ROOT / 'static/webchat/index.html').resolve()})
-    for name in files:
-        target = (output / name).resolve()
-        if not target.is_relative_to(output) or target in inputs:
-            raise ValueError('出力先が配布ディレクトリ外や元のソースを指しています')
-    entry = output / 'index.html'
-    generated = output.exists() and any(output.iterdir())
-    if generated:
-        if not entry.is_file() or EXPORT_MARKER not in entry.read_text(encoding='utf-8'):
-            raise ValueError('出力先には空のディレクトリか、このツールの生成済みディレクトリを指定してください')
-
-    # 初回は完成したフォルダを公開し、失敗時に半端な出力を残さない。
-    if not generated:
-        output.parent.mkdir(parents=True, exist_ok=True)
-        with tempfile.TemporaryDirectory(prefix='.webchat-export-', dir=output.parent) as temporary:
-            ready = Path(temporary) / 'ready'
-            for name, data in files.items():
-                _write_public(ready / name, data)
-            if output.exists():
-                output.rmdir()
-            ready.rename(output)
-    else:
-        # 公開入口は最後に差し替える。古いassetは既存ページのために残す。
-        for name, data in files.items():
-            _write_public(output / name, data)
+    entry = write_site(output, files, inputs=inputs)
     return {
         'ok': True, 'output': str(output), 'entry': str(entry),
         'api_base_url': api_base_url, 'bot': bot,

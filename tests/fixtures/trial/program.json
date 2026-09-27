@@ -1,0 +1,835 @@
+{
+  "schema_version": 1,
+  "bot": "bot",
+  "epoch": "epoch-1",
+  "start_action": "##line.follow",
+  "startup": "体験版/",
+  "scenes": {
+    "体験版/": {
+      "tab": "体験版",
+      "entry": "###_体験版/_entrypoint",
+      "rules": [
+        {
+          "test": {
+            "kind": "exact",
+            "value": "###_体験版/_entrypoint"
+          },
+          "block": "体験版/:0",
+          "source": {
+            "sheet": "体験版",
+            "line": 1
+          }
+        },
+        {
+          "test": {
+            "kind": "exact",
+            "value": "##line.follow"
+          },
+          "block": "体験版/:1",
+          "source": {
+            "sheet": "体験版",
+            "line": 1
+          }
+        },
+        {
+          "test": {
+            "kind": "exact",
+            "value": "##QREP__体験版/_L1_0"
+          },
+          "block": "体験版/:2",
+          "source": null
+        },
+        {
+          "test": {
+            "kind": "exact",
+            "value": "##QREP__体験版/_L1_1"
+          },
+          "block": "体験版/:3",
+          "source": null
+        },
+        {
+          "test": {
+            "kind": "exact",
+            "value": "##QREP__体験版/_L1_2"
+          },
+          "block": "体験版/:4",
+          "source": null
+        },
+        {
+          "test": {
+            "kind": "exact",
+            "value": "#-__体験版/_L1"
+          },
+          "block": "体験版/:5",
+          "source": null
+        },
+        {
+          "test": {
+            "kind": "exact",
+            "value": "#-__体験版/_L4"
+          },
+          "block": "体験版/:6",
+          "source": null
+        },
+        {
+          "test": {
+            "kind": "exact",
+            "value": "#-__体験版/_L7"
+          },
+          "block": "体験版/:7",
+          "source": null
+        },
+        {
+          "test": {
+            "kind": "exact",
+            "value": "##please-select"
+          },
+          "block": "体験版/:8",
+          "source": {
+            "sheet": "体験版",
+            "line": 9
+          }
+        },
+        {
+          "test": {
+            "kind": "exact",
+            "value": "##error_unhandled_action"
+          },
+          "block": "体験版/:9",
+          "source": {
+            "sheet": "体験版",
+            "line": 11
+          }
+        },
+        {
+          "test": {
+            "kind": "exact",
+            "value": "##error_invalid_label"
+          },
+          "block": "体験版/:10",
+          "source": {
+            "sheet": "体験版",
+            "line": 12
+          }
+        },
+        {
+          "test": {
+            "kind": "exact",
+            "value": "##liff.open"
+          },
+          "block": "体験版/:11",
+          "source": {
+            "sheet": "体験版",
+            "line": 13
+          }
+        },
+        {
+          "test": {
+            "kind": "exact",
+            "value": "##liff.move"
+          },
+          "block": "体験版/:12",
+          "source": {
+            "sheet": "体験版",
+            "line": 14
+          }
+        },
+        {
+          "test": {
+            "kind": "exact",
+            "value": "#help"
+          },
+          "block": "体験版/:13",
+          "source": {
+            "sheet": "体験版",
+            "line": 15
+          }
+        }
+      ]
+    },
+    "体験版/終点": {
+      "tab": "体験版",
+      "entry": "###_体験版/終点_entrypoint",
+      "rules": [
+        {
+          "test": {
+            "kind": "exact",
+            "value": "###_体験版/_entrypoint"
+          },
+          "block": "体験版/:0",
+          "source": {
+            "sheet": "体験版",
+            "line": 1
+          }
+        },
+        {
+          "test": {
+            "kind": "exact",
+            "value": "##line.follow"
+          },
+          "block": "体験版/:1",
+          "source": {
+            "sheet": "体験版",
+            "line": 1
+          }
+        },
+        {
+          "test": {
+            "kind": "exact",
+            "value": "##QREP__体験版/_L1_0"
+          },
+          "block": "体験版/:2",
+          "source": null
+        },
+        {
+          "test": {
+            "kind": "exact",
+            "value": "##QREP__体験版/_L1_1"
+          },
+          "block": "体験版/:3",
+          "source": null
+        },
+        {
+          "test": {
+            "kind": "exact",
+            "value": "##QREP__体験版/_L1_2"
+          },
+          "block": "体験版/:4",
+          "source": null
+        },
+        {
+          "test": {
+            "kind": "exact",
+            "value": "#-__体験版/_L1"
+          },
+          "block": "体験版/:5",
+          "source": null
+        },
+        {
+          "test": {
+            "kind": "exact",
+            "value": "#-__体験版/_L4"
+          },
+          "block": "体験版/:6",
+          "source": null
+        },
+        {
+          "test": {
+            "kind": "exact",
+            "value": "#-__体験版/_L7"
+          },
+          "block": "体験版/:7",
+          "source": null
+        },
+        {
+          "test": {
+            "kind": "exact",
+            "value": "##please-select"
+          },
+          "block": "体験版/:8",
+          "source": {
+            "sheet": "体験版",
+            "line": 9
+          }
+        },
+        {
+          "test": {
+            "kind": "exact",
+            "value": "##error_unhandled_action"
+          },
+          "block": "体験版/:9",
+          "source": {
+            "sheet": "体験版",
+            "line": 11
+          }
+        },
+        {
+          "test": {
+            "kind": "exact",
+            "value": "##error_invalid_label"
+          },
+          "block": "体験版/:10",
+          "source": {
+            "sheet": "体験版",
+            "line": 12
+          }
+        },
+        {
+          "test": {
+            "kind": "exact",
+            "value": "##liff.open"
+          },
+          "block": "体験版/:11",
+          "source": {
+            "sheet": "体験版",
+            "line": 13
+          }
+        },
+        {
+          "test": {
+            "kind": "exact",
+            "value": "##liff.move"
+          },
+          "block": "体験版/:12",
+          "source": {
+            "sheet": "体験版",
+            "line": 14
+          }
+        },
+        {
+          "test": {
+            "kind": "exact",
+            "value": "#help"
+          },
+          "block": "体験版/:13",
+          "source": {
+            "sheet": "体験版",
+            "line": 15
+          }
+        },
+        {
+          "test": {
+            "kind": "exact",
+            "value": "###_体験版/終点_entrypoint"
+          },
+          "block": "体験版/終点:0",
+          "source": {
+            "sheet": "体験版",
+            "line": 16
+          }
+        },
+        {
+          "test": {
+            "kind": "regex",
+            "value": "yes",
+            "ignore_case": false,
+            "normalize": true,
+            "lower": true,
+            "exact": true
+          },
+          "block": "体験版/終点:1",
+          "source": {
+            "sheet": "体験版",
+            "line": 17
+          }
+        },
+        {
+          "test": {
+            "kind": "contains",
+            "value": "hello"
+          },
+          "block": "体験版/終点:2",
+          "source": {
+            "sheet": "体験版",
+            "line": 18
+          }
+        },
+        {
+          "test": {
+            "kind": "regex",
+            "value": "#help",
+            "ignore_case": false,
+            "normalize": false,
+            "lower": false,
+            "exact": false
+          },
+          "block": "体験版/終点:3",
+          "source": {
+            "sheet": "体験版",
+            "line": 19
+          }
+        },
+        {
+          "test": {
+            "kind": "contains",
+            "value": "順送り"
+          },
+          "block": "体験版/終点:4",
+          "source": {
+            "sheet": "体験版",
+            "line": 20
+          }
+        },
+        {
+          "test": {
+            "kind": "contains",
+            "value": "次のブロック"
+          },
+          "block": "体験版/終点:5",
+          "source": {
+            "sheet": "体験版",
+            "line": 21
+          }
+        }
+      ]
+    }
+  },
+  "blocks": {
+    "体験版/:0": {
+      "ops": [],
+      "next": "体験版/:1"
+    },
+    "体験版/:1": {
+      "ops": [
+        {
+          "op": "emit",
+          "messages": [
+            {
+              "role": "assistant",
+              "sender": {
+                "name": "案内役",
+                "icon_url": null
+              },
+              "type": "text",
+              "text": "入口です"
+            }
+          ],
+          "text": "入口です",
+          "source": {
+            "sheet": "体験版",
+            "line": 1
+          }
+        },
+        {
+          "op": "jump",
+          "action": "##QREP__体験版/_L1_0",
+          "source": {
+            "sheet": "体験版",
+            "line": 2
+          }
+        }
+      ],
+      "next": "体験版/:2"
+    },
+    "体験版/:2": {
+      "ops": [
+        {
+          "op": "reply",
+          "actions": [
+            {
+              "type": "postback",
+              "label": "左",
+              "action": "##QREP__体験版/_L1_1",
+              "echo_text": "左"
+            },
+            {
+              "type": "postback",
+              "label": "右",
+              "action": "##QREP__体験版/_L1_2",
+              "echo_text": "右"
+            }
+          ],
+          "fallback": {
+            "role": "assistant",
+            "sender": null,
+            "type": "text",
+            "text": "選択してください"
+          },
+          "source": {
+            "sheet": "体験版",
+            "line": 2
+          }
+        },
+        {
+          "op": "wait",
+          "wait": {
+            "label": "##QREP__体験版/_L1_",
+            "retry": "##please-select",
+            "choices": [
+              [
+                "左",
+                "##QREP__体験版/_L1_1"
+              ],
+              [
+                "右",
+                "##QREP__体験版/_L1_2"
+              ]
+            ],
+            "guard": true
+          },
+          "source": {
+            "sheet": "体験版",
+            "line": 2
+          }
+        }
+      ],
+      "next": "体験版/:3"
+    },
+    "体験版/:3": {
+      "ops": [
+        {
+          "op": "clear_wait",
+          "label": "##QREP__体験版/_L1_",
+          "source": {
+            "sheet": "体験版",
+            "line": 2
+          }
+        },
+        {
+          "op": "jump",
+          "action": "#-__体験版/_L1",
+          "source": {
+            "sheet": "体験版",
+            "line": 2
+          }
+        }
+      ],
+      "next": "体験版/:4"
+    },
+    "体験版/:4": {
+      "ops": [
+        {
+          "op": "clear_wait",
+          "label": "##QREP__体験版/_L1_",
+          "source": {
+            "sheet": "体験版",
+            "line": 2
+          }
+        },
+        {
+          "op": "jump",
+          "action": "#-__体験版/_L4",
+          "source": {
+            "sheet": "体験版",
+            "line": 2
+          }
+        }
+      ],
+      "next": "体験版/:5"
+    },
+    "体験版/:5": {
+      "ops": [
+        {
+          "op": "emit",
+          "messages": [
+            {
+              "role": "assistant",
+              "sender": null,
+              "type": "text",
+              "text": "左の道"
+            }
+          ],
+          "text": "左の道",
+          "source": {
+            "sheet": "体験版",
+            "line": 3
+          }
+        },
+        {
+          "op": "jump",
+          "action": "*終点",
+          "source": {
+            "sheet": "体験版",
+            "line": 4
+          }
+        },
+        {
+          "op": "jump",
+          "action": "#-__体験版/_L7",
+          "source": {
+            "sheet": "体験版",
+            "line": 5
+          }
+        }
+      ],
+      "next": "体験版/:6"
+    },
+    "体験版/:6": {
+      "ops": [
+        {
+          "op": "emit",
+          "messages": [
+            {
+              "role": "assistant",
+              "sender": null,
+              "type": "text",
+              "text": "右の道"
+            }
+          ],
+          "text": "右の道",
+          "source": {
+            "sheet": "体験版",
+            "line": 6
+          }
+        },
+        {
+          "op": "jump",
+          "action": "*終点",
+          "source": {
+            "sheet": "体験版",
+            "line": 7
+          }
+        },
+        {
+          "op": "jump",
+          "action": "#-__体験版/_L7",
+          "source": {
+            "sheet": "体験版",
+            "line": 8
+          }
+        }
+      ],
+      "next": "体験版/:7"
+    },
+    "体験版/:7": {
+      "ops": [],
+      "next": "体験版/:8"
+    },
+    "体験版/:8": {
+      "ops": [
+        {
+          "op": "emit",
+          "messages": [
+            {
+              "role": "assistant",
+              "sender": null,
+              "type": "text",
+              "text": "選択してください"
+            }
+          ],
+          "text": "選択してください",
+          "source": {
+            "sheet": "体験版",
+            "line": 9
+          }
+        },
+        {
+          "op": "show_choices",
+          "source": {
+            "sheet": "体験版",
+            "line": 10
+          }
+        }
+      ],
+      "next": "体験版/:9"
+    },
+    "体験版/:9": {
+      "ops": [
+        {
+          "op": "emit",
+          "messages": [
+            {
+              "role": "assistant",
+              "sender": null,
+              "type": "text",
+              "text": "入力が見つかりません"
+            }
+          ],
+          "text": "入力が見つかりません",
+          "source": {
+            "sheet": "体験版",
+            "line": 11
+          }
+        }
+      ],
+      "next": "体験版/:10"
+    },
+    "体験版/:10": {
+      "ops": [
+        {
+          "op": "emit",
+          "messages": [
+            {
+              "role": "assistant",
+              "sender": null,
+              "type": "text",
+              "text": "移動先が見つかりません"
+            }
+          ],
+          "text": "移動先が見つかりません",
+          "source": {
+            "sheet": "体験版",
+            "line": 12
+          }
+        }
+      ],
+      "next": "体験版/:11"
+    },
+    "体験版/:11": {
+      "ops": [
+        {
+          "op": "emit",
+          "messages": [
+            {
+              "role": "assistant",
+              "sender": null,
+              "type": "text",
+              "text": "{\"event\":\"open\"}"
+            }
+          ],
+          "text": "{\"event\":\"open\"}",
+          "source": {
+            "sheet": "体験版",
+            "line": 13
+          }
+        }
+      ],
+      "next": "体験版/:12"
+    },
+    "体験版/:12": {
+      "ops": [
+        {
+          "op": "jump",
+          "action": "*終点",
+          "source": {
+            "sheet": "体験版",
+            "line": 14
+          }
+        }
+      ],
+      "next": "体験版/:13"
+    },
+    "体験版/:13": {
+      "ops": [
+        {
+          "op": "emit",
+          "messages": [
+            {
+              "role": "assistant",
+              "sender": null,
+              "type": "text",
+              "text": "説明です"
+            }
+          ],
+          "text": "説明です",
+          "source": {
+            "sheet": "体験版",
+            "line": 15
+          }
+        }
+      ],
+      "next": null
+    },
+    "体験版/終点:0": {
+      "ops": [
+        {
+          "op": "emit",
+          "messages": [
+            {
+              "role": "assistant",
+              "sender": null,
+              "type": "text",
+              "text": "到着しました"
+            }
+          ],
+          "text": "到着しました",
+          "source": {
+            "sheet": "体験版",
+            "line": 16
+          }
+        }
+      ],
+      "next": "体験版/終点:1"
+    },
+    "体験版/終点:1": {
+      "ops": [
+        {
+          "op": "emit",
+          "messages": [
+            {
+              "role": "assistant",
+              "sender": null,
+              "type": "text",
+              "text": "正規表現に一致"
+            }
+          ],
+          "text": "正規表現に一致",
+          "source": {
+            "sheet": "体験版",
+            "line": 17
+          }
+        }
+      ],
+      "next": "体験版/終点:2"
+    },
+    "体験版/終点:2": {
+      "ops": [
+        {
+          "op": "emit",
+          "messages": [
+            {
+              "role": "assistant",
+              "sender": null,
+              "type": "text",
+              "text": "こんにちは"
+            }
+          ],
+          "text": "こんにちは",
+          "source": {
+            "sheet": "体験版",
+            "line": 18
+          }
+        }
+      ],
+      "next": "体験版/終点:3"
+    },
+    "体験版/終点:3": {
+      "ops": [
+        {
+          "op": "emit",
+          "messages": [
+            {
+              "role": "assistant",
+              "sender": null,
+              "type": "text",
+              "text": "文字として受信しました"
+            }
+          ],
+          "text": "文字として受信しました",
+          "source": {
+            "sheet": "体験版",
+            "line": 19
+          }
+        }
+      ],
+      "next": "体験版/終点:4"
+    },
+    "体験版/終点:4": {
+      "ops": [
+        {
+          "op": "next",
+          "source": {
+            "sheet": "体験版",
+            "line": 20
+          }
+        }
+      ],
+      "next": "体験版/終点:5"
+    },
+    "体験版/終点:5": {
+      "ops": [
+        {
+          "op": "emit",
+          "messages": [
+            {
+              "role": "assistant",
+              "sender": null,
+              "type": "text",
+              "text": "条件を調べずに続行しました"
+            }
+          ],
+          "text": "条件を調べずに続行しました",
+          "source": {
+            "sheet": "体験版",
+            "line": 21
+          }
+        }
+      ],
+      "next": null
+    }
+  },
+  "reset_keyword": "!!reset!!",
+  "ignore_pattern": null,
+  "richmenu": null,
+  "menu_actions": [],
+  "liff": {
+    "action_prefix": "##liff.",
+    "ignore_unhandled_action": true
+  },
+  "liff_apps": {
+    "menu": {
+      "bot": "bot",
+      "url": "https://pages.example.test/menu/index.html"
+    }
+  }
+}
