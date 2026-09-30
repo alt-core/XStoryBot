@@ -368,7 +368,9 @@ const syncRichmenu = (snapshot) => {
   if (changed) {
     renderedRichmenu = signature;
     richmenuElement.replaceChildren();
-    richmenuToggle.textContent = menu.chat_bar_text;
+    // 表示はアイコンに固定し、chatBarTextは読み上げ名とツールチップに使う。
+    richmenuToggle.setAttribute('aria-label', menu.chat_bar_text);
+    richmenuToggle.title = menu.chat_bar_text;
     richmenuElement.style.aspectRatio = `${menu.width} / ${menu.height}`;
     richmenuElement.style.width = `min(100%, ${40 * menu.width / menu.height}vh)`;
     const image = document.createElement('img');

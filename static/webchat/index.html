@@ -25,7 +25,15 @@
       </div>
       <div id="richmenu" class="richmenu imagemap" hidden></div>
       <form id="composer" class="composer">
-        <button id="richmenu-toggle" type="button" aria-controls="richmenu" aria-expanded="false" hidden></button>
+        <button id="richmenu-toggle" type="button" aria-controls="richmenu" aria-expanded="false" hidden>
+          <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"
+               fill="currentColor">
+            <rect x="3.5" y="3.5" width="7.5" height="7.5" rx="2"/>
+            <rect x="13" y="3.5" width="7.5" height="7.5" rx="2"/>
+            <rect x="3.5" y="13" width="7.5" height="7.5" rx="2"/>
+            <rect x="13" y="13" width="7.5" height="7.5" rx="2"/>
+          </svg>
+        </button>
         <label class="sr-only" for="draft">メッセージ</label>
         <textarea id="draft" rows="1" placeholder="メッセージを入力"
                   autocomplete="off"></textarea>
