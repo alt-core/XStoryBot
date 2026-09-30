@@ -40,9 +40,13 @@ Webchatは`app_webchat:app`を起動する専用processで提供します。Dock
 
 Webchat processは固定URIのdigestを検証してScenarioを読みます。DynamoDB上の最新Scenario pointerは参照しません。
 
-`update_webchat_scenario.sh`は指定したS3 artifactの存在確認、変更内容の表示、確認後のstack更新、完了待ちまでを一度に行います。Webchat Lambda以外の変更を検出した場合はchange setを削除して停止します。compatibility epoch変更とimage build／pushは行いません。非互換更新ではこのscriptを使わず、epoch変更を含むchange setを別途レビューしてください。`deploy_aws.sh`はcodeを含む通常deploy用です。
+`update_webchat_scenario.sh`はデプロイ済みstackの`Original`テンプレートとparameter名を取得し、`WebchatScenarioUri`だけを変更します。SAMが付けるMetadataを保ち、他のparameterは`UsePreviousValue`で維持するため、署名鍵などの値を表示する必要はありません。YAMLとJSONのテンプレートに対応します。操作者には既存の更新権限に加えて`cloudformation:GetTemplate`の読取権限が必要です。
 
-templateに基盤変更（worker、queue、alarmなど）を含む版を取り込んだ直後は、先に一度`deploy_aws.sh`でstackを更新してください。その前に`update_webchat_scenario.sh`を実行すると、旧stackに無いparameterへ前回値を要求するエラー、またはWebchat以外の変更の検出で停止します。通常のScenario更新のたびに必要な手順ではありません。
+指定したS3 artifactの存在確認、change setの表示、確認後のstack更新、完了待ちまでを一度に行います。Webchat Function・version・alias以外の変更があれば、change setを削除して停止します。確認で`n`を選べばstackは更新されません。compatibility epoch変更とimage build／pushは行いません。非互換更新ではこのscriptを使わず、epoch変更を含むchange setを別途レビューしてください。
+
+手元の`template.aws.yaml`は使用しないため、未適用のworker・queue・alarm等の変更や、新しいparameterはシナリオの切替へ入りません。基盤とコードの更新は`deploy_aws.sh`で明示的に行ってください。新しいエンジン機能を使うシナリオへ切り替える場合は、先に対応するコードをデプロイします。
+
+この補助スクリプトは、テンプレート本文の直送上限である51,200 byteまでを扱います。超える場合はchange setを作る前に停止し、S3の`TemplateURL`を使った更新を案内します。テンプレートの一時ファイルは非公開の権限で作り、正常終了・失敗・中止時に削除します。
 
 ## APIとclient
 

@@ -7,6 +7,8 @@ https://developers.line.biz/ja/reference/messaging-api/#message-objects
 - 値が None の項目は送らない
 - Flex の contents はシナリオ作者の JSON をそのまま渡し、検査も変換もしない
 - 新しい項目を使いたいときは、リファレンスの key 名で引数を足すだけでよい
+- 送信 JSON は tests/plugin/test_line_wire.py で固定している。golden は旧実装の出力なので直さない。
+  新しい項目は、開発環境の line-bot-sdk v3 と比べる V3OracleTest に例を足す
 """
 
 

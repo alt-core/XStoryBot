@@ -32,6 +32,21 @@ Parameters:
     Type: AWS::SSM::Parameter::Name
     Description: LINE等のruntime秘密値JSONを保存したSecureString名
     AllowedPattern: '^/[a-zA-Z0-9_.\-/]+$'
+  ActionWorkerEnabled:
+    Type: String
+    Default: 'false'
+    AllowedValues: ['true', 'false']
+    Description: 非同期actionのSQS受信を有効にする。有効中は空受信もリクエストを消費する
+  GroupWorkerEnabled:
+    Type: String
+    Default: 'false'
+    AllowedValues: ['true', 'false']
+    Description: グループ配信のSQS受信を有効にする。有効中は空受信もリクエストを消費する
+  AlarmsEnabled:
+    Type: String
+    Default: 'false'
+    AllowedValues: ['true', 'false']
+    Description: CloudWatch alarmを作成する。通知先の有無にかかわらず継続費用の対象
   WebchatEnabled:
     Type: String
     Default: 'false'
@@ -71,9 +86,13 @@ Parameters:
   AlarmEmail:
     Type: String
     Default: ''
-    Description: alarm通知を受け取るメールアドレス。空なら通知先を作らない（alarm状態だけ残る）
+    Description: SNSのメール購読先。空ならメール購読を作らない。alarm作成はAlarmsEnabledで選ぶ
 Conditions:
+  ActionWorkerEnabledCondition: !Equals [!Ref ActionWorkerEnabled, 'true']
+  GroupWorkerEnabledCondition: !Equals [!Ref GroupWorkerEnabled, 'true']
+  AlarmsEnabledCondition: !Equals [!Ref AlarmsEnabled, 'true']
   WebchatEnabledCondition: !Equals [!Ref WebchatEnabled, 'true']
+  WebchatAlarmCondition: !And [!Condition AlarmsEnabledCondition, !Condition WebchatEnabledCondition]
   AlarmEmailCondition: !Not [!Equals [!Ref AlarmEmail, '']]
   WebchatImageSpecifiedCondition: !Not [!Equals [!Ref WebchatImageUri, '']]
 Globals:
@@ -723,6 +742,7 @@ Resources:
           Type: SQS
           Properties:
             Queue: !GetAtt ActionQueue.Arn
+            Enabled: !If [ActionWorkerEnabledCondition, true, false]
             BatchSize: 1
             FunctionResponseTypes:
               - ReportBatchItemFailures
@@ -751,6 +771,7 @@ Resources:
           Type: SQS
           Properties:
             Queue: !GetAtt GroupQueue.Arn
+            Enabled: !If [GroupWorkerEnabledCondition, true, false]
             BatchSize: 1
             FunctionResponseTypes:
               - ReportBatchItemFailures
@@ -961,6 +982,7 @@ Resources:
 
   ApiServerErrorAlarm:
     Type: AWS::CloudWatch::Alarm
+    Condition: AlarmsEnabledCondition
     Properties:
       AlarmDescription: XStoryBotのHTTP APIが5xxを返しています
       Namespace: AWS/ApiGateway
@@ -981,6 +1003,7 @@ Resources:
 
   DeadLetterAlarm:
     Type: AWS::CloudWatch::Alarm
+    Condition: AlarmsEnabledCondition
     Properties:
       AlarmDescription: XStoryBotのDLQに未処理メッセージがあります
       Namespace: AWS/SQS
@@ -1001,7 +1024,7 @@ Resources:
 
   WebchatErrorAlarm:
     Type: AWS::CloudWatch::Alarm
-    Condition: WebchatEnabledCondition
+    Condition: WebchatAlarmCondition
     Properties:
       AlarmDescription: Webchat Lambdaでerrorが発生しています
       Namespace: AWS/Lambda

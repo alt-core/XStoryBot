@@ -63,6 +63,8 @@ HTTP 200でも`Failure`／`Error`なら成功にしません。通信断や不�
 
 `login_channel_id`はLIFFを登録した**LINE Loginチャネル**のIDです。Messaging APIチャネルIDとは区別します。実LINEのAPIでは必須で、未設定なら503で停止します。Webchat内だけで使うLIFF interfaceには不要です。
 
+`!env`の参照先が未設定の場合の空文字も、チャネルIDの未設定として扱います。この場合もWebchat等の起動は継続し、LINE側のLIFF APIだけが認証要求を送る前に503を返します。数値型・空白付き文字列・数字以外のIDは設定エラーです。AWSでは[追加設定JSON](../README.md#awsへデプロイする場合)へ`"LIFF_LOGIN_CHANNEL_ID": "1234567890"`を入れ、テンプレートの`!env`から参照できます。
+
 サーバーはtokenの発行先と有効期限を検証してからprofileを取得します。各LINE認証要求のtimeoutは10秒で、tokenのキャッシュは行いません。tokenや認証URLをエラーログへ出しません。[LINE公式の検証手順](https://developers.line.biz/en/docs/liff/using-user-profile/)
 
 `allow_origin`は文字列（`*`を含む）かoriginの配列です。配列では要求のOriginを照合し、`Vary: Origin`を付けます。これはLINE側のLIFF API設定です。Webchatのiframeを使うために、このCORSを広げる必要はありません。
@@ -188,7 +190,7 @@ Bだけの操作では、Aの履歴や選択肢を置き換えません。転送
 
 LINE上のLIFFからの非同期転送では、省略時は転送先の`line`を使い、応答があればpushします。`liff`を明示する場合は転送先にも同interfaceが必要です。そのJSON応答はtask結果であり、元ページへ返りません。指定は後続へ自動継承しません。[転送の書式](./scenario-authoring.md)を参照してください。
 
-複数tabのWeb Locksと保存時のstate ID比較を維持し、競合結果のイベントは成功として配りません。親の「最初から」は状態一式をリセットし、履歴消去はセーブを残します。連携Botの追加や未実行Botの変更・削除では進行を維持します。実行済みBotの非互換変更・削除はリセットが必要です。[移行ガイド](./migration.md)を参照してください。
+複数tabのWeb Locksと保存時のstate ID比較を維持し、競合結果のイベントは成功として配りません。親の「最初から」は状態一式をリセットし、履歴消去はセーブを残します。連携Botの追加や未実行Botの変更・削除では進行を維持します。実行済みBotの非互換変更・削除はリセットが必要です。
 
 ## 7. 検証
 

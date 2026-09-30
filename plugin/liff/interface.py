@@ -30,6 +30,8 @@ class LiffPlugin_Interface(object):
                         or parsed.password or any(c.isspace() for c in origin)):
                     raise ValueError('LIFFのallow_originにはoriginだけを指定してください')
         self.login_channel_id = params.get('login_channel_id')
+        if self.login_channel_id == '':
+            self.login_channel_id = None
         if self.login_channel_id is not None and (
                 not isinstance(self.login_channel_id, str) or not self.login_channel_id.isascii()
                 or not self.login_channel_id.isdecimal()):

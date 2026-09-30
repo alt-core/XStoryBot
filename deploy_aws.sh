@@ -12,14 +12,23 @@ set -eu
 : "${XSBOT_AWS_ADMIN_AUTH_PARAMETER:?XSBOT_AWS_ADMIN_AUTH_PARAMETERを設定してください}"
 : "${XSBOT_AWS_RUNTIME_SECRETS_PARAMETER:?XSBOT_AWS_RUNTIME_SECRETS_PARAMETERを設定してください}"
 
-if [ "${XSBOT_WEBCHAT_ENABLED+x}" = x ]; then
-    case "$XSBOT_WEBCHAT_ENABLED" in
+# 受信・監視の省略で、既存環境の機能を誤って止めたり待機費用を発生させたりしない。
+check_boolean() {
+    case "$2" in
         true|false) ;;
         *)
-            echo "XSBOT_WEBCHAT_ENABLEDはtrueまたはfalseで指定してください" >&2
+            echo "$1はtrueまたはfalseを明示してください" >&2
             exit 1
             ;;
     esac
+}
+
+check_boolean XSBOT_AWS_ACTION_WORKER_ENABLED "${XSBOT_AWS_ACTION_WORKER_ENABLED-}"
+check_boolean XSBOT_AWS_GROUP_WORKER_ENABLED "${XSBOT_AWS_GROUP_WORKER_ENABLED-}"
+check_boolean XSBOT_AWS_ALARMS_ENABLED "${XSBOT_AWS_ALARMS_ENABLED-}"
+
+if [ "${XSBOT_WEBCHAT_ENABLED+x}" = x ]; then
+    check_boolean XSBOT_WEBCHAT_ENABLED "$XSBOT_WEBCHAT_ENABLED"
 fi
 
 if [ "${XSBOT_WEBCHAT_ENABLED-}" = true ]; then
@@ -137,6 +146,9 @@ set -- sam deploy \
         "ParameterKey=ImageUri,ParameterValue=$image_uri" \
         "ParameterKey=WebchatImageUri,ParameterValue=$image_uri" \
         "ParameterKey=EnvironmentName,ParameterValue=$XSBOT_AWS_ENVIRONMENT" \
+        "ParameterKey=ActionWorkerEnabled,ParameterValue=$XSBOT_AWS_ACTION_WORKER_ENABLED" \
+        "ParameterKey=GroupWorkerEnabled,ParameterValue=$XSBOT_AWS_GROUP_WORKER_ENABLED" \
+        "ParameterKey=AlarmsEnabled,ParameterValue=$XSBOT_AWS_ALARMS_ENABLED" \
         "ParameterKey=SheetId,ParameterValue=$XSBOT_AWS_SHEET_ID" \
         "ParameterKey=GoogleSheetsCredentialParameterName,ParameterValue=$XSBOT_AWS_SHEETS_CREDENTIAL_PARAMETER" \
         "ParameterKey=AdminAuthParameterName,ParameterValue=$XSBOT_AWS_ADMIN_AUTH_PARAMETER" \

@@ -2,7 +2,25 @@
 printf '%s\n' "$*" >>"$MOCK_AWS_CALL_LOG"
 case "$1:$2" in
     s3api:head-object) exit 0 ;;
-    cloudformation:create-change-set) echo change-set-id ;;
+    cloudformation:get-template)
+        if [ "${MOCK_TEMPLATE_FAILURE:-false}" = true ]; then
+            echo 'template fetch failed' >&2
+            exit 1
+        fi
+        cat "$MOCK_DEPLOYED_TEMPLATE"
+        ;;
+    cloudformation:create-change-set)
+        while [ "$#" -gt 0 ]; do
+            if [ "$1" = --template-body ]; then
+                shift
+                template_path=${1#file://}
+                printf '%s' "$template_path" >"$MOCK_SUBMITTED_TEMPLATE_PATH"
+                cp "$template_path" "$MOCK_SUBMITTED_TEMPLATE"
+            fi
+            shift
+        done
+        echo change-set-id
+        ;;
     cloudformation:wait) exit 0 ;;
     cloudformation:describe-change-set)
         case "$*" in
@@ -20,6 +38,11 @@ case "$1:$2" in
         ;;
     cloudformation:delete-change-set) exit 0 ;;
     cloudformation:execute-change-set) exit 0 ;;
-    cloudformation:describe-stacks) echo UPDATE_COMPLETE ;;
+    cloudformation:describe-stacks)
+        case "$*" in
+            *'Parameters[].ParameterKey'*) printf '%s\n' "$MOCK_PARAMETER_KEYS" ;;
+            *) echo UPDATE_COMPLETE ;;
+        esac
+        ;;
     *) exit 64 ;;
 esac

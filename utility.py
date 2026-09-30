@@ -228,7 +228,9 @@ class EnvTag:
     def from_yaml(cls, loader, node):
         return cls(loader.construct_scalar(node))
 
-    def resolve(self):
+    def resolve(self, env=None):
+        if env is not None and self.value in env:
+            return env[self.value]
         return os.getenv(self.value, '')
 
 
@@ -243,22 +245,22 @@ class FormatTag:
     def from_yaml(cls, loader, node):
         return cls(loader.construct_sequence(node))
 
-    def resolve(self):
-        resolved_args = [arg.resolve() if hasattr(arg, 'resolve') else arg for arg in self.args]
+    def resolve(self, env=None):
+        resolved_args = [resolve_tags(arg, env) for arg in self.args]
         return self.template.format(*resolved_args)
 
 
-def resolve_tags(value):
+def resolve_tags(value, env=None):
     if hasattr(value, 'resolve'):
-        return value.resolve()
+        return value.resolve() if env is None else value.resolve(env)
     elif isinstance(value, dict):
-        return {k: resolve_tags(v) for k, v in value.items()}
+        return {k: resolve_tags(v, env) for k, v in value.items()}
     elif isinstance(value, list):
-        return [resolve_tags(v) for v in value]
+        return [resolve_tags(v, env) for v in value]
     return value
 
 
-def load_yaml(path, custom_tags=None):
+def load_yaml(path, custom_tags=None, *, env=None):
     class CustomLoader(yaml.SafeLoader):
         pass
 
@@ -269,10 +271,11 @@ def load_yaml(path, custom_tags=None):
     with open(path) as f:
         data = yaml.load(f, Loader=CustomLoader)
 
-    return resolve_tags(data)
+    return resolve_tags(data, env)
 
-def load_settings_yaml(path):
-    return load_yaml(path, custom_tags={EnvTag.yaml_tag: EnvTag, FormatTag.yaml_tag: FormatTag})
+def load_settings_yaml(path, *, env=None):
+    """追加値は!envの解決にだけ使い、プロセスの環境変数は変更しない。"""
+    return load_yaml(path, custom_tags={EnvTag.yaml_tag: EnvTag, FormatTag.yaml_tag: FormatTag}, env=env)
 
 
 def deep_dump(obj, indent=0, visited=None):

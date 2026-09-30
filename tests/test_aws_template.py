@@ -1,4 +1,5 @@
 from pathlib import Path
+from itertools import product
 import re
 import unittest
 
@@ -263,6 +264,7 @@ class AwsTemplateTest(unittest.TestCase):
             'WebchatMediaOrigins',
             'WebchatThrottleRate', 'WebchatThrottleBurst',
             'AlarmEmail',
+            'ActionWorkerEnabled', 'GroupWorkerEnabled', 'AlarmsEnabled',
         }
         self.assertEqual(expected, set(parameters))
         self.assertTrue(parameters['WebchatSigningKey']['NoEcho'])
@@ -487,6 +489,53 @@ class AwsTemplateTest(unittest.TestCase):
         self.assertEqual('email', subscription['Properties']['Protocol'])
         self.assertEqual({'Ref': 'AlarmEmail'}, subscription['Properties']['Endpoint'])
         self.assertEqual('', self.template['Parameters']['AlarmEmail']['Default'])
+
+    def test_SQS受信とalarm作成を個別に選べて既定では待機しない(self):
+        for name in ('ActionWorkerEnabled', 'GroupWorkerEnabled', 'AlarmsEnabled'):
+            parameter = self.template['Parameters'][name]
+            self.assertEqual('false', parameter['Default'])
+            self.assertEqual(['true', 'false'], parameter['AllowedValues'])
+
+        def evaluate(value, parameters):
+            if not isinstance(value, dict):
+                return value
+            kind, args = next(iter(value.items()))
+            if kind == 'Ref':
+                return parameters[args]
+            if kind == 'Condition':
+                return evaluate(self.template['Conditions'][args], parameters)
+            if kind == 'Equals':
+                return evaluate(args[0], parameters) == evaluate(args[1], parameters)
+            if kind == 'Not':
+                return not evaluate(args[0], parameters)
+            if kind == 'And':
+                return all(evaluate(arg, parameters) for arg in args)
+            if kind == 'If':
+                return evaluate(args[1] if evaluate({'Condition': args[0]}, parameters) else args[2], parameters)
+            self.fail(f'未検証の条件式です: {kind}')
+
+        for action, group, alarms, webchat, email in product((False, True), repeat=5):
+            parameters = {'ActionWorkerEnabled': str(action).lower(), 'GroupWorkerEnabled': str(group).lower(),
+                          'AlarmsEnabled': str(alarms).lower(), 'WebchatEnabled': str(webchat).lower(),
+                          'AlarmEmail': 'test@example.invalid' if email else ''}
+            with self.subTest(parameters=parameters):
+                for resource, event, expected in (
+                        ('ActionWorkerFunction', 'ActionMessages', action),
+                        ('GroupWorkerFunction', 'GroupMessages', group)):
+                    worker = self.resources[resource]
+                    self.assertNotIn('Condition', worker)
+                    enabled = worker['Properties']['Events'][event]['Properties']['Enabled']
+                    self.assertIs(expected, evaluate(enabled, parameters))
+                created = {name for name, resource in self.resources.items()
+                           if resource['Type'] == 'AWS::CloudWatch::Alarm'
+                           and evaluate({'Condition': resource['Condition']}, parameters)}
+                expected = {'ApiServerErrorAlarm', 'DeadLetterAlarm'} if alarms else set()
+                if alarms and webchat:
+                    expected.add('WebchatErrorAlarm')
+                self.assertEqual(expected, created)
+                self.assertIs(email, evaluate({'Condition': self.resources['AlarmEmailSubscription']['Condition']}, parameters))
+        for name in ('ActionQueue', 'GroupQueue', 'DeadLetterQueue', 'AlarmTopic'):
+            self.assertNotIn('Condition', self.resources[name])
 
     def test_固定費を増やす同時実行予約を行わない(self):
         self.assertNotIn('ReservedConcurrentExecutions', self.source)

@@ -45,7 +45,7 @@ plugin によって拡張可能な設計になっています。
 
 - LINE@ のボットシステム（[LINE Messaging API](https://developers.line.me/ja/services/messaging-api/)）
   - ボタン・カルーセル・イメージマップなど、一部の特殊表示に対応しています。
-  - 送受信は`requests`で直接行い、LINEのSDKには依存しません（[移行ガイド](./docs/migration.md)を参照）。
+  - 送受信は`requests`で直接行い、LINEのSDKには依存しません。
   - WebHook などを契機にした Push messages にも対応していますが、友だちが50人を越えると[月額32400円が必要](https://at.line.me/jp/plan)です。
 - [Twilio](https://twilio.kddi-web.com/) （電話・SMS）
   - 電話がかかってきたことをトリガーに SMS を送信し、返信の内容によって電話をかける、といったことが可能です。
@@ -143,7 +143,10 @@ Cloud RunのCPU、メモリ、最小・最大インスタンス数は、Cloud Ru
 
 現行GCP実装はシナリオとメディアをオブジェクトACLで公開します。そのため、保存先にはオブジェクト単位の公開を許す専用バケットが必要で、Uniform bucket-level accessとPublic Access Preventionは有効にできません。バケット全体を公開する必要はありません。
 
-共有APIトークンで利用できるグループ管理APIとして、`POST /api/v1/groups/<group_id>/add_members`と`GET /api/v1/groups/<group_id>/members`があります。認証には`X-API-Token`ヘッダーを使用します。
+共有APIトークン（`api_token`）で利用できるAPIは次のとおりです。認証には`X-API-Token`ヘッダーを使います。ヘッダーがない場合はqueryまたはformの`token`も受け付けますが、URLやログに残りやすいため、ヘッダーを推奨します。
+
+- `GET`／`POST /api/v1/bots/<bot_name>/action`: 指定した利用者としてactionを実行します。`user`は`サービス名:ユーザーID`（例: `line:user,U...`）、`action`は実行するaction、`interface`は任意の実行interfaceです。
+- `POST /api/v1/groups/<group_id>/add_members`、`GET /api/v1/groups/<group_id>/members`: グループのメンバーを追加・取得します。
 
 ### AWSへデプロイする場合
 
@@ -151,7 +154,47 @@ AWS CLI、AWS SAM CLI、DockerとAWS認証情報、既存のECR repositoryを準
 
 管理者認証JSONは`python3 tools/generate_admin_auth.py`で生成できます。
 
-`AWS_REGION`、`XSBOT_AWS_STACK_NAME`、`XSBOT_AWS_ECR_REPOSITORY`、`XSBOT_AWS_ENVIRONMENT`、`XSBOT_AWS_SHEET_ID`、`XSBOT_AWS_SHEETS_CREDENTIAL_PARAMETER`、`XSBOT_AWS_ADMIN_AUTH_PARAMETER`、`XSBOT_AWS_RUNTIME_SECRETS_PARAMETER`を環境変数に設定し、`./deploy_aws.sh`を実行します。`XSBOT_AWS_ALARM_EMAIL`を設定すると、DLQ・HTTP API 5xx・Webchat errorのalarmがそのアドレスへ通知されます（初回はSNSの購読確認メールを承認してください）。通常のruntime秘密値そのものはスクリプトへ渡しません。Webchatを有効にする場合は、`XSBOT_WEBCHAT_ENABLED=true`、`XSBOT_WEBCHAT_SIGNING_KEY`、`XSBOT_WEBCHAT_SCENARIO_URI`も必要です。詳細は[Webchatガイド](./docs/webchat.md)を参照してください。
+runtime秘密値JSONは、`settings.yaml`の`!env`へ渡す追加設定をまとめた文字列の辞書です。新しいプラグインの設定や、秘密ではないLINE LoginチャネルIDも、同じJSONへ追加できます。値の優先順位はJSON、プロセスの環境変数、未設定なら空文字です。例えば次のJSONで、`!env LIFF_LOGIN_CHANNEL_ID`と`!env CUSTOM_PLUGIN_TOKEN`を解決できます。
+
+```json
+{
+  "LIFF_LOGIN_CHANNEL_ID": "1234567890",
+  "CUSTOM_PLUGIN_TOKEN": "REPLACE_WITH_YOUR_VALUE"
+}
+```
+
+項目名には通常の環境変数名（英字・`_`で始まり、英数字・`_`で構成）を使い、値はNULを含まない文字列にします。`!format`の引数やBotごとの設定でも使えます。JSONにない値は既存の環境変数を参照し、JSONの空文字は明示的な空として優先します。参照していない項目は設定へ入りません。
+
+追加値はYAMLの解決にだけ使い、`os.environ`は変更しません。プラグインには解決後の設定値を渡すため、追加値を読むには`!env`を使ってください。クラウド・保存先・キュー・サービスURLなどの基盤設定と、Webchatの署名・Scenario・公開条件は、環境変数や設定ファイルで確定します。追加JSONによってこれらが変わる場合は、値を表示せず起動を停止します。Webchat専用LambdaはこのJSONを読みません。
+
+JSONはプロセスの初回読込後にキャッシュします。Parameter Storeだけを更新しても稼働中のプロセスには反映されません。設定更新時はAPI・worker・builderの実行環境を再起動または再デプロイし、新しい値を読むようにしてください。Webchatの署名鍵等は[Webchatガイド](./docs/webchat.md)のversion固定の手順を使います。
+
+`AWS_REGION`、`XSBOT_AWS_STACK_NAME`、`XSBOT_AWS_ECR_REPOSITORY`、`XSBOT_AWS_ENVIRONMENT`、`XSBOT_AWS_SHEET_ID`、`XSBOT_AWS_SHEETS_CREDENTIAL_PARAMETER`、`XSBOT_AWS_ADMIN_AUTH_PARAMETER`、`XSBOT_AWS_RUNTIME_SECRETS_PARAMETER`を環境変数に設定し、下記のSQS受信・監視の3項目も選んで`./deploy_aws.sh`を実行します。通常のruntime秘密値そのものはスクリプトへ渡しません。Webchatを有効にする場合は、`XSBOT_WEBCHAT_ENABLED=true`、`XSBOT_WEBCHAT_SIGNING_KEY`、`XSBOT_WEBCHAT_SCENARIO_URI`も必要です。詳細は[Webchatガイド](./docs/webchat.md)を参照してください。
+
+#### SQS受信とアラームを選ぶ
+
+環境ごとの用途に合わせ、次の3項目を`true`か`false`で明示します。テンプレートの既定値はすべて`false`です。デプロイ補助スクリプトは、既存環境の更新で意図せず新しい既定値を適用しないよう、3項目が未設定・不正ならAWS操作やイメージビルドより前に停止します。一度選んだ値は各環境のデプロイ設定へ保存してください。
+
+| 環境変数 | SAM parameter | `true`にする用途 |
+|---|---|---|
+| `XSBOT_AWS_ACTION_WORKER_ENABLED` | `ActionWorkerEnabled` | `@delay`、LINE等の非同期`@forward` |
+| `XSBOT_AWS_GROUP_WORKER_ENABLED` | `GroupWorkerEnabled` | グループ配信・予約配信 |
+| `XSBOT_AWS_ALARMS_ENABLED` | `AlarmsEnabled` | DLQ・HTTP API 5xx・Webchat errorの監視 |
+
+例えば、非同期処理と組込み監視を使わない開発環境では次のようにします。
+
+```sh
+export XSBOT_AWS_ACTION_WORKER_ENABLED=false
+export XSBOT_AWS_GROUP_WORKER_ENABLED=false
+export XSBOT_AWS_ALARMS_ENABLED=false
+./deploy_aws.sh
+```
+
+SQS受信を無効にしても、キューとLambda本体は残ります。これは受信の停止であり、新しいタスクの登録まで拒否する設定ではありません。停止中のタスクは実行されず、処理用キューのメッセージは保持期限（このテンプレートでは4日、DLQは14日）を過ぎると消えます。利用中の非同期機能を停止する前に、未処理・処理中・遅延・DLQのメッセージ、Schedulerの予約、グループ配信タスクの状態を確認してください。通常のWebchat会話とWebchat内の同期`@forward`は、このSQS受信を使いません。
+
+アラームは`AlarmsEnabled=true`のときに2つ、Webchatも有効なら3つ作ります。メール通知には別途`XSBOT_AWS_ALARM_EMAIL`を設定し、初回のSNS購読確認メールを承認します。メールなしでも、`AlarmsEnabled=true`にして`AlarmTopicArn`のSNS topicへSlack等を接続できます。メール設定だけではアラームを作りません。アラームをOFFにしてもtopicと購読設定は維持し、メールアドレスに空文字を明示するとメール購読だけを削除します。
+
+**受信・監視を有効にしている間は、アクセスがなくても費用や無料枠の消費が発生します。** SQSのLambda連携はロングポーリングを使いますが、空受信もリクエストを消費します。CloudWatch alarmは通知の発生・購読先の有無にかかわらず継続費用の対象です。2026年9月の東京リージョンでは標準アラーム1指標につき月0.10 USD、3指標で月0.30 USD相当（無料枠・税等を除く）です。無料枠は環境ごとに独立して付くものではありません。[SQSの料金](https://aws.amazon.com/sqs/pricing/)と[CloudWatchの料金](https://aws.amazon.com/cloudwatch/pricing/)も確認してください。
 
 更新時に未設定のWebchat設定・通知先は、前回値を維持します。既にWebchatが有効なstackを通常更新する場合は、`XSBOT_WEBCHAT_ENABLED`を未設定にします。明示した`false`は無効化、明示したepochは互換性の変更です。許可origin・通知先は空文字を明示すると消去できます。既存の`.env`に設定が残っている場合も明示値として扱うため、維持したい項目はexportしないでください。Webchatのimageは、有効状態の指定を省略しても更新されます。
 
@@ -197,4 +240,4 @@ Cloud Run、Firestore、Cloud Storage、Cloud Tasks、Cloud Logging、BigQuery�
 
 不具合により、意図しない課金が発生したとしても、補償いたしかねますので、[アラート](https://cloud.google.com/billing/docs/how-to/budgets?hl=ja&ref_topic=6288636&visit_id=1-636539550464473783-319035179&rd=1)などをご活用ください。
 
-以前のデプロイから移行する場合は、[移行ガイド](./docs/migration.md)を参照してください。
+開発環境を作り直す場合は、[再構築の手順](./docs/migration.md)を参照してください。

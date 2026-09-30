@@ -1,29 +1,14 @@
-"""AWS実行時秘密値を設定読込前に環境変数へ展開する。"""
+"""AWSの追加設定をSecureStringから読み、!env解決用の辞書として返す。"""
 
 import json
 import os
+import re
 from collections.abc import Mapping
 
 import boto3
 
 
 RUNTIME_SECRETS_PARAMETER_ENV = 'XSBOT_AWS_RUNTIME_SECRETS_PARAMETER'
-
-# settings.yamlがAPI・各プラグインへ渡す実行時資格情報だけを許可する。
-ALLOWED_ENVIRONMENT_NAMES = frozenset({
-    'XSBOT_API_TOKEN',
-    'LINE_ACCESS_TOKEN',
-    'LINE_CHANNEL_SECRET',
-    'OPENAI_API_KEY',
-    'TWILIO_SID',
-    'TWILIO_AUTH_TOKEN',
-    'TWILIO_PHONE_NUMBER',
-    'PUSHER_APP_ID',
-    'PUSHER_APP_KEY',
-    'PUSHER_APP_SECRET',
-    'PUSHER_APP_CLUSTER',
-})
-
 
 class RuntimeSecretsError(RuntimeError):
     """AWS実行時秘密値を安全に読み込めなかったことを表す。"""
@@ -72,30 +57,29 @@ def _decode_secrets(response):
     if not isinstance(decoded, Mapping):
         raise RuntimeSecretsError(
             'AWS実行時秘密値はJSON objectで指定してください')
-    if any(name not in ALLOWED_ENVIRONMENT_NAMES for name in decoded):
+    if any(not re.fullmatch(r'[a-zA-Z_][a-zA-Z0-9_]*', name) for name in decoded):
         raise RuntimeSecretsError(
-            'AWS実行時秘密値JSONに許可されていない項目があります')
-    if any(not isinstance(value, str) for value in decoded.values()):
+            'AWS実行時秘密値JSONの項目名には環境変数名を指定してください')
+    if any(not isinstance(value, str) or '\0' in value for value in decoded.values()):
         raise RuntimeSecretsError(
-            'AWS実行時秘密値JSONの値は文字列で指定してください')
+            'AWS実行時秘密値JSONの値はNULを含まない文字列で指定してください')
     return dict(decoded)
 
 
 def load_runtime_secrets(environ=None, client=None, client_factory=None):
-    """SecureString 1件を読み、許可済みの環境変数へ展開する。"""
+    """SecureString 1件を読み、環境変数を変更せず追加設定を返す。"""
     global _client_instance, _cached_secrets
 
     target_environ = os.environ if environ is None else environ
     parameter_name = target_environ.get(RUNTIME_SECRETS_PARAMETER_ENV, '')
     if not parameter_name:
-        return
+        return {}
     if not isinstance(parameter_name, str):
         raise RuntimeSecretsError(
             'AWS実行時秘密値のParameter名は文字列で指定してください')
 
     if _cached_secrets is not None:
-        target_environ.update(_cached_secrets)
-        return
+        return dict(_cached_secrets)
 
     region = target_environ.get('AWS_REGION', '')
     if not isinstance(region, str) or not region:
@@ -113,8 +97,8 @@ def load_runtime_secrets(environ=None, client=None, client_factory=None):
         _raise_fetch_error()
 
     secrets = _decode_secrets(response)
-    target_environ.update(secrets)
     _cached_secrets = secrets
+    return dict(secrets)
 
 
 def _reset_for_test():

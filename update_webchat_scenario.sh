@@ -1,5 +1,5 @@
 #!/bin/sh
-set -eu
+set -efu
 
 # 互換性を維持したWebchat Scenarioを更新する。
 # epoch変更とimage build/pushは行わない。
@@ -29,10 +29,52 @@ case "$change_set_name" in
         ;;
 esac
 
-script_directory=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-template_file="$script_directory/template.aws.yaml"
+template_file=$(mktemp)
+trap 'rm -f "$template_file"' 0
+trap 'exit 1' HUP INT TERM
+
+# SAMのMetadataも含めてデプロイ済みの定義を保ち、手元の基盤変更を混ぜない。
+# to_stringはYAML文字列をそのまま、JSON objectをJSON文字列として取り出す。
+aws cloudformation get-template \
+    --region "$AWS_REGION" \
+    --stack-name "$XSBOT_AWS_STACK_NAME" \
+    --template-stage Original \
+    --query 'to_string(TemplateBody)' \
+    --output text --no-cli-pager >"$template_file"
+
 if [ ! -s "$template_file" ]; then
-    echo "template.aws.yamlが見つかりません" >&2
+    echo "デプロイ済みのテンプレートを取得できませんでした" >&2
+    exit 1
+fi
+if [ "$(wc -c <"$template_file")" -gt 51200 ]; then
+    echo "テンプレートが51,200 byteを超えています。この補助スクリプトでは更新できません。S3のTemplateURLを使うchange setで更新してください" >&2
+    exit 1
+fi
+
+# parameter名だけを取り出し、値を表示せず前回値を維持する。
+parameter_names=$(aws cloudformation describe-stacks \
+    --region "$AWS_REGION" \
+    --stack-name "$XSBOT_AWS_STACK_NAME" \
+    --query 'Stacks[0].Parameters[].ParameterKey' \
+    --output text --no-cli-pager)
+set --
+has_scenario=false
+for name in $parameter_names; do
+    case "$name" in
+        ''|*[!a-zA-Z0-9]*)
+            echo "スタックのparameter名を確認できませんでした" >&2
+            exit 1
+            ;;
+    esac
+    if [ "$name" = WebchatScenarioUri ]; then
+        set -- "$@" "ParameterKey=$name,ParameterValue=$XSBOT_WEBCHAT_SCENARIO_URI"
+        has_scenario=true
+    else
+        set -- "$@" "ParameterKey=$name,UsePreviousValue=true"
+    fi
+done
+if [ "$has_scenario" != true ]; then
+    echo "指定したスタックにWebchatScenarioUriがありません" >&2
     exit 1
 fi
 
@@ -47,25 +89,6 @@ aws s3api head-object \
     --key "$scenario_key" \
     --query '{Size:ContentLength,ETag:ETag}' \
     --output json >/dev/null
-
-set -- \
-    "ParameterKey=ImageUri,UsePreviousValue=true" \
-    "ParameterKey=EnvironmentName,UsePreviousValue=true" \
-    "ParameterKey=SheetId,UsePreviousValue=true" \
-    "ParameterKey=GoogleSheetsCredentialParameterName,UsePreviousValue=true" \
-    "ParameterKey=AdminAuthParameterName,UsePreviousValue=true" \
-    "ParameterKey=RuntimeSecretsParameterName,UsePreviousValue=true" \
-    "ParameterKey=WebchatEnabled,UsePreviousValue=true" \
-    "ParameterKey=WebchatImageUri,UsePreviousValue=true" \
-    "ParameterKey=WebchatSigningKey,UsePreviousValue=true" \
-    "ParameterKey=WebchatScenarioUri,ParameterValue=$XSBOT_WEBCHAT_SCENARIO_URI" \
-    "ParameterKey=WebchatCompatibilityEpoch,UsePreviousValue=true" \
-    "ParameterKey=WebchatAllowedOrigins,UsePreviousValue=true" \
-    "ParameterKey=WebchatExternalHttpOrigins,UsePreviousValue=true" \
-    "ParameterKey=WebchatMediaOrigins,UsePreviousValue=true" \
-    "ParameterKey=WebchatThrottleRate,UsePreviousValue=true" \
-    "ParameterKey=WebchatThrottleBurst,UsePreviousValue=true" \
-    "ParameterKey=AlarmEmail,UsePreviousValue=true"
 
 aws cloudformation create-change-set \
     --region "$AWS_REGION" \

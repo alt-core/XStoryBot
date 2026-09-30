@@ -296,6 +296,32 @@ class LiffWebAPITest(unittest.TestCase):
 
 
 class LiffInterfaceTest(unittest.TestCase):
+    def test_環境変数未設定のtemplateでも構築でき不正なIDは拒否する(self):
+        import os
+        from utility import load_settings_yaml
+        module = load_liff_interface()
+        with mock.patch.dict(os.environ, {}, clear=True):
+            settings = load_settings_yaml(ROOT / 'settings.yaml.template')['*']
+        factory = module.LiffPlugin_InterfaceFactory(settings['plugins']['liff'])
+        interface = factory.create_interface('testbot', {})
+        self.assertIsNone(interface.login_channel_id)
+        api, request, _response, requests, main = load_liff_webapi()
+        bot = FakeBot()
+        bot.interface = interface
+        main.get_bot.return_value = bot
+        request.headers = {'Authorization': 'Bearer synthetic-token'}
+        request.json = {'action': 'get_status'}
+        with self.assertRaises(AbortError) as caught:
+            api.send_message('testbot')
+        self.assertEqual(503, caught.exception.status)
+        requests.get.assert_not_called()
+        self.assertEqual(0, bot.reload_calls)
+        for value in ('abc', ' 1234567890', '1234567890 ', ' ', '１２３', 1234567890, 0, False):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                factory.create_interface('testbot', {'login_channel_id': value})
+        self.assertEqual('1234567890', factory.create_interface('testbot', {
+            'login_channel_id': '1234567890'}).login_channel_id)
+
     def test_plain_reactions_are_returned_as_json_array(self):
         module = load_liff_interface()
         interface = module.LiffPlugin_Interface('testbot', {

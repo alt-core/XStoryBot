@@ -14,11 +14,7 @@ from botocore.stub import Stubber
 
 from cloud_backend import factory as cloud_backend_factory
 from cloud_backend.aws import runtime_secrets
-from cloud_backend.aws.runtime_secrets import (
-    ALLOWED_ENVIRONMENT_NAMES,
-    RuntimeSecretsError,
-    load_runtime_secrets,
-)
+from cloud_backend.aws.runtime_secrets import RuntimeSecretsError, load_runtime_secrets
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -46,18 +42,20 @@ class AwsRuntimeSecretsTest(unittest.TestCase):
         environ = {'XSBOT_API_TOKEN': 'existing-token'}
         client_factory = Mock()
 
-        load_runtime_secrets(
-            environ=environ, client_factory=client_factory)
+        self.assertEqual({}, load_runtime_secrets(
+            environ=environ, client_factory=client_factory))
 
         self.assertEqual('existing-token', environ['XSBOT_API_TOKEN'])
         client_factory.assert_not_called()
 
-    def test_SecureStringを復号して既存環境変数より優先しcacheする(self):
+    def test_SecureStringを設定辞書として返し環境変数を変更せずcacheする(self):
         client = make_ssm_client()
         stubber = Stubber(client)
         value = json.dumps({
             'XSBOT_API_TOKEN': 'parameter-token',
             'LINE_CHANNEL_SECRET': 'parameter-channel-secret',
+            'LIFF_LOGIN_CHANNEL_ID': '1234567890',
+            'CUSTOM_PLUGIN_TOKEN': 'custom-token',
         })
         stubber.add_response('get_parameter', {
             'Parameter': {
@@ -77,18 +75,23 @@ class AwsRuntimeSecretsTest(unittest.TestCase):
         }
 
         with stubber:
-            load_runtime_secrets(environ=environ, client=client)
+            settings = load_runtime_secrets(environ=environ, client=client)
+            settings['CUSTOM_PLUGIN_TOKEN'] = 'caller-change'
             cached_environ = {
                 'AWS_REGION': 'ap-northeast-1',
                 'XSBOT_AWS_RUNTIME_SECRETS_PARAMETER': PARAMETER_NAME,
             }
-            load_runtime_secrets(environ=cached_environ)
+            cached_settings = load_runtime_secrets(environ=cached_environ)
 
-        self.assertEqual('parameter-token', environ['XSBOT_API_TOKEN'])
+        self.assertEqual('existing-token', environ['XSBOT_API_TOKEN'])
+        self.assertNotIn('LINE_CHANNEL_SECRET', environ)
+        self.assertNotIn('CUSTOM_PLUGIN_TOKEN', cached_environ)
         self.assertEqual(
-            'parameter-channel-secret', environ['LINE_CHANNEL_SECRET'])
+            'parameter-channel-secret', cached_settings['LINE_CHANNEL_SECRET'])
         self.assertEqual(
-            'parameter-token', cached_environ['XSBOT_API_TOKEN'])
+            'parameter-token', cached_settings['XSBOT_API_TOKEN'])
+        self.assertEqual('custom-token', cached_settings['CUSTOM_PLUGIN_TOKEN'])
+        self.assertEqual('1234567890', cached_settings['LIFF_LOGIN_CHANNEL_ID'])
 
     def test_SDK_clientはParameter取得時まで生成せずAWS_REGIONを使う(self):
         client = Mock()
@@ -111,23 +114,6 @@ class AwsRuntimeSecretsTest(unittest.TestCase):
         client_factory.assert_called_once_with(
             'ssm', region_name='ap-northeast-1')
 
-    def test_許可対象は設定templateの実行時資格情報に限定する(self):
-        self.assertEqual({
-            'XSBOT_API_TOKEN',
-            'LINE_ACCESS_TOKEN',
-            'LINE_CHANNEL_SECRET',
-            'OPENAI_API_KEY',
-            'TWILIO_SID',
-            'TWILIO_AUTH_TOKEN',
-            'TWILIO_PHONE_NUMBER',
-            'PUSHER_APP_ID',
-            'PUSHER_APP_KEY',
-            'PUSHER_APP_SECRET',
-            'PUSHER_APP_CLUSTER',
-        }, set(ALLOWED_ENVIRONMENT_NAMES))
-        self.assertNotIn('XSBOT_ADMIN_AUTH_JSON', ALLOWED_ENVIRONMENT_NAMES)
-        self.assertNotIn('SHEETS_SERVICE_ACCOUNT', ALLOWED_ENVIRONMENT_NAMES)
-
     def test_不正な応答を秘密値なしで拒否する(self):
         invalid_responses = (
             None,
@@ -147,7 +133,19 @@ class AwsRuntimeSecretsTest(unittest.TestCase):
             }},
             {'Parameter': {
                 'Type': 'SecureString',
-                'Value': '{"UNEXPECTED_SECRET":"secret-value"}',
+                'Value': '{"BAD-NAME":"secret-value"}',
+            }},
+            {'Parameter': {
+                'Type': 'SecureString',
+                'Value': '{"":"secret-value"}',
+            }},
+            {'Parameter': {
+                'Type': 'SecureString',
+                'Value': '{"A=B":"secret-value"}',
+            }},
+            {'Parameter': {
+                'Type': 'SecureString',
+                'Value': '{"SECRET":"secret-value\\u0000"}',
             }},
             {'Parameter': {
                 'Type': 'SecureString',
@@ -169,7 +167,9 @@ class AwsRuntimeSecretsTest(unittest.TestCase):
                     load_runtime_secrets(environ=environ, client=client)
 
                 self.assertNotIn('secret-value', str(raised.exception))
-                self.assertNotIn('UNEXPECTED_SECRET', str(raised.exception))
+                self.assertNotIn('BAD-NAME', str(raised.exception))
+                self.assertEqual({'AWS_REGION': 'ap-northeast-1',
+                                  'XSBOT_AWS_RUNTIME_SECRETS_PARAMETER': PARAMETER_NAME}, environ)
 
     def test_SDK例外のParameter名とservice_messageを公開しない(self):
         client = Mock()
@@ -236,18 +236,26 @@ class SettingsRuntimeSecretsIntegrationTest(unittest.TestCase):
                     patch.dict(os.environ, environment, clear=True),
                     patch.dict(sys.modules, patched_modules),
                 ):
-                    spec.loader.exec_module(module)
+                    initial_environment = dict(os.environ)
+                    try:
+                        spec.loader.exec_module(module)
+                    finally:
+                        self.assertEqual(initial_environment, dict(os.environ))
             finally:
                 os.chdir(previous_dir)
                 sys.modules.pop(module_name, None)
         return module
 
-    def test_AWSではYAMLのenv解決前に秘密値を展開する(self):
+    def test_AWSの追加設定をenvとformatで解決し環境変数に反映しない(self):
         client = Mock()
         client.get_parameter.return_value = {
             'Parameter': {
                 'Type': 'SecureString',
-                'Value': '{"XSBOT_API_TOKEN":"parameter-token"}',
+                'Value': json.dumps({'XSBOT_API_TOKEN': 'parameter-token',
+                                    'LIFF_LOGIN_CHANNEL_ID': '1234567890',
+                                    'CUSTOM_PLUGIN_TOKEN': 'custom-token',
+                                    'EMPTY_VALUE': '', 'PATH': '/unused-path',
+                                    'XSBOT_SETTINGS_FILE': '/must-not-open'}),
             },
         }
         settings_text = '''
@@ -258,7 +266,23 @@ class SettingsRuntimeSecretsIntegrationTest(unittest.TestCase):
     api_token: !env XSBOT_API_TOKEN
   aws:
     region: !env AWS_REGION
-  bots: {}
+  plugins:
+    liff:
+      login_channel_id: !env LIFF_LOGIN_CHANNEL_ID
+    custom:
+      token: !env CUSTOM_PLUGIN_TOKEN
+      empty: !env EMPTY_VALUE
+      fallback: !env EXISTING_VALUE
+      formatted: !format ['prefix:{}', !env CUSTOM_PLUGIN_TOKEN]
+  bots:
+    example:
+      interfaces:
+        - type: custom
+          params:
+            tokens: [!env CUSTOM_PLUGIN_TOKEN, !env MISSING_VALUE]
+dev:
+  constants:
+    custom: !env CUSTOM_PLUGIN_TOKEN
 '''
 
         with patch(
@@ -272,17 +296,25 @@ class SettingsRuntimeSecretsIntegrationTest(unittest.TestCase):
                     'AWS_REGION': 'ap-northeast-1',
                     'XSBOT_AWS_RUNTIME_SECRETS_PARAMETER': PARAMETER_NAME,
                     'XSBOT_API_TOKEN': 'existing-token',
+                    'EXISTING_VALUE': 'environment-value',
+                    'EMPTY_VALUE': 'must-be-overridden',
+                    'XSBOT_DEPLOY_ENV': 'dev',
                 },
                 'settings_aws_runtime_secrets_under_test',
             )
 
         self.assertEqual('parameter-token', module.AUTH_SETTINGS['api_token'])
+        self.assertEqual('1234567890', module.PLUGINS['liff']['login_channel_id'])
+        self.assertEqual({'token': 'custom-token', 'empty': '', 'fallback': 'environment-value',
+                          'formatted': 'prefix:custom-token'}, module.PLUGINS['custom'])
+        self.assertEqual(['custom-token', ''], module.BOTS['example']['interfaces'][0]['params']['tokens'])
+        self.assertEqual('custom-token', module.CONSTANTS['custom'])
         client_factory.assert_called_once_with(
             'ssm', region_name='ap-northeast-1')
         client.get_parameter.assert_called_once_with(
             Name=PARAMETER_NAME, WithDecryption=True)
 
-    def test_YAMLだけでAWS選択した場合も秘密値を展開する(self):
+    def test_YAMLだけでAWS選択した場合も追加値を解決する(self):
         client = Mock()
         client.get_parameter.return_value = {
             'Parameter': {
@@ -346,6 +378,57 @@ class SettingsRuntimeSecretsIntegrationTest(unittest.TestCase):
 
         self.assertEqual('gcp', module.CLOUD_SETTINGS['provider'])
         loader.assert_not_called()
+
+    def test_追加設定による基盤とWebchatの上書きは起動前に拒否する(self):
+        cases = [
+            'cloud:\n    provider: !env PROTECTED',
+            'aws:\n    region: !env PROTECTED',
+            'gcp:\n    storage_bucket: !env PROTECTED',
+            'local:\n    storage_root: !env PROTECTED',
+            'services:\n    app:\n      base_url: !env PROTECTED',
+            'options:\n    signing_key: !env PROTECTED',
+            'plugins:\n    webchat:\n      signing_key: !env PROTECTED',
+            'plugins:\n    webchat:\n      scenario_uri: !env PROTECTED',
+            'plugins:\n    webchat:\n      scenario_compatibility_epoch: !format ["{}", !env PROTECTED]',
+            'bots:\n    example:\n      interfaces:\n        - type: webchat\n          params:\n            allowed_origins: !env PROTECTED',
+            'bots:\n    example:\n      interfaces:\n        - type: webchat\n          params:\n            signing_key: !env PROTECTED\n        - type: webchat\n          params:\n            signing_key: fixed',
+        ]
+        for index, section in enumerate(cases):
+            with self.subTest(section=section):
+                runtime_secrets._reset_for_test()
+                client = Mock()
+                client.get_parameter.return_value = {'Parameter': {
+                    'Type': 'SecureString', 'Value': '{"PROTECTED":"synthetic-private-value"}'}}
+                text = '"*":\n  auth: {}\n  bots: {}\n  ' + section + '\n'
+                environment = {'XSBOT_CLOUD_PROVIDER': 'aws', 'AWS_REGION': 'ap-northeast-1',
+                               'XSBOT_AWS_RUNTIME_SECRETS_PARAMETER': PARAMETER_NAME, 'PROTECTED': 'aws'}
+                with patch('cloud_backend.aws.runtime_secrets.boto3.client', return_value=client), \
+                        patch.object(cloud_backend_factory, 'configure') as configure:
+                    with self.assertRaises(RuntimeSecretsError) as caught:
+                        self._load_settings_module(text, environment, f'protected_settings_{index}')
+                    configure.assert_not_called()
+                self.assertNotIn('synthetic-private-value', str(caught.exception))
+
+    def test_追加値を使う書式の解決失敗でも秘密値を例外へ出さない(self):
+        text = '''
+"*":
+  cloud: {provider: aws}
+  auth: {}
+  bots: {}
+  plugins:
+    custom:
+      value: !format ['{0:{1}}', 'value', !env FORMAT_SPEC]
+'''
+        client = Mock()
+        client.get_parameter.return_value = {'Parameter': {
+            'Type': 'SecureString', 'Value': '{"FORMAT_SPEC":"synthetic-secret-format"}'}}
+        environment = {'AWS_REGION': 'ap-northeast-1',
+                       'XSBOT_AWS_RUNTIME_SECRETS_PARAMETER': PARAMETER_NAME}
+        with patch('cloud_backend.aws.runtime_secrets.boto3.client', return_value=client):
+            with self.assertRaises(RuntimeSecretsError) as caught:
+                self._load_settings_module(text, environment, 'invalid_format_settings')
+        self.assertNotIn('synthetic-secret-format', str(caught.exception))
+        self.assertTrue(caught.exception.__suppress_context__)
 
 
 if __name__ == '__main__':
