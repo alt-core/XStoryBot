@@ -18,6 +18,8 @@ from cloud_backend.gcp.credential_source import GcpCredentialSource
 class GcpTaskQueue(TaskQueue):
     """Cloud Tasksへのタスク登録を実装する。"""
 
+    defer_until_response = True
+
     def __init__(self, credential_source=None, token_supplier=None):
         self._client = None
         self._project_id = None
@@ -89,37 +91,41 @@ class GcpTaskQueue(TaskQueue):
 
         # Cloud Tasks上の名前はGoogleへ任せ、本文のIDは処理の相関にだけ使う。
         task_id = str(uuid.uuid4())
-        request_params = params.copy()
-        request_params['task_id'] = task_id
+        try:
+            request_params = params.copy()
+            request_params['task_id'] = task_id
 
-        logging.info(f'Creating task: {full_url}, task_id: {task_id}')
+            logging.info(f'Creating task: {full_url}, task_id: {task_id}')
 
-        task = tasks_v2.Task(
-            http_request=tasks_v2.HttpRequest(
-                http_method=tasks_v2.HttpMethod.POST,
-                headers={
-                    'Content-Type': 'application/x-www-form-urlencoded',
-                    'X-API-Token': self._token_supplier(),
-                },
-                url=full_url,
-                body=urlencode(request_params).encode(),
-            ),
-        )
-
-        if delay_seconds:
-            scheduled_at = (
-                datetime.datetime.utcnow()
-                + datetime.timedelta(seconds=delay_seconds))
-            timestamp = timestamp_pb2.Timestamp()
-            timestamp.FromDatetime(scheduled_at)
-            task.schedule_time = timestamp
-
-        response = self._call(lambda: client.create_task(
-            tasks_v2.CreateTaskRequest(
-                parent=client.queue_path(
-                    self._project_id, self._location, queue_name),
-                task=task,
+            task = tasks_v2.Task(
+                http_request=tasks_v2.HttpRequest(
+                    http_method=tasks_v2.HttpMethod.POST,
+                    headers={
+                        'Content-Type': 'application/x-www-form-urlencoded',
+                        'X-API-Token': self._token_supplier(),
+                    },
+                    url=full_url,
+                    body=urlencode(request_params).encode(),
+                ),
             )
-        ))
-        logging.info(f'Created task: {response.name}, task_id: {task_id}')
-        return task_id
+
+            if delay_seconds:
+                scheduled_at = (
+                    datetime.datetime.utcnow()
+                    + datetime.timedelta(seconds=delay_seconds))
+                timestamp = timestamp_pb2.Timestamp()
+                timestamp.FromDatetime(scheduled_at)
+                task.schedule_time = timestamp
+
+            response = self._call(lambda: client.create_task(
+                tasks_v2.CreateTaskRequest(
+                    parent=client.queue_path(
+                        self._project_id, self._location, queue_name),
+                    task=task,
+                )
+            ))
+            logging.info(f'Created task: {response.name}, task_id: {task_id}')
+            return task_id
+        except Exception as error:
+            error.task_id = task_id
+            raise

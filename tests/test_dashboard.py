@@ -104,6 +104,7 @@ def load_dashboard():
 
     task_client = types.ModuleType('task_client')
     task_client.create_task = Mock(return_value='task-123')
+    task_client.allows_delayed_scenarios = Mock(return_value=True)
 
     utility = types.ModuleType('utility')
     utility.timezone = lambda name: datetime.timezone(datetime.timedelta(hours=9))
@@ -233,6 +234,11 @@ def call_wsgi(app, method, path, params=None, json_body=None):
 class DashboardTest(unittest.TestCase):
     def setUp(self):
         self.module, self.dependencies = load_dashboard()
+        # 予約日時の過去判定を実時刻に依存させない。
+        self.now = datetime.datetime(2026, 8, 1, tzinfo=datetime.timezone.utc)
+        patcher = patch.object(self.module, '_now_utc', side_effect=lambda: self.now)
+        patcher.start()
+        self.addCleanup(patcher.stop)
 
     def test_認証秘密値を読まずにdashboardをimportする(self):
         self.dependencies.auth_middleware.verify_credentials.assert_not_called()
@@ -529,10 +535,49 @@ class DashboardTest(unittest.TestCase):
                 )
 
                 self.assertEqual(400, status)
-                self.assertIn('Invalid scheduled_at format', body)
+                self.assertIn('タイムゾーンを付けずに入力してください', body)
 
         self.dependencies.group_db.create_task.assert_not_called()
         self.dependencies.task_client.create_task.assert_not_called()
+
+    def test_過去や現在の予約日時は保存やenqueue前に400にする(self):
+        # 2026-08-01T00:00:00Zは日本時間の09:00:00。
+        for scheduled_at in ('2026-08-01T09:00:00', '2026-08-01T08:59:59', '2025-08-01T10:00:00'):
+            with self.subTest(scheduled_at=scheduled_at):
+                status, _, body = call_wsgi(
+                    self.module.app,
+                    'POST',
+                    '/dashboard/api/create_group_message_task',
+                    json_body={
+                        'bot_name': 'zeta',
+                        'group_id': 'group-1',
+                        'action': 'hello',
+                        'scheduled_at': scheduled_at,
+                    },
+                )
+
+                self.assertEqual(400, status)
+                self.assertIn('予約日時が現在より前です', body)
+
+        self.dependencies.group_db.create_task.assert_not_called()
+        self.dependencies.task_client.create_task.assert_not_called()
+
+    def test_文字列でない予約日時は形式エラーにする(self):
+        status, _, body = call_wsgi(
+            self.module.app,
+            'POST',
+            '/dashboard/api/create_group_message_task',
+            json_body={
+                'bot_name': 'zeta',
+                'group_id': 'group-1',
+                'action': 'hello',
+                'scheduled_at': 20260901,
+            },
+        )
+
+        self.assertEqual(400, status)
+        self.assertIn('Invalid scheduled_at format', body)
+        self.dependencies.group_db.create_task.assert_not_called()
 
     def test_予約日時のoffsetなし入力をJSTで保存してenqueueする(self):
         status, _, body = call_wsgi(
@@ -561,6 +606,31 @@ class DashboardTest(unittest.TestCase):
             url='/api/v1/bots/zeta/process_group_batch',
             params={'message_task_id': 'group-task-1', 'batch_index': 0},
         )
+
+    def test_予約未対応では作成前に拒否し即時配信はできる(self):
+        self.dependencies.task_client.allows_delayed_scenarios.return_value = False
+        data = {'bot_name': 'zeta', 'group_id': 'group-1', 'action': 'hello'}
+        status, _, body = call_wsgi(
+            self.module.app, 'POST', '/dashboard/api/create_group_message_task',
+            json_body={**data, 'scheduled_at': '2026-10-01T20:00:00'})
+        self.assertEqual(400, status)
+        self.assertIn('予約配信を使えません', body)
+        self.dependencies.group_db.create_task.assert_not_called()
+        self.dependencies.task_client.create_task.assert_not_called()
+        status, _, _body = call_wsgi(
+            self.module.app, 'POST', '/dashboard/api/create_group_message_task',
+            json_body={**data, 'scheduled_at': None})
+        self.assertEqual(200, status)
+        self.dependencies.group_db.create_task.assert_called_once()
+        self.dependencies.task_client.create_task.assert_called_once()
+
+    def test_予約未対応の管理画面は即時送信だけを表示する(self):
+        self.dependencies.task_client.allows_delayed_scenarios.return_value = False
+        status, _, body = call_wsgi(self.module.app, 'GET', '/dashboard/')
+        self.assertEqual(200, status)
+        self.assertFalse('id="schedule-date"' in body)
+        self.assertIn('id="immediate-send" checked', body)
+        self.assertIn('即時送信のみ', body)
 
     def test_scheduled_enqueue_failure_message_is_not_overwritten(self):
         self.dependencies.task_client.create_task.side_effect = RuntimeError(

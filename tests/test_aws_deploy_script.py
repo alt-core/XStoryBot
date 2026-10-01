@@ -47,7 +47,7 @@ class AwsDeployScriptTest(unittest.TestCase):
                 'WebchatSigningKey',
                 'WebchatScenarioUri',
                 'WebchatCompatibilityEpoch',
-                'ActionWorkerEnabled', 'GroupWorkerEnabled', 'AlarmsEnabled'):
+                'AlarmsEnabled'):
             self.assertIn(f'ParameterKey={name},ParameterValue=', self.source)
 
         self.assertIn('sam validate', self.source)
@@ -103,8 +103,6 @@ class AwsDeployScriptTest(unittest.TestCase):
             'XSBOT_AWS_ADMIN_AUTH_PARAMETER': '/test/admin',
             'XSBOT_AWS_RUNTIME_SECRETS_PARAMETER': '/test/runtime',
             'XSBOT_AWS_IMAGE_TAG': 'test-image',
-            'XSBOT_AWS_ACTION_WORKER_ENABLED': 'false',
-            'XSBOT_AWS_GROUP_WORKER_ENABLED': 'false',
             'XSBOT_AWS_ALARMS_ENABLED': 'false',
             **(extra_env or {}),
         }
@@ -171,10 +169,9 @@ sam() {
             'ImageUri', 'WebchatImageUri', 'EnvironmentName', 'SheetId',
             'GoogleSheetsCredentialParameterName', 'AdminAuthParameterName',
             'RuntimeSecretsParameterName',
-            'ActionWorkerEnabled', 'GroupWorkerEnabled', 'AlarmsEnabled',
+            'AlarmsEnabled',
         }, set(parameters))
-        for name in ('ActionWorkerEnabled', 'GroupWorkerEnabled', 'AlarmsEnabled'):
-            self.assertEqual('false', parameters[name])
+        self.assertEqual('false', parameters['AlarmsEnabled'])
         self.assertEqual(
             'example.invalid/test-repository:test-image',
             parameters['ImageUri'])
@@ -203,28 +200,23 @@ sam() {
         self.assertNotIn('WebchatScenarioUri', parameters)
         self.assertEqual(parameters['ImageUri'], parameters['WebchatImageUri'])
 
-    def test_待機費用の設定は系統別に渡しメールなしでもalarmを有効にできる(self):
+    def test_メールなしでもalarmを明示的に有効にできる(self):
         result = self._run_deploy({
-            'XSBOT_AWS_ACTION_WORKER_ENABLED': 'true',
-            'XSBOT_AWS_GROUP_WORKER_ENABLED': 'false',
             'XSBOT_AWS_ALARMS_ENABLED': 'true',
         })
         parameters = self._parameters(result)
-        self.assertEqual('true', parameters['ActionWorkerEnabled'])
-        self.assertEqual('false', parameters['GroupWorkerEnabled'])
         self.assertEqual('true', parameters['AlarmsEnabled'])
         self.assertNotIn('AlarmEmail', parameters)
 
-    def test_受信と監視の選択漏れや誤指定は外部CLIを呼ぶ前に停止する(self):
-        for name in ('XSBOT_AWS_ACTION_WORKER_ENABLED', 'XSBOT_AWS_GROUP_WORKER_ENABLED',
-                     'XSBOT_AWS_ALARMS_ENABLED'):
-            for value in (None, '', 'TRUE', 'yes', '0'):
-                with self.subTest(name=name, value=value):
-                    result = self._run_deploy({name: value})
-                    self.assertNotEqual(0, result.returncode)
-                    self.assertIn(name, result.stderr)
-                    self.assertNotIn('call:', result.stderr)
-                    self.assertEqual('', result.stdout)
+    def test_監視の選択漏れや誤指定は外部CLIを呼ぶ前に停止する(self):
+        name = 'XSBOT_AWS_ALARMS_ENABLED'
+        for value in (None, '', 'TRUE', 'yes', '0'):
+            with self.subTest(value=value):
+                result = self._run_deploy({name: value})
+                self.assertNotEqual(0, result.returncode)
+                self.assertIn(name, result.stderr)
+                self.assertNotIn('call:', result.stderr)
+                self.assertEqual('', result.stdout)
 
     def test_true明示で鍵とScenarioを渡しepochは未指定なら送らない(self):
         parameters = self._parameters(self._run_deploy({

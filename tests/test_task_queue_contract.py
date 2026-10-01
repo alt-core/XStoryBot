@@ -53,6 +53,9 @@ class GcpTaskQueueContractTest(TaskQueueContractMixin, unittest.TestCase):
     def set_transport_error(self, error):
         self.client.create_task.side_effect = error
 
+    def assert_transport_not_called(self):
+        self.client.create_task.assert_not_called()
+
     def make_sdk_error(self):
         error_class = type(
             'ServiceUnavailable',
@@ -69,6 +72,7 @@ class AwsTaskQueueContractTest(TaskQueueContractMixin, unittest.TestCase):
     def create_contract_queue(self):
         self.contract_module = aws_task_queue
         self.client = Mock()
+        self.client.invoke.return_value = {'StatusCode': 202}
         self.queue = AwsTaskQueue(
             client_factory=lambda service_name, **options: self.client)
         self.queue.initialize(AWS_SETTINGS)
@@ -76,18 +80,21 @@ class AwsTaskQueueContractTest(TaskQueueContractMixin, unittest.TestCase):
     def capture_task(self, queue_name, url, params, delay_seconds=None):
         task_id = self.queue.create_task(
             queue_name, url, params, delay_seconds=delay_seconds)
-        request = self.client.send_message.call_args.kwargs
-        raw_body = request['MessageBody']
+        request = self.client.invoke.call_args.kwargs
+        raw_body = request['Payload'].decode('utf-8')
         envelope = json.loads(raw_body)
         return CapturedTask(
             task_id=task_id,
             params=envelope['params'],
-            delayed='DelaySeconds' in request,
+            delayed=False,
             raw_body=raw_body,
         )
 
     def set_transport_error(self, error):
-        self.client.send_message.side_effect = error
+        self.client.invoke.side_effect = error
+
+    def assert_transport_not_called(self):
+        self.client.invoke.assert_not_called()
 
     def make_sdk_error(self):
         return ClientError(
@@ -97,7 +104,7 @@ class AwsTaskQueueContractTest(TaskQueueContractMixin, unittest.TestCase):
                     'Message': 'unavailable',
                 },
             },
-            'SendMessage',
+            'Invoke',
         )
 
 

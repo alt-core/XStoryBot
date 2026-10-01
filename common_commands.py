@@ -69,7 +69,19 @@ POSTJSON_RESULT_VARIABLE = '$_result'
 POSTJSON_RESPONSE_VARIABLE = '$_response'
 
 
-def send_request(bot_name, user, action, delay_secs=None, interface_name=None):
+def send_request(bot_name, user, action, delay_secs=None, interface_name=None, context=None):
+    if context is not None and getattr(context, 'defer_async_tasks', False):
+        context.pending_tasks.append((
+            lambda: send_request(bot_name, user, action, delay_secs, interface_name),
+            {
+                'bot': bot_name,
+                'action': action,
+                'interface': user.service_name if interface_name is None else interface_name,
+                'user': user.serialize(),
+                'delay_seconds': delay_secs,
+            },
+        ))
+        return
     params = {
         'user': user.serialize(),
         'action': action,
@@ -234,6 +246,11 @@ class CommonCommands_Builder(object):
             builder.add_new_string_block(return_label)
             return True
 
+        if msg in DELAY_CMDS and not task_client.allows_delayed_scenarios():
+            if float(options[0]) != 0:
+                builder.raise_error('この環境では@delay 0だけを使えます。遅延指定は使えません', options[0])
+            options[0] = '0'
+
         builder.add_command(sender, msg, options, children)
         if msg in RAWIMAGE_CMDS:
             builder.msg_count += 1
@@ -318,7 +335,7 @@ class CommonCommands_Runtime(object):
                 logging.error('invalid bot/interface: @forward: %s/%s', bot_name, service)
                 context.add_reaction(None, "<<@forwardを解釈できませんでした>>")
                 return True
-            send_request(bot_name, context.user, action, interface_name=interface_name)
+            send_request(bot_name, context.user, action, interface_name=interface_name, context=context)
         elif msg in DELAY_CMDS:
             import main
             delay_secs = int(options[0])
@@ -335,7 +352,7 @@ class CommonCommands_Runtime(object):
                 logging.error('invalid bot/interface: @delay: %s/%s', bot_name, service)
                 context.add_reaction(None, "<<@delayを解釈できませんでした>>")
                 return True
-            send_request(bot_name, context.user, action, delay_secs, interface_name)
+            send_request(bot_name, context.user, action, delay_secs, interface_name, context=context)
         elif msg in RESET_NODES_CMDS:
             if len(options) > 0:
                 target_name = options[0]

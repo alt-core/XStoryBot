@@ -32,16 +32,6 @@ Parameters:
     Type: AWS::SSM::Parameter::Name
     Description: LINE等のruntime秘密値JSONを保存したSecureString名
     AllowedPattern: '^/[a-zA-Z0-9_.\-/]+$'
-  ActionWorkerEnabled:
-    Type: String
-    Default: 'false'
-    AllowedValues: ['true', 'false']
-    Description: 非同期actionのSQS受信を有効にする。有効中は空受信もリクエストを消費する
-  GroupWorkerEnabled:
-    Type: String
-    Default: 'false'
-    AllowedValues: ['true', 'false']
-    Description: グループ配信のSQS受信を有効にする。有効中は空受信もリクエストを消費する
   AlarmsEnabled:
     Type: String
     Default: 'false'
@@ -88,8 +78,6 @@ Parameters:
     Default: ''
     Description: SNSのメール購読先。空ならメール購読を作らない。alarm作成はAlarmsEnabledで選ぶ
 Conditions:
-  ActionWorkerEnabledCondition: !Equals [!Ref ActionWorkerEnabled, 'true']
-  GroupWorkerEnabledCondition: !Equals [!Ref GroupWorkerEnabled, 'true']
   AlarmsEnabledCondition: !Equals [!Ref AlarmsEnabled, 'true']
   WebchatEnabledCondition: !Equals [!Ref WebchatEnabled, 'true']
   WebchatAlarmCondition: !And [!Condition AlarmsEnabledCondition, !Condition WebchatEnabledCondition]
@@ -113,13 +101,8 @@ Globals:
         XSBOT_AWS_GROUP_TASK_TABLE: !Ref GroupTaskTable
         XSBOT_AWS_GROUP_TASK_INDEX: BotCreatedAtIndex
         XSBOT_AWS_CACHE_TABLE: !Ref CacheTable
-        XSBOT_AWS_ACTION_QUEUE_URL: !Ref ActionQueue
-        XSBOT_AWS_ACTION_QUEUE_ARN: !GetAtt ActionQueue.Arn
-        XSBOT_AWS_GROUP_MESSAGE_QUEUE_URL: !Ref GroupQueue
-        XSBOT_AWS_GROUP_MESSAGE_QUEUE_ARN: !GetAtt GroupQueue.Arn
-        XSBOT_AWS_SCHEDULER_ROLE_ARN: !GetAtt SchedulerRole.Arn
-        XSBOT_AWS_SCHEDULER_GROUP_NAME: !Ref SchedulerGroup
-        XSBOT_AWS_SCHEDULER_DLQ_ARN: !GetAtt DeadLetterQueue.Arn
+        XSBOT_AWS_ACTION_WORKER_FUNCTION: !Sub '${AWS::StackName}-action-worker'
+        XSBOT_AWS_GROUP_WORKER_FUNCTION: !Sub '${AWS::StackName}-group-worker'
         XSBOT_AWS_BUILD_CLUSTER: !Ref BuildCluster
         XSBOT_AWS_BUILD_TASK_DEFINITION: !Ref BuildTaskDefinition
         XSBOT_AWS_BUILD_CONTAINER_NAME: xstorybot
@@ -309,57 +292,6 @@ Resources:
       MessageRetentionPeriod: 1209600
       SqsManagedSseEnabled: true
 
-  ActionQueue:
-    Type: AWS::SQS::Queue
-    Properties:
-      MessageRetentionPeriod: 345600
-      # worker の Timeout(300秒)以上が必須。AWS 推奨の6倍(1800)より短くし、
-      # 失敗した task が再配信されるまでの待ち時間を優先する
-      VisibilityTimeout: 600
-      SqsManagedSseEnabled: true
-      RedrivePolicy:
-        deadLetterTargetArn: !GetAtt DeadLetterQueue.Arn
-        maxReceiveCount: 5
-
-  GroupQueue:
-    Type: AWS::SQS::Queue
-    Properties:
-      MessageRetentionPeriod: 345600
-      VisibilityTimeout: 5400
-      SqsManagedSseEnabled: true
-      RedrivePolicy:
-        deadLetterTargetArn: !GetAtt DeadLetterQueue.Arn
-        maxReceiveCount: 5
-
-  SchedulerGroup:
-    Type: AWS::Scheduler::ScheduleGroup
-
-  SchedulerRole:
-    Type: AWS::IAM::Role
-    Properties:
-      AssumeRolePolicyDocument:
-        Version: '2012-10-17'
-        Statement:
-          - Effect: Allow
-            Principal:
-              Service: scheduler.amazonaws.com
-            Action: sts:AssumeRole
-            Condition:
-              StringEquals:
-                aws:SourceAccount: !Ref AWS::AccountId
-                aws:SourceArn: !GetAtt SchedulerGroup.Arn
-      Policies:
-        - PolicyName: SendScheduledTasks
-          PolicyDocument:
-            Version: '2012-10-17'
-            Statement:
-              - Effect: Allow
-                Action: sqs:SendMessage
-                Resource:
-                  - !GetAtt ActionQueue.Arn
-                  - !GetAtt GroupQueue.Arn
-                  - !GetAtt DeadLetterQueue.Arn
-
   ApiLogGroup:
     Type: AWS::Logs::LogGroup
     Properties:
@@ -438,20 +370,10 @@ Resources:
                 Action: s3:ListBucket
                 Resource: !GetAtt PrivateBucket.Arn
               - Effect: Allow
-                Action: sqs:SendMessage
+                Action: lambda:InvokeFunction
                 Resource:
-                  - !GetAtt ActionQueue.Arn
-                  - !GetAtt GroupQueue.Arn
-              - Effect: Allow
-                Action:
-                  - scheduler:CreateSchedule
-                Resource: !Sub 'arn:${AWS::Partition}:scheduler:${AWS::Region}:${AWS::AccountId}:schedule/${SchedulerGroup}/*'
-              - Effect: Allow
-                Action: iam:PassRole
-                Resource: !GetAtt SchedulerRole.Arn
-                Condition:
-                  StringEquals:
-                    iam:PassedToService: scheduler.amazonaws.com
+                  - !Sub 'arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:${AWS::StackName}-action-worker'
+                  - !Sub 'arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:${AWS::StackName}-group-worker'
               - Effect: Allow
                 Action: ecs:RunTask
                 Resource: !Ref BuildTaskDefinition
@@ -535,23 +457,13 @@ Resources:
                 Action: s3:ListBucket
                 Resource: !GetAtt PrivateBucket.Arn
               - Effect: Allow
-                Action:
-                  - sqs:DeleteMessage
-                  - sqs:GetQueueAttributes
-                  - sqs:ReceiveMessage
-                  - sqs:SendMessage
+                Action: lambda:InvokeFunction
                 Resource:
-                  - !GetAtt ActionQueue.Arn
-                  - !GetAtt GroupQueue.Arn
+                  - !Sub 'arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:${AWS::StackName}-action-worker'
+                  - !Sub 'arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:${AWS::StackName}-group-worker'
               - Effect: Allow
-                Action: scheduler:CreateSchedule
-                Resource: !Sub 'arn:${AWS::Partition}:scheduler:${AWS::Region}:${AWS::AccountId}:schedule/${SchedulerGroup}/*'
-              - Effect: Allow
-                Action: iam:PassRole
-                Resource: !GetAtt SchedulerRole.Arn
-                Condition:
-                  StringEquals:
-                    iam:PassedToService: scheduler.amazonaws.com
+                Action: sqs:SendMessage
+                Resource: !GetAtt DeadLetterQueue.Arn
               - Effect: Allow
                 Action: ssm:GetParameter
                 Resource: !Sub 'arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${RuntimeSecretsParameterName}'
@@ -729,25 +641,24 @@ Resources:
       MemorySize: 1024
       # @delay で非同期化した scene の外部HTTP（既定timeout 120秒）を収める
       Timeout: 300
+      ReservedConcurrentExecutions: 10
+      RecursiveLoop: Terminate
       Role: !GetAtt WorkerRole.Arn
       Environment:
         Variables:
-          XSBOT_APP_MODULE: app_sqs_worker:app
+          XSBOT_APP_MODULE: app_aws_worker:app
+          XSBOT_AWS_WORKER_KIND: action
           AWS_LWA_READINESS_CHECK_PATH: /healthz
           AWS_LWA_INVOKE_MODE: buffered
           AWS_LWA_PASS_THROUGH_PATH: /events
           AWS_LWA_ERROR_STATUS_CODES: 500-599
-      Events:
-        ActionMessages:
-          Type: SQS
-          Properties:
-            Queue: !GetAtt ActionQueue.Arn
-            Enabled: !If [ActionWorkerEnabledCondition, true, false]
-            BatchSize: 1
-            FunctionResponseTypes:
-              - ReportBatchItemFailures
-            ScalingConfig:
-              MaximumConcurrency: 10
+      EventInvokeConfig:
+        MaximumRetryAttempts: 2
+        MaximumEventAgeInSeconds: 3600
+        DestinationConfig:
+          OnFailure:
+            Type: SQS
+            Destination: !GetAtt DeadLetterQueue.Arn
 
   GroupWorkerFunction:
     Type: AWS::Serverless::Function
@@ -758,25 +669,25 @@ Resources:
       ImageUri: !Ref ImageUri
       MemorySize: 2048
       Timeout: 900
+      ReservedConcurrentExecutions: 2
+      # 有限のbatch indexで進むグループ配信の連鎖を許可する。
+      RecursiveLoop: Allow
       Role: !GetAtt WorkerRole.Arn
       Environment:
         Variables:
-          XSBOT_APP_MODULE: app_sqs_worker:app
+          XSBOT_APP_MODULE: app_aws_worker:app
+          XSBOT_AWS_WORKER_KIND: group_batch
           AWS_LWA_READINESS_CHECK_PATH: /healthz
           AWS_LWA_INVOKE_MODE: buffered
           AWS_LWA_PASS_THROUGH_PATH: /events
           AWS_LWA_ERROR_STATUS_CODES: 500-599
-      Events:
-        GroupMessages:
-          Type: SQS
-          Properties:
-            Queue: !GetAtt GroupQueue.Arn
-            Enabled: !If [GroupWorkerEnabledCondition, true, false]
-            BatchSize: 1
-            FunctionResponseTypes:
-              - ReportBatchItemFailures
-            ScalingConfig:
-              MaximumConcurrency: 2
+      EventInvokeConfig:
+        MaximumRetryAttempts: 2
+        MaximumEventAgeInSeconds: 3600
+        DestinationConfig:
+          OnFailure:
+            Type: SQS
+            Destination: !GetAtt DeadLetterQueue.Arn
 
   NetworkVpc:
     Type: AWS::EC2::VPC
@@ -946,18 +857,10 @@ Resources:
               Value: BotCreatedAtIndex
             - Name: XSBOT_AWS_CACHE_TABLE
               Value: !Ref CacheTable
-            - Name: XSBOT_AWS_ACTION_QUEUE_URL
-              Value: !Ref ActionQueue
-            - Name: XSBOT_AWS_ACTION_QUEUE_ARN
-              Value: !GetAtt ActionQueue.Arn
-            - Name: XSBOT_AWS_GROUP_MESSAGE_QUEUE_URL
-              Value: !Ref GroupQueue
-            - Name: XSBOT_AWS_GROUP_MESSAGE_QUEUE_ARN
-              Value: !GetAtt GroupQueue.Arn
-            - Name: XSBOT_AWS_SCHEDULER_ROLE_ARN
-              Value: !GetAtt SchedulerRole.Arn
-            - Name: XSBOT_AWS_SCHEDULER_GROUP_NAME
-              Value: !Ref SchedulerGroup
+            - Name: XSBOT_AWS_ACTION_WORKER_FUNCTION
+              Value: !Sub '${AWS::StackName}-action-worker'
+            - Name: XSBOT_AWS_GROUP_WORKER_FUNCTION
+              Value: !Sub '${AWS::StackName}-group-worker'
             - Name: XSBOT_AWS_SHEETS_CREDENTIAL_PARAMETER
               Value: !Ref GoogleSheetsCredentialParameterName
             - Name: XSBOT_AWS_RUNTIME_SECRETS_PARAMETER
@@ -1043,6 +946,46 @@ Resources:
       OKActions:
         - !Ref AlarmTopic
 
+  WorkerDestinationFailureAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Condition: AlarmsEnabledCondition
+    Properties:
+      AlarmDescription: 非同期workerの失敗記録をDLQへ配送できませんでした
+      Metrics:
+        - Id: action
+          MetricStat:
+            Metric:
+              Namespace: AWS/Lambda
+              MetricName: DestinationDeliveryFailures
+              Dimensions:
+                - Name: FunctionName
+                  Value: !Ref ActionWorkerFunction
+            Period: 60
+            Stat: Sum
+          ReturnData: false
+        - Id: group
+          MetricStat:
+            Metric:
+              Namespace: AWS/Lambda
+              MetricName: DestinationDeliveryFailures
+              Dimensions:
+                - Name: FunctionName
+                  Value: !Ref GroupWorkerFunction
+            Period: 60
+            Stat: Sum
+          ReturnData: false
+        - Id: failures
+          Expression: SUM([action, group])
+          ReturnData: true
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref AlarmTopic
+      OKActions:
+        - !Ref AlarmTopic
+
 Outputs:
   ApiUrl:
     Description: API GatewayのHTTPS URL
@@ -1063,17 +1006,11 @@ Outputs:
     Value: !Ref GroupTaskTable
   CacheTableName:
     Value: !Ref CacheTable
-  ActionQueueUrl:
-    Value: !Ref ActionQueue
-  GroupQueueUrl:
-    Value: !Ref GroupQueue
   DeadLetterQueueUrl:
     Value: !Ref DeadLetterQueue
   AlarmTopicArn:
     Description: alarm通知のSNS topic。Slack等を購読させる場合はこのtopicへ
     Value: !Ref AlarmTopic
-  SchedulerRoleArn:
-    Value: !GetAtt SchedulerRole.Arn
   BuildClusterArn:
     Value: !GetAtt BuildCluster.Arn
   BuildTaskDefinitionArn:

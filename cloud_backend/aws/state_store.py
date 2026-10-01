@@ -989,6 +989,28 @@ class AwsStateStore(StateStore):
         except Exception as error:
             self._raise_task_execution_error(error, conflict=True)
 
+    def release_task_execution(self, execution_key, owner):
+        """同じownerが取得した未完了taskだけを解放する。"""
+        self._validate_task_execution_text(execution_key, 'execution key')
+        self._validate_task_execution_text(owner, 'owner')
+        try:
+            self._client().delete_item(
+                TableName=self._cache_table,
+                Key=self._item(self._task_execution_key(execution_key)),
+                ConditionExpression='#status = :claimed AND #owner = :owner',
+                ExpressionAttributeNames={
+                    '#status': 'status',
+                    '#owner': 'owner',
+                },
+                ExpressionAttributeValues={
+                    ':claimed': self._attribute(TASK_EXECUTION_CLAIMED),
+                    ':owner': self._attribute(owner),
+                },
+            )
+        except Exception as error:
+            if not self._is_conditional_error(error):
+                self._raise_task_execution_error(error)
+
     def _task_data(self, item):
         return self._decode_payload(item['payload'])
 

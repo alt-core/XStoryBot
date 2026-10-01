@@ -191,6 +191,7 @@ class WebApiTest(unittest.TestCase):
         self.main.get_bot = Mock(return_value=self.bot)
         self.auth.check_token = Mock(side_effect=lambda token: token == 'valid-token')
         self.settings.OPTIONS = {}
+        self.settings.CLOUD_SETTINGS = {'provider': 'gcp'}
         self.users.User = FakeUser
         self.users.get_group_members = Mock(return_value=[])
         self.users.append_group_member = Mock()
@@ -624,6 +625,29 @@ class WebApiTest(unittest.TestCase):
         manager_class.assert_called_once_with('bot', bot_instance=self.bot)
         manager.handle_batch_process_request.assert_called_once_with('task-1', 2)
         self.bot.check_reload.assert_called_once_with()
+
+    def test_AWSのHTTPバッチ入口は実行や入力解析の前に拒否する(self):
+        self.settings.CLOUD_SETTINGS['provider'] = 'aws'
+        with patch.object(self.module, 'process_group_batch_task') as process_task:
+            response = self.client.post(
+                '/api/v1/bots/bot/process_group_batch',
+                params={'message_task_id': 'task-1', 'batch_index': 'invalid'},
+                headers={'X-API-Token': 'valid-token'}, expect_errors=True)
+        self.assertEqual(404, response.status_int)
+        self.assertIn('AWS', response.json['message'])
+        process_task.assert_not_called()
+        self.main.get_bot.assert_not_called()
+        self.bot.check_reload.assert_not_called()
+
+    def test_AWSでもバッチ認証と通常action_APIを維持する(self):
+        self.settings.CLOUD_SETTINGS['provider'] = 'aws'
+        response = self.client.post(
+            '/api/v1/bots/bot/process_group_batch',
+            params={'message_task_id': 'task-1'}, expect_errors=True)
+        self.assertEqual(401, response.status_int)
+        self.main.get_bot.assert_not_called()
+        self.assert_success_response(self.client.post(
+            '/api/v1/bots/bot/action', params=self.action_params()))
 
     def test_group_batch_options_is_unauthenticated(self):
         response = self.client.options(

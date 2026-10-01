@@ -68,7 +68,6 @@ class AwsTemplateTest(unittest.TestCase):
             'AWS::CloudFront::Distribution',
             'AWS::CloudFront::OriginAccessControl',
             'AWS::SQS::Queue',
-            'AWS::Scheduler::ScheduleGroup',
             'AWS::ECS::Cluster',
             'AWS::ECS::TaskDefinition',
             'AWS::CloudWatch::Alarm',
@@ -153,23 +152,33 @@ class AwsTemplateTest(unittest.TestCase):
             origin['OriginAccessControlId'],
         )
 
-    def test_SQS_workerの制御値を固定する(self):
+    def test_非同期workerの再試行と上限と実行入口を固定する(self):
         expected = {
-            'ActionWorkerFunction': (300, 1024, 10, 'ActionMessages'),
-            'GroupWorkerFunction': (900, 2048, 2, 'GroupMessages'),
+            'ActionWorkerFunction': (300, 1024, 10, 'Terminate', 'action'),
+            'GroupWorkerFunction': (900, 2048, 2, 'Allow', 'group_batch'),
         }
-        for name, (timeout, memory, concurrency, event_name) in expected.items():
+        for name, (timeout, memory, concurrency, recursion, kind) in expected.items():
             properties = self.resources[name]['Properties']
             self.assertEqual('Image', properties['PackageType'])
             self.assertEqual(timeout, properties['Timeout'])
             self.assertEqual(memory, properties['MemorySize'])
-            event = properties['Events'][event_name]['Properties']
-            self.assertEqual(1, event['BatchSize'])
+            self.assertNotIn('Events', properties)
             self.assertEqual(
-                ['ReportBatchItemFailures'], event['FunctionResponseTypes'])
-            self.assertEqual(
-                concurrency, event['ScalingConfig']['MaximumConcurrency'])
+                concurrency, properties['ReservedConcurrentExecutions'])
+            self.assertEqual(recursion, properties['RecursiveLoop'])
+            self.assertEqual({
+                'MaximumRetryAttempts': 2,
+                'MaximumEventAgeInSeconds': 3600,
+                'DestinationConfig': {
+                    'OnFailure': {
+                        'Type': 'SQS',
+                        'Destination': {'GetAtt': 'DeadLetterQueue.Arn'},
+                    },
+                },
+            }, properties['EventInvokeConfig'])
             environment = properties['Environment']['Variables']
+            self.assertEqual('app_aws_worker:app', environment['XSBOT_APP_MODULE'])
+            self.assertEqual(kind, environment['XSBOT_AWS_WORKER_KIND'])
             self.assertEqual('/healthz',
                              environment['AWS_LWA_READINESS_CHECK_PATH'])
             self.assertEqual('/events',
@@ -183,30 +192,22 @@ class AwsTemplateTest(unittest.TestCase):
         self.assertNotIn(
             'PackageType', self.template['Globals']['Function'])
 
-        # worker Timeout (300秒) 以上、かつ失敗 task の再配信待ちを短くするため 6倍(1800) にはしない
-        self.assertEqual(
-            600, self.resources['ActionQueue']['Properties'][
-                'VisibilityTimeout'])
-        self.assertGreaterEqual(
-            600, self.resources['ActionWorkerFunction']['Properties']['Timeout'])
-        self.assertEqual(
-            5400, self.resources['GroupQueue']['Properties'][
-                'VisibilityTimeout'])
-
-        for queue_name in ('ActionQueue', 'GroupQueue'):
-            queue = self.resources[queue_name]
-            self.assertNotIn('DeletionPolicy', queue)
-            self.assertNotIn('UpdateReplacePolicy', queue)
-            self.assertNotIn('FifoQueue', queue['Properties'])
-            self.assertEqual(
-                {'GetAtt': 'DeadLetterQueue.Arn'},
-                queue['Properties']['RedrivePolicy'][
-                    'deadLetterTargetArn'],
-            )
-
+    def test_DLQだけを保管し常時受信とSchedulerを置かない(self):
+        queues = {
+            name for name, resource in self.resources.items()
+            if resource['Type'] == 'AWS::SQS::Queue'
+        }
+        self.assertEqual({'DeadLetterQueue'}, queues)
+        for resource in self.resources.values():
+            self.assertFalse(resource['Type'].startswith('AWS::Scheduler::'))
+            self.assertNotEqual('AWS::Lambda::EventSourceMapping', resource['Type'])
         dead_letter_queue = self.resources['DeadLetterQueue']
         self.assertEqual('Retain', dead_letter_queue['DeletionPolicy'])
         self.assertEqual('Retain', dead_letter_queue['UpdateReplacePolicy'])
+        self.assertEqual(1209600, dead_letter_queue['Properties'][
+            'MessageRetentionPeriod'])
+        for name in ('ActionQueueUrl', 'GroupQueueUrl', 'SchedulerRoleArn'):
+            self.assertNotIn(name, self.template['Outputs'])
 
     def test_PrivateBucketの不存在を404として判定できる権限を持つ(self):
         for role_name in ('ApiRole', 'WorkerRole', 'BuildTaskRole'):
@@ -264,7 +265,7 @@ class AwsTemplateTest(unittest.TestCase):
             'WebchatMediaOrigins',
             'WebchatThrottleRate', 'WebchatThrottleBurst',
             'AlarmEmail',
-            'ActionWorkerEnabled', 'GroupWorkerEnabled', 'AlarmsEnabled',
+            'AlarmsEnabled',
         }
         self.assertEqual(expected, set(parameters))
         self.assertTrue(parameters['WebchatSigningKey']['NoEcho'])
@@ -375,28 +376,33 @@ class AwsTemplateTest(unittest.TestCase):
         self.assertEqual({'Ref': 'ApiFunction'}, permission['FunctionName'])
         self.assertIn('${HttpApi}/*', permission['SourceArn']['Sub'])
 
-    def test_Scheduler_roleを専用groupへ制限する(self):
-        role = self.resources['SchedulerRole']['Properties']
-        trust = role['AssumeRolePolicyDocument']['Statement'][0]
-        self.assertEqual(
-            {'Ref': 'AWS::AccountId'},
-            trust['Condition']['StringEquals']['aws:SourceAccount'],
-        )
-        self.assertEqual(
-            {'GetAtt': 'SchedulerGroup.Arn'},
-            trust['Condition']['StringEquals']['aws:SourceArn'],
-        )
-        target_resources = role['Policies'][0]['PolicyDocument'][
-            'Statement'][0]['Resource']
-        self.assertEqual(
-            {
-                ('GetAtt', 'ActionQueue.Arn'),
-                ('GetAtt', 'GroupQueue.Arn'),
-                ('GetAtt', 'DeadLetterQueue.Arn'),
-            },
-            {(next(iter(item)), next(iter(item.values())))
-             for item in target_resources},
-        )
+    def test_登録権限は二つのworkerで失敗配送権限はDLQに限る(self):
+        worker_arns = [{
+            'Sub': 'arn:${AWS::Partition}:lambda:${AWS::Region}:'
+                   '${AWS::AccountId}:function:${AWS::StackName}-' + suffix,
+        } for suffix in ('action-worker', 'group-worker')]
+        for role_name in ('ApiRole', 'WorkerRole', 'BuildTaskRole'):
+            statements = self.resources[role_name]['Properties'][
+                'Policies'][0]['PolicyDocument']['Statement']
+            invokes = [item for item in statements
+                       if item['Action'] == 'lambda:InvokeFunction']
+            if role_name == 'BuildTaskRole':
+                self.assertEqual([], invokes)
+            else:
+                self.assertEqual(1, len(invokes))
+                self.assertEqual(worker_arns, invokes[0]['Resource'])
+            sends = [item for item in statements
+                     if item['Action'] == 'sqs:SendMessage']
+            if role_name == 'WorkerRole':
+                self.assertEqual(1, len(sends))
+                self.assertEqual({'GetAtt': 'DeadLetterQueue.Arn'},
+                                 sends[0]['Resource'])
+            else:
+                self.assertEqual([], sends)
+        for action in ('scheduler:', 'sqs:ReceiveMessage',
+                       'sqs:DeleteMessage', 'sqs:GetQueueAttributes'):
+            self.assertNotIn(action, self.source)
+        self.assertNotIn('scheduler.amazonaws.com', self.source)
 
     def test_SSM権限をParameter単位へ限定する(self):
         expected_parameters = {
@@ -462,13 +468,30 @@ class AwsTemplateTest(unittest.TestCase):
         }
         self.assertEqual({'Ref': 'SheetId'}, build_environment['SHEETS_ID'])
 
+    def test_worker名をGlobalsとFargateへ参照なしで渡す(self):
+        globals_environment = self.template['Globals']['Function'][
+            'Environment']['Variables']
+        build_environment = {
+            item['Name']: item['Value']
+            for item in self.resources['BuildTaskDefinition']['Properties'][
+                'ContainerDefinitions'][0]['Environment']
+        }
+        for environment in (globals_environment, build_environment):
+            self.assertEqual({'Sub': '${AWS::StackName}-action-worker'},
+                             environment['XSBOT_AWS_ACTION_WORKER_FUNCTION'])
+            self.assertEqual({'Sub': '${AWS::StackName}-group-worker'},
+                             environment['XSBOT_AWS_GROUP_WORKER_FUNCTION'])
+            self.assertFalse(any('QUEUE_' in name or 'SCHEDULER_' in name
+                                 for name in environment))
+
     def test_alarmは1つのSNS_topicへ通知し購読はメール任意(self):
         alarms = {
             name: resource for name, resource in self.resources.items()
             if resource['Type'] == 'AWS::CloudWatch::Alarm'
         }
         self.assertEqual(
-            {'DeadLetterAlarm', 'ApiServerErrorAlarm', 'WebchatErrorAlarm'},
+            {'DeadLetterAlarm', 'ApiServerErrorAlarm', 'WebchatErrorAlarm',
+             'WorkerDestinationFailureAlarm'},
             set(alarms))
         for name, alarm in alarms.items():
             with self.subTest(alarm=name):
@@ -490,11 +513,26 @@ class AwsTemplateTest(unittest.TestCase):
         self.assertEqual({'Ref': 'AlarmEmail'}, subscription['Properties']['Endpoint'])
         self.assertEqual('', self.template['Parameters']['AlarmEmail']['Default'])
 
-    def test_SQS受信とalarm作成を個別に選べて既定では待機しない(self):
-        for name in ('ActionWorkerEnabled', 'GroupWorkerEnabled', 'AlarmsEnabled'):
-            parameter = self.template['Parameters'][name]
-            self.assertEqual('false', parameter['Default'])
-            self.assertEqual(['true', 'false'], parameter['AllowedValues'])
+        destination_alarm = alarms['WorkerDestinationFailureAlarm']['Properties']
+        metrics = destination_alarm['Metrics']
+        for query, worker in zip(metrics[:2],
+                                 ('ActionWorkerFunction', 'GroupWorkerFunction')):
+            metric = query['MetricStat']['Metric']
+            self.assertEqual('AWS/Lambda', metric['Namespace'])
+            self.assertEqual('DestinationDeliveryFailures', metric['MetricName'])
+            self.assertEqual([{'Name': 'FunctionName', 'Value': {'Ref': worker}}],
+                             metric['Dimensions'])
+            self.assertFalse(query['ReturnData'])
+        self.assertEqual('SUM([action, group])', metrics[2]['Expression'])
+        self.assertTrue(metrics[2]['ReturnData'])
+
+    def test_alarmは明示有効時だけ作成しworkerは常に利用できる(self):
+        parameter = self.template['Parameters']['AlarmsEnabled']
+        self.assertEqual('false', parameter['Default'])
+        self.assertEqual(['true', 'false'], parameter['AllowedValues'])
+        for name in ('ActionWorkerEnabled', 'GroupWorkerEnabled'):
+            self.assertNotIn(name, self.template['Parameters'])
+            self.assertNotIn(name + 'Condition', self.template['Conditions'])
 
         def evaluate(value, parameters):
             if not isinstance(value, dict):
@@ -514,31 +552,28 @@ class AwsTemplateTest(unittest.TestCase):
                 return evaluate(args[1] if evaluate({'Condition': args[0]}, parameters) else args[2], parameters)
             self.fail(f'未検証の条件式です: {kind}')
 
-        for action, group, alarms, webchat, email in product((False, True), repeat=5):
-            parameters = {'ActionWorkerEnabled': str(action).lower(), 'GroupWorkerEnabled': str(group).lower(),
-                          'AlarmsEnabled': str(alarms).lower(), 'WebchatEnabled': str(webchat).lower(),
+        for alarms, webchat, email in product((False, True), repeat=3):
+            parameters = {'AlarmsEnabled': str(alarms).lower(), 'WebchatEnabled': str(webchat).lower(),
                           'AlarmEmail': 'test@example.invalid' if email else ''}
             with self.subTest(parameters=parameters):
-                for resource, event, expected in (
-                        ('ActionWorkerFunction', 'ActionMessages', action),
-                        ('GroupWorkerFunction', 'GroupMessages', group)):
-                    worker = self.resources[resource]
-                    self.assertNotIn('Condition', worker)
-                    enabled = worker['Properties']['Events'][event]['Properties']['Enabled']
-                    self.assertIs(expected, evaluate(enabled, parameters))
+                for name in ('ActionWorkerFunction', 'GroupWorkerFunction'):
+                    self.assertNotIn('Condition', self.resources[name])
                 created = {name for name, resource in self.resources.items()
                            if resource['Type'] == 'AWS::CloudWatch::Alarm'
                            and evaluate({'Condition': resource['Condition']}, parameters)}
-                expected = {'ApiServerErrorAlarm', 'DeadLetterAlarm'} if alarms else set()
+                expected = {'ApiServerErrorAlarm', 'DeadLetterAlarm',
+                            'WorkerDestinationFailureAlarm'} if alarms else set()
                 if alarms and webchat:
                     expected.add('WebchatErrorAlarm')
                 self.assertEqual(expected, created)
                 self.assertIs(email, evaluate({'Condition': self.resources['AlarmEmailSubscription']['Condition']}, parameters))
-        for name in ('ActionQueue', 'GroupQueue', 'DeadLetterQueue', 'AlarmTopic'):
+        for name in ('DeadLetterQueue', 'AlarmTopic'):
             self.assertNotIn('Condition', self.resources[name])
 
-    def test_固定費を増やす同時実行予約を行わない(self):
-        self.assertNotIn('ReservedConcurrentExecutions', self.source)
+    def test_無料の同時実行上限だけを使いprovisionedは設けない(self):
+        for name, limit in (('ActionWorkerFunction', 10), ('GroupWorkerFunction', 2)):
+            self.assertEqual(limit, self.resources[name]['Properties'][
+                'ReservedConcurrentExecutions'])
         self.assertNotIn('ProvisionedConcurrencyConfig', self.source)
 
     def test_明示的なresource依存に循環がない(self):

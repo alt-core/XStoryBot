@@ -117,6 +117,25 @@ class GroupMessageTaskDB:
         return GroupMessageTaskDB._state_store.get_group_message_task(task_id)
 
     @staticmethod
+    def update_task(task_id, update_builder):
+        return GroupMessageTaskDB._state_store.update_group_message_task(
+            task_id, update_builder)
+
+    @staticmethod
+    def build_error_messages(data, error=None):
+        errors = list(data.get('error_messages', []))
+        if error is not None:
+            errors.insert(0, error)
+        # 保存済み分も丸め、DBの概要が配信結果の更新を妨げないようにする。
+        suffix = '\n…（省略）'
+        limit = GroupMessageTaskDB.MAX_ERROR_MESSAGE_LENGTH
+        return [
+            message if len(message) <= limit
+            else message[:limit - len(suffix)] + suffix
+            for message in errors[:GroupMessageTaskDB.MAX_ERROR_MESSAGES_IN_DB]
+        ]
+
+    @staticmethod
     def update_task_status(task_id, status, processed=None, successful=None, failed=None, error=None, current_batch=None, interval_ms=None, failed_member_id=None):
         update_data = {
             'status': status,
@@ -140,17 +159,8 @@ class GroupMessageTaskDB:
         def build_update(data):
             current_update = dict(update_data)
 
-            errors = list(data.get('error_messages', []))
-            if error is not None:
-                errors.insert(0, error)
-            # 保存済み分も丸め、DBの概要が配信結果の更新を妨げないようにする。
-            suffix = '\n…（省略）'
-            limit = GroupMessageTaskDB.MAX_ERROR_MESSAGE_LENGTH
-            current_update['error_messages'] = [
-                message if len(message) <= limit
-                else message[:limit - len(suffix)] + suffix
-                for message in errors[:GroupMessageTaskDB.MAX_ERROR_MESSAGES_IN_DB]
-            ]
+            current_update['error_messages'] = GroupMessageTaskDB.build_error_messages(
+                data, error)
 
             if failed_member_id is not None:
                 # StateStoreのtransaction callback内でObjectStoreへ追記する。
@@ -174,7 +184,7 @@ class GroupMessageTaskDB:
 
             return current_update
 
-        return GroupMessageTaskDB._state_store.update_group_message_task(
+        return GroupMessageTaskDB.update_task(
             task_id, build_update)
 
     @staticmethod

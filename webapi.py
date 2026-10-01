@@ -47,7 +47,7 @@ def _do_action_iter(result, bot, user, action, attrs, level=0):
 
 
 def process_action_task(bot, user_str, action, attrs, interface_name=None):
-    """HTTPとSQSから同じaction処理を呼ぶための共通入口。"""
+    """HTTPで受け取ったactionを共通の処理へ渡す。"""
     return async_task_processor.process_decoded_action(
         bot, user_str, action, attrs,
         users.User, users.get_group_members, settings.OPTIONS, time.sleep,
@@ -56,7 +56,7 @@ def process_action_task(bot, user_str, action, attrs, interface_name=None):
 
 
 def process_group_batch_task(bot_name, bot, task_id, batch_index):
-    """HTTPとSQSから同じgroup batch処理を呼ぶための共通入口。"""
+    """Cloud TasksからHTTPで受け取ったgroup batchを処理する。"""
     from group_message_task_manager import GroupMessageTaskManager
     return async_task_processor.process_group_batch(
         bot_name, bot, task_id, batch_index, GroupMessageTaskManager)
@@ -208,6 +208,9 @@ def process_group_batch(bot_name):
     token = request.headers.get('X-API-Token', '')
     if not auth.check_token(token):
         abort_json(401, 'invalid token')
+
+    if settings.CLOUD_SETTINGS.get('provider') == 'aws':
+        abort_json(404, 'AWSではグループバッチのHTTP実行を提供していません')
 
     bot = main.get_bot(bot_name)
     if not bot:

@@ -249,16 +249,21 @@
                                         <input type="text" class="form-control" id="message-action" required>
                                         <small class="form-text text-muted">送信するメッセージアクションを入力してください</small>
                                     </div>
+% if scheduled_delivery_enabled:
                                     <div class="form-group">
                                         <label for="schedule-date">予約送信日時</label>
                                         <input type="text" class="form-control" id="schedule-date" placeholder="2025-03-29 22:30:00">
-                                        <small class="form-text text-muted">予約送信する場合は日時を指定してください（形式: YYYY-MM-DD HH:MM:SS）</small>
+                                        <small class="form-text text-muted">予約送信する場合は未来の日時を指定してください（形式: YYYY-MM-DD HH:MM:SS、日本時間）</small>
                                     </div>
                                     <div class="form-group form-check">
                                         <input type="checkbox" class="form-check-input" id="immediate-send">
                                         <label class="form-check-label" for="immediate-send">即時送信</label>
                                         <small class="form-text text-muted">チェックを入れると即時送信します。予約日時は無視されます。</small>
                                     </div>
+% else:
+                                    <input type="checkbox" id="immediate-send" checked hidden>
+                                    <p class="text-muted">この環境では即時送信のみ利用できます。</p>
+% end
                                     <button type="submit" class="btn btn-primary">送信開始</button>
                                 </form>
                             </div>

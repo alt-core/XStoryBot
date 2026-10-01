@@ -128,6 +128,98 @@ class AwsTaskExecutionStoreTest(unittest.TestCase):
         self.assertEqual(TASK_EXECUTION_BUSY, result)
         self.assertTrue(client.get_item.call_args.kwargs['ConsistentRead'])
 
+    def test_同じownerのlease解放後は直ちに再取得できる(self):
+        store = self.create_store()
+        key = 'action:bot:task-1'
+        store.try_claim_task_execution(key, 'owner-1', 360)
+
+        store.release_task_execution(key, 'owner-1')
+
+        self.assertEqual(
+            TASK_EXECUTION_CLAIMED,
+            store.try_claim_task_execution(key, 'owner-2', 360),
+        )
+        self.assertEqual('owner-2', self.execution_items(store)[0]['owner'])
+
+    def test_別ownerや完了済みや未作成の実行記録を解放しない(self):
+        store = self.create_store()
+        key = 'action:bot:task-1'
+        store.try_claim_task_execution(key, 'owner-1', 360)
+
+        store.release_task_execution(key, 'owner-2')
+        self.assertEqual(
+            TASK_EXECUTION_BUSY,
+            store.try_claim_task_execution(key, 'owner-2', 360),
+        )
+        store.complete_task_execution(key, 'owner-1')
+        store.release_task_execution(key, 'owner-1')
+        store.release_task_execution('not-created', 'owner-1')
+        self.assertEqual(
+            TASK_EXECUTION_COMPLETED,
+            store.try_claim_task_execution(key, 'owner-2', 360),
+        )
+
+    def test_再取得されたleaseを古いownerが解放しない(self):
+        current = [NOW]
+        store = self.create_store(clock=lambda: current[0])
+        key = 'group:bot:message-1:2'
+        store.try_claim_task_execution(key, 'owner-1', 960)
+        current[0] += datetime.timedelta(seconds=961)
+        store.try_claim_task_execution(key, 'owner-2', 960)
+
+        store.release_task_execution(key, 'owner-1')
+
+        self.assertEqual(
+            TASK_EXECUTION_BUSY,
+            store.try_claim_task_execution(key, 'owner-3', 960),
+        )
+        self.assertEqual('owner-2', self.execution_items(store)[0]['owner'])
+
+    def test_早期crashでは二回の再試行ともbusyで期限後の手動再投入を待つ(self):
+        for kind, lease_seconds in (('action', 360), ('group', 960)):
+            with self.subTest(kind=kind):
+                current = [NOW]
+                store = self.create_store(clock=lambda: current[0])
+                key = f'{kind}:bot:task-1'
+                store.try_claim_task_execution(key, 'crashed', lease_seconds)
+                for elapsed in (60, 180):
+                    current[0] = NOW + datetime.timedelta(seconds=elapsed)
+                    self.assertEqual(
+                        TASK_EXECUTION_BUSY,
+                        store.try_claim_task_execution(key, 'retry', lease_seconds),
+                    )
+                current[0] = NOW + datetime.timedelta(seconds=lease_seconds)
+                self.assertEqual(
+                    TASK_EXECUTION_CLAIMED,
+                    store.try_claim_task_execution(key, 'manual', lease_seconds),
+                )
+
+    def test_timeout後はlease期限を超えた試行で再取得できる(self):
+        for timeout, lease_seconds in ((300, 360), (900, 960)):
+            with self.subTest(timeout=timeout):
+                current = [NOW]
+                store = self.create_store(clock=lambda: current[0])
+                store.try_claim_task_execution('task-1', 'timed-out', lease_seconds)
+                current[0] += datetime.timedelta(seconds=timeout + 60)
+                self.assertEqual(
+                    TASK_EXECUTION_CLAIMED,
+                    store.try_claim_task_execution('task-1', 'retry', lease_seconds),
+                )
+
+    def test_lease解放の入力不備とSDK例外を区別する(self):
+        store = self.create_store()
+        for key, owner in (('', 'owner'), ('key', ''), (None, 'owner')):
+            with self.subTest(key=key, owner=owner), self.assertRaises(ValueError):
+                store.release_task_execution(key, owner)
+        client = Mock()
+        client.delete_item.side_effect = ClientError({
+            'Error': {'Code': 'InternalServerError', 'Message': 'secret detail'},
+        }, 'DeleteItem')
+        store = self.create_store(client=client)
+        with self.assertRaises(StateStoreError) as raised:
+            store.release_task_execution('key', 'owner')
+        self.assertNotIn('secret detail', str(raised.exception))
+
     def test_入力不備とSDK例外を安全な共通例外へ変換する(self):
         store = self.create_store()
         for key, owner, lease_seconds in (

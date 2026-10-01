@@ -68,6 +68,10 @@ def _load_scenario_module():
 class WebchatRuntimeE2ETest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
+        # transportを使わない台本fixtureは、遅延を許す環境の構文で作る。
+        cls._delay_policy = patch.object(
+            common_commands.task_client, 'allows_delayed_scenarios', return_value=True)
+        cls._delay_policy.start()
         cls.runtime = _load_runtime_module()
         cls._commands = (
             list(commands.catalog),
@@ -221,6 +225,7 @@ class WebchatRuntimeE2ETest(unittest.TestCase):
 
     @classmethod
     def tearDownClass(cls):
+        cls._delay_policy.stop()
         commands.clear()
         commands.catalog.extend(cls._commands[0])
         commands.catalog_map.update(cls._commands[1])

@@ -127,7 +127,7 @@ LINEで文字以外を受け取ると、次の文字列を入力として条件�
 | `/random` | `/else`で区切った枝からランダムに1つ実行(直前と同じ枝は続けて選ばれない) |
 | `@log` | `@log 分類 値` — 分析用の記録を残す。表示はされない |
 | `@forward` | `@forward Bot名 action [interface]` — 別のBotへ転送する。末尾のinterfaceは省略できる |
-| `@delay` | `@delay 秒 action` — 指定秒後にactionを実行する。`@delay 秒 Bot名 action [interface]`と書くとBotとinterfaceを選べる。Webchatでは使えない |
+| `@delay` | `@delay 秒 action` — 指定秒後にactionを実行する。`@delay 秒 Bot名 action [interface]`と書くとBotとinterfaceを選べる。AWSでは数値の0だけを指定でき、正数・負数はbuildエラー。Webchatでは使えない |
 
 - commandは`@`と`/`のどちらで書いても同じです(`@if`=`/if`)。日本語名もあります(`/ランダム`など)。
 - `/if`の式では変数の比較が書けます。例: `$flag == "on"`、`$count >= 3`、`!$visited`(未設定)、`&&`(かつ)`||`(または)。
@@ -244,6 +244,7 @@ Carousel、Imagemap、Flex、続きを読む(More)、グループ配信、外部
 - `@webhook URL key value key value ...`: URLへPOSTします。URLの後ろにkeyとvalueを交互に並べると、その組をform dataとして送ります。URLだけなら本文なしで送ります。途中の空セルは空文字のvalueとして位置を保ち、最後のkeyにvalueが無ければ空文字を送ります。
 - commandの引数で空セルを挟むと、後続の引数が前へ詰められます（`@seq #a <空> #c`は`#a`と`#c`の2択）。`@webhook`だけは例外で、keyとvalueの対応を保つため詰めません。
 - ChatGPTや外部APIなど時間のかかる処理は、LINEに返事をしたあと`@delay 0 #続き`で別のlabelへ回し、そこで呼び出して結果をpushで返す形にします。webhookの応答中に長い外部呼出しを書くと、reply tokenの期限（1分）やAWS Lambdaの30秒に収まりません。
+- GCP・AWSの非同期転送は、親の状態保存と応答処理の成功後に登録します。GCPの遅延秒数はその登録時刻から数えます。子の登録失敗では親を再送せず、`XSBFail`の`phase: enqueue`へ復旧対象を記録します。詳しくは[導入・運用の説明](../README.md)を参照してください。
 
 ## 定数とリッチメニュー
 

@@ -4,7 +4,7 @@ import logging
 import requests
 import json
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 
 import settings
 import auth_middleware
@@ -22,6 +22,9 @@ app = Bottle()
 def abort_json(code, msg):
     abort(code, utility.make_error_json(code, msg))
 
+def _now_utc():
+    return datetime.now(timezone.utc)
+
 def _create_aws_build_task_launcher():
     # GCP実行時にAWSのビルド実装を読み込まないよう遅延importする。
     from cloud_backend.aws.build_task_launcher import AwsBuildTaskLauncher
@@ -35,6 +38,7 @@ def dashboard(bot_name=None):
     return {
         'initial_bot_name_json': json.dumps(
             bot_name or '', ensure_ascii=False).replace('<', '\\u003c'),
+        'scheduled_delivery_enabled': task_client.allows_delayed_scenarios(),
     }
 
 
@@ -319,23 +323,24 @@ def api_create_group_message_task():
         if not bot_name or not group_id or not action:
             abort_json(400, 'Bot name, group ID, and action are required')
 
+        if scheduled_at_str is not None and scheduled_at_str != '' and not task_client.allows_delayed_scenarios():
+            abort_json(400, 'この環境では予約配信を使えません。即時送信を選んでください')
+
         scheduled_at = None
         if scheduled_at_str:
             try:
-                # タイムゾーン指定を明示的に処理
-                jst = utility.timezone('Asia/Tokyo')
-
-                # ISOフォーマット文字列をパース
                 naive_dt = datetime.fromisoformat(scheduled_at_str)
-                if naive_dt.tzinfo is not None:
-                    raise ValueError('予約日時はタイムゾーンなしのJSTで指定してください')
-
-                # JSTタイムゾーンを設定
-                scheduled_at = naive_dt.replace(tzinfo=jst)
-
-                logging.info(f"予約送信時刻を設定: {scheduled_at_str} → {scheduled_at.isoformat()}")
-            except ValueError:
+            except (TypeError, ValueError):
                 abort_json(400, 'Invalid scheduled_at format. Use ISO 8601 format (YYYY-MM-DDTHH:MM:SS)')
+            if naive_dt.tzinfo is not None:
+                abort_json(400, '予約日時はタイムゾーンを付けずに入力してください（日本時間として扱います）')
+
+            scheduled_at = naive_dt.replace(tzinfo=utility.timezone('Asia/Tokyo'))
+            # 過去の日時は即時送信になるため、打ち間違いによる一斉送信を防ぐ。
+            if scheduled_at <= _now_utc():
+                abort_json(400, '予約日時が現在より前です。未来の日時を指定するか、即時送信を選んでください')
+
+            logging.info(f"予約送信時刻を設定: {scheduled_at_str} → {scheduled_at.isoformat()}")
 
         task_id = GroupMessageTaskDB.create_task(
             bot_name=bot_name,

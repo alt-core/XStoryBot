@@ -4,6 +4,7 @@ import json
 
 import settings
 import commands
+import task_client
 
 
 _director_class = None
@@ -144,9 +145,11 @@ class BotRuntime:
 
         last_phase = None
         last_error = None
+        context.defer_async_tasks = task_client.defer_until_response()
         while retry_count > 0:
             try:
                 context.reactions = []
+                context.pending_tasks = []
                 context.load_status()
                 director = _get_director_class()(self.scenario, context)
                 director.plan_reactions()
@@ -164,7 +167,6 @@ class BotRuntime:
 
             try:
                 result = interface.respond_reaction(context, context.reactions)
-                return result
             except Exception as e:
                 context.rollback_status()
                 if raise_exceptions:
@@ -177,10 +179,18 @@ class BotRuntime:
                 retry_count -= 1
                 continue
 
+            for register_task, task_metadata in context.pending_tasks:
+                try:
+                    register_task()
+                except Exception as error:
+                    # 保存と応答が済んだ親を再実行せず、他の子の登録は続ける。
+                    self._log_failure(context, 'enqueue', error, task=task_metadata)
+            return result
+
         self._log_failure(context, last_phase, last_error)
         return None
 
-    def _log_failure(self, context, phase, error):
+    def _log_failure(self, context, phase, error, task=None):
         # 進行不能になった利用者を後から uid で辿れるよう、@log と同じ JSON 1行形式で残す
         try:
             status = context.status
@@ -195,6 +205,8 @@ class BotRuntime:
                 'error_type': type(error).__name__ if error is not None else None,
                 'error': str(error) if error is not None else None,
             }
+            if task is not None:
+                record['task'] = dict(task, task_id=getattr(error, 'task_id', None))
             logging.error(json.dumps(record, ensure_ascii=False, default=str))
         except Exception:
             logging.exception('リトライ回数を超えました（XSBFail の記録にも失敗）')

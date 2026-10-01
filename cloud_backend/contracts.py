@@ -218,6 +218,10 @@ class ObjectStore(ABC):
 class TaskQueue(ABC):
     """即時・遅延タスクを登録する境界。"""
 
+    # localの台本検証は遅延指定を許すが、タスクの実行自体は行わない。
+    allows_delayed_scenarios = True
+    defer_until_response = False
+
     @abstractmethod
     def initialize(self, backend_settings):
         raise NotImplementedError

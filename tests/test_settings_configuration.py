@@ -37,21 +37,8 @@ class SettingsTemplateTest(unittest.TestCase):
             'XSBOT_AWS_GROUP_TASK_TABLE': 'test-group-task-table',
             'XSBOT_AWS_GROUP_TASK_INDEX': 'test-group-task-index',
             'XSBOT_AWS_CACHE_TABLE': 'test-cache-table',
-            'XSBOT_AWS_ACTION_QUEUE_URL': (
-                'https://sqs.test-region-1.amazonaws.com/'
-                '000000000000/test-action-queue'),
-            'XSBOT_AWS_ACTION_QUEUE_ARN': (
-                'arn:aws:sqs:test-region-1:000000000000:test-action-queue'),
-            'XSBOT_AWS_GROUP_MESSAGE_QUEUE_URL': (
-                'https://sqs.test-region-1.amazonaws.com/'
-                '000000000000/test-group-queue'),
-            'XSBOT_AWS_GROUP_MESSAGE_QUEUE_ARN': (
-                'arn:aws:sqs:test-region-1:000000000000:test-group-queue'),
-            'XSBOT_AWS_SCHEDULER_ROLE_ARN': (
-                'arn:aws:iam::000000000000:role/test-scheduler-role'),
-            'XSBOT_AWS_SCHEDULER_GROUP_NAME': 'test-scheduler-group',
-            'XSBOT_AWS_SCHEDULER_DLQ_ARN': (
-                'arn:aws:sqs:test-region-1:000000000000:test-dlq'),
+            'XSBOT_AWS_ACTION_WORKER_FUNCTION': 'test-action-worker',
+            'XSBOT_AWS_GROUP_WORKER_FUNCTION': 'test-group-worker',
             'XSBOT_AWS_BUILD_CLUSTER': 'test-cluster',
             'XSBOT_AWS_BUILD_TASK_DEFINITION': 'test-builder:1',
             'XSBOT_AWS_BUILD_CONTAINER_NAME': 'xstorybot',
@@ -155,31 +142,13 @@ class SettingsTemplateTest(unittest.TestCase):
             default['aws']['state_store']['player_max_bytes'],
         )
         self.assertEqual(
-            'https://sqs.test-region-1.amazonaws.com/'
-            '000000000000/test-action-queue',
-            default['aws']['task_queue']['queues']['action-queue']['url'],
-        )
-        self.assertEqual(
-            'arn:aws:sqs:test-region-1:000000000000:test-group-queue',
-            default['aws']['task_queue']['queues'][
-                'group-message-queue']['arn'],
-        )
-        self.assertEqual(
-            'test-scheduler-group',
-            default['aws']['task_queue']['scheduler']['group_name'],
-        )
-        self.assertEqual(
             {
-                'role_arn': (
-                    'arn:aws:iam::000000000000:role/test-scheduler-role'),
-                'group_name': 'test-scheduler-group',
-                'dead_letter_arn': (
-                    'arn:aws:sqs:test-region-1:000000000000:test-dlq'),
-                'maximum_event_age_seconds': 3600,
-                'maximum_retry_attempts': 3,
+                'action-queue': 'test-action-worker',
+                'group-message-queue': 'test-group-worker',
             },
-            default['aws']['task_queue']['scheduler'],
+            default['aws']['task_queue']['functions'],
         )
+        self.assertEqual({'functions', 'build'}, set(default['aws']['task_queue']))
         self.assertEqual(
             {
                 'cluster': 'test-cluster',

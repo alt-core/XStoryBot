@@ -29,6 +29,9 @@ class TaskQueueContractMixin:
     def set_transport_error(self, error):
         raise NotImplementedError
 
+    def assert_transport_not_called(self):
+        raise NotImplementedError
+
     def make_sdk_error(self):
         raise NotImplementedError
 
@@ -80,11 +83,10 @@ class TaskQueueContractMixin:
                     self.assertEqual(value, captured.params[key])
                 self.assertEqual(captured.task_id, captured.params['task_id'])
 
-    def test_Noneと0は即時で正の値だけを遅延扱いにする(self):
+    def test_Noneと0は即時に登録する(self):
         cases = (
             (None, False),
             (0, False),
-            (30, True),
         )
 
         for delay_seconds, expected_delayed in cases:
@@ -96,6 +98,18 @@ class TaskQueueContractMixin:
                     delay_seconds=delay_seconds,
                 )
                 self.assertIs(expected_delayed, captured.delayed)
+
+    def test_正の遅延は環境の許否に従う(self):
+        args = (
+            'action-queue', '/api/v1/bots/bot/action',
+            {'user': 'mock:user-1', 'action': 'notice'},
+        )
+        if self.queue.allows_delayed_scenarios:
+            self.assertTrue(self.capture_task(*args, delay_seconds=30).delayed)
+        else:
+            with self.assertRaises(TaskQueueError):
+                self.capture_task(*args, delay_seconds=30)
+            self.assert_transport_not_called()
 
     def test_SDK例外だけを共通例外へ変換する(self):
         self.set_transport_error(self.make_sdk_error())

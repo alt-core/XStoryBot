@@ -2,7 +2,6 @@
 
 import logging
 from group_message_task_db import GroupMessageTaskDB
-from models import GroupMembersDB
 import users
 import task_client
 import settings
@@ -17,110 +16,118 @@ class GroupMessageTaskManager:
     def get_task(cls, task_id):
         return GroupMessageTaskDB.get_task(task_id)
 
-    @classmethod
-    def mark_task_as_running(cls, task_id):
-        return GroupMessageTaskDB.update_task_status(
-            task_id=task_id,
-            status=GroupMessageTaskDB.STATUS_RUNNING
+    @staticmethod
+    def _is_finished(task):
+        return task['status'] in (
+            GroupMessageTaskDB.STATUS_COMPLETED,
+            GroupMessageTaskDB.STATUS_ABORTED,
         )
 
-    @classmethod
-    def mark_task_as_completed(cls, task_id, processed=None, successful=None, failed=None, error=None, current_batch=None):
-        return GroupMessageTaskDB.update_task_status(
-            task_id=task_id,
-            status=GroupMessageTaskDB.STATUS_COMPLETED,
-            processed=processed,
-            successful=successful,
-            failed=failed,
-            error=error,
-            current_batch=current_batch
-        )
+    @staticmethod
+    def _skip_task(task_id, task):
+        return {
+            'message': f"タスク {task_id} のバッチは処理済み、または中止されています",
+            'task_id': task_id,
+            'status': task['status'],
+        }, 200
 
-    @classmethod
-    def mark_task_as_aborted(cls, task_id, error=None):
-        return GroupMessageTaskDB.update_task_status(
-            task_id=task_id,
-            status=GroupMessageTaskDB.STATUS_ABORTED,
-            error=error
-        )
+    def _update_batch_status(self, task_id, batch_index, status, error=None):
+        def build_update(data):
+            if (self._is_finished(data) or
+                    data.get('current_batch', 0) not in (batch_index, batch_index + 1)):
+                return {}
+            update = {'status': status}
+            if error is not None:
+                update['error_messages'] = GroupMessageTaskDB.build_error_messages(
+                    data, error)
+            return update
 
-    @classmethod
-    def update_task_progress(cls, task_id, processed=None, current_batch=None):
-        return GroupMessageTaskDB.update_task_status(
-            task_id=task_id,
-            status=GroupMessageTaskDB.STATUS_RUNNING,
-            processed=processed,
-            current_batch=current_batch
-        )
+        return GroupMessageTaskDB.update_task(task_id, build_update)
 
-    def handle_batch_process_request(self, task_id, batch_index=0, batch_size=None, max_workers=None, max_rate=None):
+    def handle_batch_process_request(self, task_id, batch_index=0, batch_size=None,
+                                     max_workers=None, max_rate=None):
         batch_size = batch_size or settings.OPTIONS.get('group_batch_size', 2000)
         max_workers = max_workers or settings.OPTIONS.get('group_max_workers', 150)
         max_rate = max_rate or settings.OPTIONS.get('group_max_rate', 500)
 
         logging.info(f"バッチ処理リクエスト処理: task_id={task_id}, batch_index={batch_index}")
-
-        task = self.get_task(task_id)
-        if not task:
-            logging.error(f"タスクが見つかりません: task_id={task_id}")
-            return {'error': 'タスクが見つかりません'}, 404
-
-        # タスクが中止または完了状態ならスキップ
-        if task['status'] in [GroupMessageTaskDB.STATUS_COMPLETED, GroupMessageTaskDB.STATUS_ABORTED]:
-            return {
-                'message': f"タスク {task_id} は既に {task['status']} 状態です",
-                'task_id': task_id,
-                'status': task['status']
-            }, 200
-
-        # 予約タスクの場合は現在時刻と比較
-        import datetime
-        if 'scheduled_at' in task and task['scheduled_at']:
-            now = datetime.datetime.now(datetime.timezone.utc)
-            scheduled_time = task['scheduled_at']
-
-            # 保存済みの予約時刻をUTCのdatetimeへ正規化する。
-            if hasattr(scheduled_time, 'timestamp'):
-                scheduled_time_dt = datetime.datetime.fromtimestamp(
-                    scheduled_time.timestamp(), tz=datetime.timezone.utc
-                )
-
-                time_diff_seconds = (scheduled_time_dt - now).total_seconds()
-
-                # 1分以上先の予約の場合は再キューイング
-                if time_diff_seconds > 60:
-                    logging.info(f"タスク {task_id} は予約実行です（あと約{time_diff_seconds/60:.1f}分）。再キューイングします。")
-
-                    task_client.create_task(
-                        queue_name='group-message-queue',
-                        url=f'/api/v1/bots/{self.bot_name}/process_group_batch',
-                        params={
-                            'message_task_id': task_id,
-                            'batch_index': batch_index
-                        },
-                        delay_seconds=time_diff_seconds
-                    )
-
-                    return {
-                        'message': f"タスク {task_id} は予約実行（あと約{time_diff_seconds/60:.1f}分）のため再キューイングしました",
-                        'task_id': task_id,
-                        'status': GroupMessageTaskDB.STATUS_PENDING,
-                        'scheduled_at': scheduled_time_dt.isoformat()
-                    }, 200
-
-                # 時間差が1分以内なら即時実行（以降の処理に進む）
-                logging.info(f"タスク {task_id} の予約時間は1分以内（{time_diff_seconds:.1f}秒）なので実行します")
-
-        self.mark_task_as_running(task_id)
-
         try:
+            task = self.get_task(task_id)
+            if not task:
+                return {'error': 'タスクが見つかりません'}, 404
+            if self._is_finished(task) or task.get('current_batch', 0) > batch_index + 1:
+                return self._skip_task(task_id, task)
+            if task.get('current_batch', 0) < batch_index:
+                raise ValueError('前のバッチの結果がまだ保存されていません')
+
+            reservation = self._reschedule_if_early(task_id, task, batch_index)
+            if reservation is not None:
+                return reservation
+
+            self._update_batch_status(
+                task_id, batch_index, GroupMessageTaskDB.STATUS_RUNNING)
+            task = self.get_task(task_id)
+            if not task:
+                return {'error': 'タスクが見つかりません'}, 404
+            if self._is_finished(task) or task.get('current_batch', 0) > batch_index + 1:
+                return self._skip_task(task_id, task)
+            if task.get('current_batch', 0) == batch_index + 1:
+                return self._register_next_batch(task_id, task, batch_index)
             return self.process_batch(
-                task_id, batch_index, batch_size, max_workers, max_rate
-            )
-        except Exception as e:
-            logging.exception(f"Error processing batch: {str(e)}")
-            self.mark_task_as_aborted(task_id, error=str(e))
-            return {'error': f'failed to process batch: {str(e)}'}, 500
+                task_id, batch_index, batch_size, max_workers, max_rate)
+        except Exception as error:
+            logging.exception(
+                'グループ配信バッチを処理できませんでした: task_id=%s, batch_index=%s',
+                task_id, batch_index)
+            try:
+                self._update_batch_status(
+                    task_id, batch_index, GroupMessageTaskDB.STATUS_FAILED,
+                    error=str(error))
+            except Exception:
+                logging.exception('グループ配信の失敗状態を保存できませんでした')
+            return {'error': f'バッチ処理に失敗しました: {str(error)}'}, 500
+
+    def _reschedule_if_early(self, task_id, task, batch_index):
+        import datetime
+
+        scheduled_time = task.get('scheduled_at')
+        if not scheduled_time or not hasattr(scheduled_time, 'timestamp'):
+            return None
+        scheduled_time_dt = datetime.datetime.fromtimestamp(
+            scheduled_time.timestamp(), tz=datetime.timezone.utc)
+        now = datetime.datetime.now(datetime.timezone.utc)
+        time_diff_seconds = (scheduled_time_dt - now).total_seconds()
+        if time_diff_seconds <= 60:
+            logging.info(f"タスク {task_id} の予約時間は1分以内（{time_diff_seconds:.1f}秒）なので実行します")
+            return None
+
+        logging.info(f"タスク {task_id} は予約実行です（あと約{time_diff_seconds/60:.1f}分）。再キューイングします。")
+        task_client.create_task(
+            queue_name='group-message-queue',
+            url=f'/api/v1/bots/{self.bot_name}/process_group_batch',
+            params={'message_task_id': task_id, 'batch_index': batch_index},
+            delay_seconds=time_diff_seconds,
+        )
+        if task['status'] == GroupMessageTaskDB.STATUS_FAILED:
+            def build_update(data):
+                if (data['status'] == GroupMessageTaskDB.STATUS_FAILED and
+                        data.get('current_batch', 0) == batch_index):
+                    return {'status': GroupMessageTaskDB.STATUS_PENDING}
+                return {}
+
+            if not GroupMessageTaskDB.update_task(task_id, build_update):
+                raise ValueError('配信タスクが見つかりません')
+            task = self.get_task(task_id)
+            if not task:
+                raise ValueError('配信タスクが見つかりません')
+            if self._is_finished(task) or task.get('current_batch', 0) != batch_index:
+                return self._skip_task(task_id, task)
+        return {
+            'message': f"タスク {task_id} は予約実行（あと約{time_diff_seconds/60:.1f}分）のため再キューイングしました",
+            'task_id': task_id,
+            'status': task['status'],
+            'scheduled_at': scheduled_time_dt.isoformat(),
+        }, 200
 
     def process_batch(self, task_id, batch_index=0, batch_size=100, max_workers=20, max_rate=200):
         task = self.get_task(task_id)
@@ -135,7 +142,9 @@ class GroupMessageTaskManager:
             members = users.get_group_members(group_id)
 
         if not members:
-            self._complete_empty_task(task_id, task)
+            saved_task = self._complete_empty_task(task_id, task)
+            if saved_task['status'] != GroupMessageTaskDB.STATUS_COMPLETED:
+                return self._skip_task(task_id, saved_task)
             return {
                 'message': f"グループ {task['group_id']} にメンバーがいません",
                 'task_id': task_id,
@@ -196,106 +205,102 @@ class GroupMessageTaskManager:
             logging.error(f"Error processing group message for {member_id}: {str(e)}")
             return False, str(e)
 
-    def _complete_empty_task(self, task_id, task):
-        # メンバーのない特殊ケースを完了状態にする
-        error_message = f"グループ {task['group_id']} にメンバーがいません"
-
-        self.mark_task_as_completed(
-            task_id=task_id,
-            processed=0,
-            successful=0,
-            failed=0,
-            error=error_message
-        )
-
     def _handle_batch_completion(self, task_id, task, batch_index, batch_count,
-                               success_count, error_count, error_logs, batch_size, total_count):
-        errors = [f"{err[0]}: {err[1]}" for err in error_logs]
-        failed_member_ids = [err[0] for err in error_logs]
+                                success_count, error_count, error_logs,
+                                batch_size, total_count):
+        errors = [f'{entry[0]}: {entry[1]}' for entry in error_logs]
+        failed_member_ids = [entry[0] for entry in error_logs]
         if failed_member_ids:
             try:
                 GroupMessageTaskDB._append_failed_member_list(
-                    task_id, failed_member_ids
-                )
-            except Exception as e:
-                logging.error(
-                    f"失敗メンバー一覧を保存できませんでした: "
-                    f"task_id={task_id}, error={str(e)}"
-                )
+                    task_id, failed_member_ids)
+            except Exception:
+                logging.exception('失敗メンバー一覧を保存できませんでした')
 
         next_batch_index = batch_index + 1
-        if next_batch_index < batch_count:
-            return self._schedule_next_batch(
-                task_id, task, batch_index, next_batch_index,
-                batch_count, success_count, error_count,
-                errors, batch_size, total_count
-            )
-        else:
-            return self._complete_all_batches(
-                task_id, task, batch_count, total_count,
-                success_count, error_count, errors
-            )
+        checkpoint_applied = False
 
-    def _schedule_next_batch(self, task_id, task, batch_index, next_batch_index,
-                          batch_count, success_count, error_count,
-                          errors, batch_size, total_count):
+        def build_update(data):
+            # callbackの再試行ごとに、最新状態から適用結果も上書きする。
+            nonlocal checkpoint_applied
+            checkpoint_applied = (
+                not self._is_finished(data) and data.get('current_batch', 0) == batch_index)
+            if not checkpoint_applied:
+                return {}
+            return {
+                'status': (GroupMessageTaskDB.STATUS_COMPLETED
+                           if next_batch_index >= batch_count
+                           else GroupMessageTaskDB.STATUS_RUNNING),
+                'processed_members': data.get('processed_members', 0) + success_count + error_count,
+                'successful_members': data.get('successful_members', 0) + success_count,
+                'failed_members': data.get('failed_members', 0) + error_count,
+                'error_messages': GroupMessageTaskDB.build_error_messages(
+                    data, '\n'.join(errors) if errors else None),
+                'current_batch': next_batch_index,
+                'total_batches': batch_count,
+                'total_members': total_count,
+            }
+
+        if not GroupMessageTaskDB.update_task(task_id, build_update):
+            raise ValueError('配信タスクが見つかりません')
+        saved_task = self.get_task(task_id)
+        if not saved_task:
+            raise ValueError('配信タスクが見つかりません')
+        if (not checkpoint_applied or
+                saved_task['status'] == GroupMessageTaskDB.STATUS_ABORTED or
+                saved_task.get('current_batch', 0) > next_batch_index):
+            return self._skip_task(task_id, saved_task)
+        if saved_task['status'] == GroupMessageTaskDB.STATUS_COMPLETED:
+            return {
+                'message': '全バッチ処理が完了しました',
+                'task_id': task_id,
+                'status': saved_task['status'],
+                'batch_count': saved_task['total_batches'],
+                'total_count': saved_task['total_members'],
+                'success_count': saved_task['successful_members'],
+                'error_count': saved_task['failed_members'],
+            }, 200
+        return self._register_next_batch(task_id, saved_task, batch_index)
+
+    def _register_next_batch(self, task_id, task, batch_index):
+        next_batch_index = batch_index + 1
+        if task.get('current_batch', 0) != next_batch_index:
+            raise ValueError('当バッチの結果がまだ保存されていません')
+        if next_batch_index >= task['total_batches']:
+            raise ValueError('最終バッチの完了状態が保存されていません')
         task_client.create_task(
             queue_name='group-message-queue',
             url=f'/api/v1/bots/{self.bot_name}/process_group_batch',
             params={
                 'message_task_id': task_id,
-                'batch_index': next_batch_index
-            }
+                'batch_index': next_batch_index,
+            },
         )
-
-        # 途中経過を更新
-        processed_count = next_batch_index * batch_size
-        current_success = task.get('successful_members', 0)
-        current_error = task.get('failed_members', 0)
-        error_summary = "\n".join(errors) if errors else None
-        GroupMessageTaskDB.update_task_status(
-            task_id=task_id,
-            status=GroupMessageTaskDB.STATUS_RUNNING,
-            processed=processed_count,
-            successful=current_success + success_count,
-            failed=current_error + error_count,
-            error=error_summary,
-            current_batch=next_batch_index
-        )
-
         return {
-            'message': f"バッチ {batch_index} 処理完了。次のバッチ {next_batch_index} をキューに追加しました",
+            'message': f'次のバッチ {next_batch_index} を登録しました',
             'task_id': task_id,
             'status': GroupMessageTaskDB.STATUS_RUNNING,
             'batch_index': batch_index,
             'next_batch_index': next_batch_index,
-            'batch_count': batch_count,
-            'total_count': total_count,
-            'success_count': success_count,
-            'error_count': error_count
+            'batch_count': task['total_batches'],
+            'total_count': task['total_members'],
         }, 200
 
-    def _complete_all_batches(self, task_id, task, batch_count, total_count,
-                           success_count, error_count, errors):
-        current_success = task.get('successful_members', 0)
-        current_error = task.get('failed_members', 0)
-        error_summary = "\n".join(errors) if errors else None
+    def _complete_empty_task(self, task_id, task):
+        def build_update(data):
+            if (self._is_finished(data) or
+                    data.get('current_batch', 0) != task.get('current_batch', 0)):
+                return {}
+            return {
+                'status': GroupMessageTaskDB.STATUS_COMPLETED,
+                'total_batches': 0,
+                'error_messages': GroupMessageTaskDB.build_error_messages(
+                    data, f"グループ {task['group_id']} にメンバーがいません"),
+            }
 
-        self.mark_task_as_completed(
-            task_id=task_id,
-            processed=total_count,
-            successful=current_success + success_count,
-            failed=current_error + error_count,
-            error=error_summary,
-            current_batch=batch_count
-        )
-
-        return {
-            'message': f"全バッチ処理完了。成功: {current_success + success_count}, エラー: {current_error + error_count}",
-            'task_id': task_id,
-            'status': GroupMessageTaskDB.STATUS_COMPLETED,
-            'batch_count': batch_count,
-            'total_count': total_count,
-            'success_count': current_success + success_count,
-            'error_count': current_error + error_count
-        }, 200
+        if not GroupMessageTaskDB.update_task(task_id, build_update):
+            raise ValueError('配信タスクが見つかりません')
+        saved_task = self.get_task(task_id)
+        if not saved_task:
+            raise ValueError('配信タスクが見つかりません')
+        return saved_task

@@ -131,6 +131,9 @@ class TaskClientInitializationTest(unittest.TestCase):
             self.queue.get_client()
         self.dependencies.tasks_v2.CloudTasksClient.assert_not_called()
 
+    def test_GCPも親の応答成功後に子を登録する(self):
+        self.assertTrue(self.queue.defer_until_response)
+
     def test_鍵file未指定時はADCを使う(self):
         client = make_client()
         self.dependencies.tasks_v2.CloudTasksClient.return_value = client
@@ -320,6 +323,9 @@ class TaskCreationTest(unittest.TestCase):
                 'action-queue', '/api/action', {'value': '1'})
 
         self.assertIs(raised.exception, error)
+        request = self.client.create_task.call_args.args[0]
+        body = parse_qs(request.task.http_request.body.decode('utf-8'))
+        self.assertEqual(body['task_id'][0], raised.exception.task_id)
 
     def test_GoogleのTask登録例外を共通例外へ変換する(self):
         google_error = type(
@@ -330,9 +336,25 @@ class TaskCreationTest(unittest.TestCase):
         self.client.create_task.side_effect = google_error(
             'task registration failed')
 
-        with self.assertRaises(TaskQueueError):
+        with self.assertRaises(TaskQueueError) as raised:
             self.create_task(
                 'action-queue', '/api/action', {'value': '1'})
+        request = self.client.create_task.call_args.args[0]
+        body = parse_qs(request.task.http_request.body.decode('utf-8'))
+        self.assertEqual(body['task_id'][0], raised.exception.task_id)
+        self.assertFalse(hasattr(request.task, 'name'))
+
+    def test_client生成前にIDはなくSDK例外もそれを維持する(self):
+        google_error = type(
+            'ServiceUnavailable', (Exception,),
+            {'__module__': 'google.api_core.exceptions'},
+        )
+        self.dependencies.tasks_v2.CloudTasksClient.side_effect = google_error('client failed')
+        with patch.object(self.module.uuid, 'uuid4') as uuid_factory, \
+                self.assertRaises(TaskQueueError) as raised:
+            self.queue.create_task('action-queue', '/api/action', {})
+        self.assertFalse(hasattr(raised.exception, 'task_id'))
+        uuid_factory.assert_not_called()
 
     def test_parameterとcredentialをlogへ出さない(self):
         loader = (

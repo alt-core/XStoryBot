@@ -67,6 +67,9 @@ class ActionContext(object):
         self.env_dicts = []
         self.reactions = None # interface に中立なフォーマット
         self.response = None # interface 毎に異なるフォーマット
+        self.defer_async_tasks = False
+        # 登録callbackと復旧用の宛先情報を、応答成功後まで保持する。
+        self.pending_tasks = []
         if service_name is not None and interface is not None:
             self.add_interface(service_name, interface)
         self.env = ActionContext.RuntimeEnvironment(self)

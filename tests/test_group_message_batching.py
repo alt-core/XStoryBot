@@ -1,3 +1,4 @@
+import copy
 import datetime
 import importlib.util
 import json
@@ -8,7 +9,7 @@ import unittest
 from unittest.mock import Mock, call, patch
 
 import cloud_backend
-from cloud_backend.contracts import ObjectNotFoundError, ObjectStoreError
+from cloud_backend.contracts import ObjectNotFoundError, ObjectStoreError, StateStoreError
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -16,22 +17,11 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 def load_group_message_task_manager():
     """外部サービスを読み込まず、Managerのbatch制御だけを読み込む。"""
-    db_module = types.ModuleType('group_message_task_db')
-
-    class StubGroupMessageTaskDB:
-        STATUS_PENDING = 'pending'
-        STATUS_RUNNING = 'running'
-        STATUS_COMPLETED = 'completed'
-        STATUS_FAILED = 'failed'
-        STATUS_ABORTED = 'aborted'
-
-        get_task = Mock()
-        get_members_from_storage = Mock()
-        update_task_status = Mock()
-        process_members_in_parallel = Mock()
-        _append_failed_member_list = Mock()
-
-    db_module.GroupMessageTaskDB = StubGroupMessageTaskDB
+    db_module = load_group_message_task_db()
+    for method in (
+            'get_task', 'get_members_from_storage', 'update_task_status',
+            'update_task', 'process_members_in_parallel', '_append_failed_member_list'):
+        setattr(db_module.GroupMessageTaskDB, method, Mock())
 
     users_module = types.ModuleType('users')
     users_module.get_group_members = Mock()
@@ -114,12 +104,15 @@ class GroupBatchTestBase(unittest.TestCase):
             'action': 'notice',
             'attrs': {'key': 'value'},
             'status': self.db.STATUS_PENDING,
+            'current_batch': 0,
+            'processed_members': 0,
             'successful_members': 0,
             'failed_members': 0,
             'error_messages': [],
         }
-        self.db.get_task.side_effect = lambda task_id: self.task
+        self.db.get_task.side_effect = lambda task_id: copy.deepcopy(self.task)
         self.db.update_task_status.side_effect = self._update_task
+        self.db.update_task.side_effect = self._update_checkpoint
 
     def _update_task(self, task_id, status, processed=None, successful=None,
                      failed=None, error=None, current_batch=None, **kwargs):
@@ -134,6 +127,10 @@ class GroupBatchTestBase(unittest.TestCase):
             self.task.setdefault('error_messages', []).insert(0, error)
         if current_batch is not None:
             self.task['current_batch'] = current_batch
+        return True
+
+    def _update_checkpoint(self, task_id, builder):
+        self.task.update(builder(copy.deepcopy(self.task)))
         return True
 
     def _set_members(self, count):
@@ -172,6 +169,7 @@ class GroupBatchBoundaryTest(GroupBatchTestBase):
         self.module.users.get_group_members.assert_not_called()
 
     def test_通常taskは処理対象batchだけをserializeする(self):
+        self.task['current_batch'] = 1
         members = []
         for index in range(4):
             member = Mock()
@@ -359,6 +357,65 @@ class GroupBatchReservationTest(GroupBatchTestBase):
             {'message_task_id': 'message-1', 'batch_index': 0},
         )
         self.assertGreater(create_call.kwargs['delay_seconds'], 60)
+        self.assertEqual(self.task['current_batch'], 0)
+        self.assertEqual(self.task['processed_members'], 0)
+        self.db.update_task.assert_not_called()
+
+    def test_早着の登録失敗も取消にせず同じbatchを再予約できる(self):
+        self.task['scheduled_at'] = (
+            datetime.datetime.now(datetime.timezone.utc)
+            + datetime.timedelta(minutes=5)
+        )
+        self.module.task_client.create_task.side_effect = RuntimeError('予約登録失敗')
+        with patch.object(self.manager, 'process_batch') as process_batch:
+            self.assertEqual(
+                self.manager.handle_batch_process_request('message-1', 0)[1], 500)
+            self.assertEqual(self.task['status'], self.db.STATUS_FAILED)
+            self.module.task_client.create_task.side_effect = None
+            self.assertEqual(
+                self.manager.handle_batch_process_request('message-1', 0)[1], 200)
+
+        process_batch.assert_not_called()
+        self.assertEqual(self.task['status'], self.db.STATUS_PENDING)
+        self.assertIn('予約登録失敗', self.task['error_messages'][0])
+        self.assertEqual(self.task['current_batch'], 0)
+        self.assertEqual(self.task['processed_members'], 0)
+        for create_call in self.module.task_client.create_task.call_args_list:
+            self.assertEqual(create_call.kwargs['params'], {
+                'message_task_id': 'message-1', 'batch_index': 0,
+            })
+            self.assertGreater(create_call.kwargs['delay_seconds'], 60)
+
+    def test_再予約成功の状態復帰は取消を上書きしない(self):
+        self.task.update(
+            status=self.db.STATUS_FAILED,
+            scheduled_at=datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(minutes=5),
+            error_messages=['予約登録失敗'],
+        )
+        self.module.task_client.create_task.side_effect = (
+            lambda **_kwargs: self.task.update(status=self.db.STATUS_ABORTED))
+        result, status = self.manager.handle_batch_process_request('message-1', 0)
+        self.assertEqual(status, 200)
+        self.assertEqual(result['status'], self.db.STATUS_ABORTED)
+        self.assertEqual(self.task['status'], self.db.STATUS_ABORTED)
+        self.assertEqual(self.task['current_batch'], 0)
+        self.assertEqual(self.task['error_messages'], ['予約登録失敗'])
+
+    def test_再予約成功の状態復帰は先行進捗を巻き戻さない(self):
+        self.task.update(
+            status=self.db.STATUS_FAILED,
+            scheduled_at=datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(minutes=5),
+        )
+        self.module.task_client.create_task.side_effect = (
+            lambda **_kwargs: self.task.update(
+                status=self.db.STATUS_RUNNING, current_batch=1,
+                processed_members=2, successful_members=2))
+        result, status = self.manager.handle_batch_process_request('message-1', 0)
+        self.assertEqual(status, 200)
+        self.assertEqual(result['status'], self.db.STATUS_RUNNING)
+        self.assertEqual(self.task['current_batch'], 1)
+        self.assertEqual(self.task['processed_members'], 2)
+        self.assertEqual(self.task['successful_members'], 2)
 
     def test_予約が60秒以内なら即時処理する(self):
         self.task['scheduled_at'] = (
@@ -380,6 +437,508 @@ class GroupBatchReservationTest(GroupBatchTestBase):
         process_batch.assert_called_once_with(
             'message-1', 0, 2000, 150, 500
         )
+        self.module.task_client.create_task.assert_not_called()
+
+
+class GroupCheckpointTestBase(unittest.TestCase):
+    def setUp(self):
+        self.db_module = load_group_message_task_db()
+        self.module = load_group_message_task_manager()
+        self.module.GroupMessageTaskDB = self.db_module.GroupMessageTaskDB
+        self.db = self.db_module.GroupMessageTaskDB
+        self.db._state_store = self.db_module._test_state_store
+        self.db._object_store = self.db_module._test_object_store
+        self.manager = self.module.GroupMessageTaskManager('test-bot')
+        self.task = {
+            'bot_name': 'test-bot', 'group_id': 'test-group',
+            'action': 'notice', 'attrs': {}, 'status': self.db.STATUS_PENDING,
+            'total_members': 4, 'total_batches': 2,
+            'current_batch': 0, 'processed_members': 0,
+            'successful_members': 0, 'failed_members': 0,
+            'error_messages': [],
+        }
+        self.db._state_store.get_group_message_task.side_effect = (
+            lambda _task_id: copy.deepcopy(self.task))
+        self.db._state_store.update_group_message_task.side_effect = self.update_task
+        self.db._object_store.load_private.side_effect = ObjectNotFoundError('missing')
+        self.module.users.get_group_members.return_value = [
+            SerializedMember(f'mock-line:user-{index}') for index in range(4)]
+        self.sent = []
+        self.manager._process_batch_members = Mock(side_effect=self.send_members)
+        self.updates = []
+
+    def update_task(self, _task_id, builder):
+        update = builder(copy.deepcopy(self.task))
+        self.updates.append(copy.deepcopy(update))
+        self.task.update(update)
+        return True
+
+    def send_members(self, _batch_task_id, member_ids, _task, _max_workers, _max_rate):
+        self.sent.extend(member_ids)
+        return len(member_ids), 0, member_ids, []
+
+    def invoke(self, batch_index=0):
+        return self.manager.handle_batch_process_request(
+            'message-1', batch_index, batch_size=2, max_workers=1, max_rate=100)
+
+
+class GroupBatchCheckpointTest(GroupCheckpointTestBase):
+    def test_次batchがinvoke中に完了しても親は進捗を巻き戻さない(self):
+        def run_next_batch(**kwargs):
+            self.assertEqual(self.task['current_batch'], 1)
+            self.assertEqual(self.task['processed_members'], 2)
+            self.assertEqual(kwargs['params']['batch_index'], 1)
+            self.assertEqual(self.invoke(1)[1], 200)
+
+        self.module.task_client.create_task.side_effect = run_next_batch
+
+        response, status = self.invoke()
+
+        self.assertEqual(status, 200)
+        self.assertEqual(response['next_batch_index'], 1)
+        self.assertEqual(self.task['status'], self.db.STATUS_COMPLETED)
+        self.assertEqual(self.task['current_batch'], 2)
+        self.assertEqual(self.task['processed_members'], 4)
+        self.assertEqual(self.task['successful_members'], 4)
+        self.assertEqual(len(self.sent), 4)
+        self.assertEqual(self.updates[-1]['status'], self.db.STATUS_COMPLETED)
+
+    def test_invoke失敗後は送信済みメンバーを再送せず登録だけ再開する(self):
+        self.module.task_client.create_task.side_effect = RuntimeError('登録失敗')
+
+        self.assertEqual(self.invoke()[1], 500)
+        self.assertEqual(self.task['status'], self.db.STATUS_FAILED)
+        self.assertEqual(self.task['current_batch'], 1)
+        self.assertEqual(self.task['successful_members'], 2)
+        self.module.task_client.create_task.side_effect = None
+        self.assertEqual(self.invoke()[1], 200)
+
+        self.assertEqual(len(self.sent), 2)
+        self.assertEqual(self.task['status'], self.db.STATUS_RUNNING)
+        self.assertEqual(self.task['successful_members'], 2)
+        self.assertEqual(self.module.task_client.create_task.call_count, 2)
+        self.assertEqual(self.invoke(1)[1], 200)
+        self.assertEqual(self.task['successful_members'], 4)
+
+    def test_invoke応答喪失後の再登録でも親の集計を重複しない(self):
+        registered = []
+
+        def lose_ack(**kwargs):
+            registered.append(kwargs['params']['batch_index'])
+            if len(registered) == 1:
+                raise RuntimeError('登録応答を受け取れませんでした')
+
+        self.module.task_client.create_task.side_effect = lose_ack
+        self.assertEqual(self.invoke()[1], 500)
+        self.assertEqual(self.invoke()[1], 200)
+
+        self.assertEqual(registered, [1, 1])
+        self.assertEqual(self.task['successful_members'], 2)
+        self.assertEqual(len(self.sent), 2)
+
+    def test_checkpoint保存失敗はfailedとして再試行できる(self):
+        def fail_checkpoint(task_id, builder):
+            update = builder(copy.deepcopy(self.task))
+            if 'current_batch' in update:
+                raise StateStoreError('保存失敗')
+            return self.update_task(task_id, builder)
+
+        self.db._state_store.update_group_message_task.side_effect = fail_checkpoint
+        self.assertEqual(self.invoke()[1], 500)
+        self.assertEqual(self.task['status'], self.db.STATUS_FAILED)
+        self.assertEqual(self.task['current_batch'], 0)
+        self.module.task_client.create_task.assert_not_called()
+
+        self.db._state_store.update_group_message_task.side_effect = self.update_task
+        self.assertEqual(self.invoke()[1], 200)
+        self.assertEqual(self.task['successful_members'], 2)
+        # 送信後・結果保存前の失敗では、送信そのものは重複し得る。
+        self.assertEqual(len(self.sent), 4)
+
+    def test_checkpoint保存応答喪失では集計とメンバー送信を重複しない(self):
+        lost_ack = [False]
+
+        def save_and_lose_ack(task_id, builder):
+            update = builder(copy.deepcopy(self.task))
+            self.update_task(task_id, builder)
+            if 'current_batch' in update and not lost_ack[0]:
+                lost_ack[0] = True
+                raise StateStoreError('保存応答を受け取れませんでした')
+            return True
+
+        self.db._state_store.update_group_message_task.side_effect = save_and_lose_ack
+        self.assertEqual(self.invoke()[1], 500)
+        self.assertEqual(self.task['current_batch'], 1)
+        self.module.task_client.create_task.assert_not_called()
+        self.assertEqual(self.invoke()[1], 200)
+
+        self.assertEqual(len(self.sent), 2)
+        self.assertEqual(self.task['processed_members'], 2)
+        self.assertEqual(self.task['successful_members'], 2)
+
+    def test_処理例外を利用者取消にせずfailedから再試行する(self):
+        self.manager._process_batch_members.side_effect = RuntimeError('処理失敗')
+        self.assertEqual(self.invoke()[1], 500)
+        self.assertEqual(self.task['status'], self.db.STATUS_FAILED)
+
+        self.manager._process_batch_members.side_effect = self.send_members
+        self.assertEqual(self.invoke()[1], 200)
+        self.assertEqual(self.task['current_batch'], 1)
+
+    def test_利用者取消と完了は送信せず正常skipする(self):
+        for terminal_status in (self.db.STATUS_ABORTED, self.db.STATUS_COMPLETED):
+            with self.subTest(status=terminal_status):
+                self.task['status'] = terminal_status
+                response, status = self.invoke()
+                self.assertEqual(status, 200)
+                self.assertEqual(response['status'], terminal_status)
+        self.manager._process_batch_members.assert_not_called()
+        self.module.task_client.create_task.assert_not_called()
+        self.assertEqual(self.updates, [])
+
+    def test_送信中の取消をcheckpointでrunningやcompletedへ戻さない(self):
+        for batch_index in (0, 1):
+            with self.subTest(batch=batch_index):
+                self.task.update(status=self.db.STATUS_RUNNING, current_batch=batch_index)
+                self.task['error_messages'] = ['取消前の概要']
+                self.module.task_client.create_task.reset_mock()
+
+                def cancel_during_send(*args):
+                    self.task['status'] = self.db.STATUS_ABORTED
+                    return self.send_members(*args)
+
+                self.manager._process_batch_members.side_effect = cancel_during_send
+                response, status = self.invoke(batch_index)
+                self.assertEqual(status, 200)
+                self.assertEqual(response['status'], self.db.STATUS_ABORTED)
+                self.assertEqual(self.task['status'], self.db.STATUS_ABORTED)
+                self.assertEqual(self.task['error_messages'], ['取消前の概要'])
+                self.assertEqual(self.task['current_batch'], batch_index)
+                self.module.task_client.create_task.assert_not_called()
+
+    def test_失敗記録時にも取消状態と概要を変更しない(self):
+        def cancel_and_fail(*_args):
+            self.task.update(status=self.db.STATUS_ABORTED, error_messages=['利用者取消'])
+            raise RuntimeError('処理失敗')
+
+        self.manager._process_batch_members.side_effect = cancel_and_fail
+        self.assertEqual(self.invoke()[1], 500)
+        self.assertEqual(self.task['status'], self.db.STATUS_ABORTED)
+        self.assertEqual(self.task['error_messages'], ['利用者取消'])
+
+    def test_楽観ロックの再試行は最新カウントへ一度だけ加算する(self):
+        def retry_callback(task_id, builder):
+            update = builder(copy.deepcopy(self.task))
+            if 'current_batch' in update:
+                self.task.update(processed_members=5, successful_members=3, failed_members=2)
+            return self.update_task(task_id, builder)
+
+        self.db._state_store.update_group_message_task.side_effect = retry_callback
+        self.assertEqual(self.invoke()[1], 200)
+
+        self.assertEqual(self.task['processed_members'], 7)
+        self.assertEqual(self.task['successful_members'], 5)
+        self.assertEqual(self.task['failed_members'], 2)
+
+    def test_checkpointのcallback再試行で先行更新を二重集計しない(self):
+        def retry_after_checkpoint(task_id, builder):
+            update = builder(copy.deepcopy(self.task))
+            if 'current_batch' in update:
+                self.task.update(current_batch=1, processed_members=2,
+                                 successful_members=2, error_messages=['保存済み概要'])
+            return self.update_task(task_id, builder)
+
+        self.db._state_store.update_group_message_task.side_effect = retry_after_checkpoint
+        self.assertEqual(self.invoke()[1], 200)
+        self.assertEqual(self.task['successful_members'], 2)
+        self.assertEqual(self.task['processed_members'], 2)
+        self.assertEqual(self.task['error_messages'], ['保存済み概要'])
+        self.assertEqual(self.updates[-1], {})
+        self.module.task_client.create_task.assert_not_called()
+
+    def test_checkpointのcallback再試行で取消を上書きしない(self):
+        def retry_after_cancel(task_id, builder):
+            update = builder(copy.deepcopy(self.task))
+            if 'current_batch' in update:
+                self.task.update(status=self.db.STATUS_ABORTED,
+                                 error_messages=['利用者取消'])
+            return self.update_task(task_id, builder)
+
+        self.db._state_store.update_group_message_task.side_effect = retry_after_cancel
+        response, status = self.invoke()
+        self.assertEqual(status, 200)
+        self.assertEqual(response['status'], self.db.STATUS_ABORTED)
+        self.assertEqual(self.task['error_messages'], ['利用者取消'])
+        self.assertEqual(self.task['current_batch'], 0)
+        self.assertEqual(self.updates[-1], {})
+        self.module.task_client.create_task.assert_not_called()
+
+    def test_実行状態保存と送信の間の取消も正常skipする(self):
+        def cancel_before_status_update(task_id, builder):
+            self.task.update(status=self.db.STATUS_ABORTED)
+            return self.update_task(task_id, builder)
+
+        self.db._state_store.update_group_message_task.side_effect = cancel_before_status_update
+        response, status = self.invoke()
+        self.assertEqual(status, 200)
+        self.assertEqual(response['status'], self.db.STATUS_ABORTED)
+        self.manager._process_batch_members.assert_not_called()
+        self.module.task_client.create_task.assert_not_called()
+
+    def test_さらに先まで保存済みの古いbatchはskipする(self):
+        self.task.update(status=self.db.STATUS_RUNNING, current_batch=2, total_batches=3)
+        self.assertEqual(self.invoke()[1], 200)
+        self.manager._process_batch_members.assert_not_called()
+        self.module.task_client.create_task.assert_not_called()
+        self.assertEqual(self.updates, [])
+
+    def test_次batchを先に呼んでも未保存結果を飛ばさない(self):
+        self.assertEqual(self.invoke(1)[1], 500)
+        self.manager._process_batch_members.assert_not_called()
+        self.module.task_client.create_task.assert_not_called()
+        self.assertEqual(self.task['current_batch'], 0)
+
+    def test_最終batchは端数も含む集計とcompletedを同じ更新で保存する(self):
+        self.module.users.get_group_members.return_value = [
+            SerializedMember(f'mock-line:user-{index}') for index in range(3)]
+        self.assertEqual(self.invoke()[1], 200)
+        self.assertEqual(self.invoke(1)[1], 200)
+        final_update = self.updates[-1]
+        self.assertEqual(final_update['status'], self.db.STATUS_COMPLETED)
+        self.assertEqual(final_update['current_batch'], 2)
+        self.assertEqual(final_update['processed_members'], 3)
+        self.assertEqual(final_update['successful_members'], 3)
+        self.assertEqual(self.module.task_client.create_task.call_count, 1)
+        self.assertEqual(self.invoke(1)[1], 200)
+        self.assertEqual(len(self.sent), 3)
+
+    def test_最終checkpoint保存応答喪失後もcompletedを失敗へ戻さない(self):
+        self.task.update(status=self.db.STATUS_RUNNING, current_batch=1,
+                         processed_members=2, successful_members=2)
+
+        def lose_final_ack(task_id, builder):
+            update = builder(copy.deepcopy(self.task))
+            self.update_task(task_id, builder)
+            if update.get('status') == self.db.STATUS_COMPLETED:
+                raise StateStoreError('最終保存応答喪失')
+            return True
+
+        self.db._state_store.update_group_message_task.side_effect = lose_final_ack
+        self.assertEqual(self.invoke(1)[1], 500)
+        self.assertEqual(self.task['status'], self.db.STATUS_COMPLETED)
+        self.assertEqual(self.invoke(1)[1], 200)
+        self.assertEqual(self.task['successful_members'], 4)
+        self.assertEqual(len(self.sent), 2)
+
+    def test_失敗者一覧はcallbackの外で保存し概要を丸める(self):
+        member_id = 'mock-line:user-0'
+        self.manager._process_batch_members.side_effect = (
+            lambda *_args: (1, 1, ['mock-line:user-1'], [(member_id, '失敗' * 2000, 0)]))
+        events = []
+        original_update = self.update_task
+
+        def track_update(task_id, builder):
+            events.append('state')
+            return original_update(task_id, builder)
+
+        self.db._state_store.update_group_message_task.side_effect = track_update
+        self.db._object_store.store_private.side_effect = (
+            lambda *_args: events.append('object'))
+        self.assertEqual(self.invoke()[1], 200)
+        self.assertEqual(events, ['state', 'object', 'state'])
+        self.assertEqual(self.task['failed_members'], 1)
+        self.assertEqual(len(self.task['error_messages'][0]), 2000)
+        self.assertTrue(self.task['error_messages'][0].endswith('…（省略）'))
+
+    def test_失敗者再送は保存済み失敗者だけを処理する(self):
+        self.task['is_retry'] = True
+        self.db.get_members_from_storage = Mock(return_value=['mock-line:failed-user'])
+        self.assertEqual(self.invoke()[1], 200)
+        self.assertEqual(self.sent, ['mock-line:failed-user'])
+        self.module.users.get_group_members.assert_not_called()
+        self.assertEqual(self.task['status'], self.db.STATUS_COMPLETED)
+
+    def test_空groupの完了保存も取消を上書きしない(self):
+        self.module.users.get_group_members.return_value = []
+
+        def cancel_empty_task(task_id, builder):
+            update = builder(copy.deepcopy(self.task))
+            if update.get('status') == self.db.STATUS_COMPLETED:
+                self.task['status'] = self.db.STATUS_ABORTED
+            return self.update_task(task_id, builder)
+
+        self.db._state_store.update_group_message_task.side_effect = cancel_empty_task
+        response, status = self.invoke()
+        self.assertEqual(status, 200)
+        self.assertEqual(self.task['status'], self.db.STATUS_ABORTED)
+        self.assertEqual(response['status'], self.db.STATUS_ABORTED)
+        self.assertEqual(self.task['current_batch'], 0)
+        self.assertEqual(self.task['error_messages'], [])
+
+
+class GcpGroupBatchCheckpointIntegrationTest(GroupCheckpointTestBase):
+    def setUp(self):
+        super().setUp()
+        from cloud_backend.gcp.state_store import GcpStateStore
+        from tests.test_gcp_state_store_contract import _MemoryFirestoreClient
+
+        self.before_checkpoint_commit = None
+        self.transaction_retries = 0
+        server_timestamp = object()
+        firestore = types.SimpleNamespace(
+            SERVER_TIMESTAMP=server_timestamp,
+            transactional=self._transactional,
+        )
+        self.client = _MemoryFirestoreClient(server_timestamp)
+        with patch(
+                'cloud_backend.gcp.state_store.importlib.import_module',
+                return_value=firestore):
+            self.store = GcpStateStore(client=self.client)
+        self.store.create_group_message_task('message-1', self.task)
+        self.db._state_store = self.store
+
+    def _transactional(self, function):
+        def transaction_runner(transaction):
+            # 最初の更新を未commitのまま破棄し、同じcallbackを最新documentで再実行する。
+            pending = []
+            transaction.update = lambda reference, data: pending.append((reference, data))
+            result = function(transaction)
+            if self.before_checkpoint_commit is not None:
+                for reference, data in pending:
+                    if 'current_batch' in data:
+                        self.before_checkpoint_commit(reference)
+                        self.before_checkpoint_commit = None
+                        self.transaction_retries += 1
+                        pending.clear()
+                        result = function(transaction)
+                        break
+            for reference, data in pending:
+                reference.update(data)
+            return result
+
+        return transaction_runner
+
+    def test_子が先行完了してもFirestoreの結果を親が巻き戻さない(self):
+        def run_child(**kwargs):
+            saved = self.store.get_group_message_task('message-1')
+            self.assertEqual((saved['current_batch'], saved['processed_members']), (1, 2))
+            self.assertEqual(self.invoke(kwargs['params']['batch_index'])[1], 200)
+
+        self.module.task_client.create_task.side_effect = run_child
+        self.assertEqual(self.invoke()[1], 200)
+        saved = self.store.get_group_message_task('message-1')
+        self.assertEqual(saved['status'], self.db.STATUS_COMPLETED)
+        self.assertEqual((saved['current_batch'], saved['processed_members']), (2, 4))
+        self.assertEqual(saved['successful_members'], 4)
+        self.assertEqual(len(self.sent), 4)
+
+    def test_同じbatchの重複送信から次batchの二重登録を連鎖させない(self):
+        members = [SerializedMember(f'mock-line:user-{index}') for index in range(6)]
+        self.module.users.get_group_members.return_value = members
+        self.store.update_group_message_task('message-1', lambda _data: {
+            'total_members': 6, 'total_batches': 3,
+        })
+        pending = []
+        self.module.task_client.create_task.side_effect = (
+            lambda **kwargs: pending.append(kwargs['params']['batch_index']))
+        overlapped = False
+
+        def send_overlapping_batch(*args):
+            nonlocal overlapped
+            result = self.send_members(*args)
+            if not overlapped:
+                overlapped = True
+                self.assertEqual(self.invoke(0)[1], 200)
+            return result
+
+        self.manager._process_batch_members.side_effect = send_overlapping_batch
+        self.assertEqual(self.invoke(0)[1], 200)
+
+        self.assertEqual(pending, [1])
+        saved = self.store.get_group_message_task('message-1')
+        self.assertEqual((saved['current_batch'], saved['processed_members']), (1, 2))
+        processed_batches = []
+        while pending:
+            batch_index = pending.pop(0)
+            processed_batches.append(batch_index)
+            self.assertEqual(self.invoke(batch_index)[1], 200)
+
+        self.assertEqual(processed_batches, [1, 2])
+        saved = self.store.get_group_message_task('message-1')
+        self.assertEqual(saved['status'], self.db.STATUS_COMPLETED)
+        self.assertEqual((saved['current_batch'], saved['processed_members']), (3, 6))
+        self.assertEqual(saved['successful_members'], 6)
+        for index, member in enumerate(members):
+            self.assertEqual(self.sent.count(member.serialize()), 2 if index < 2 else 1)
+
+    def test_CloudTasks登録失敗後は送信せず登録だけ再開する(self):
+        self.module.task_client.create_task.side_effect = RuntimeError('Cloud Tasks登録失敗')
+        self.assertEqual(self.invoke()[1], 500)
+        saved = self.store.get_group_message_task('message-1')
+        self.assertEqual(saved['status'], self.db.STATUS_FAILED)
+        self.assertEqual(saved['current_batch'], 1)
+        self.module.task_client.create_task.side_effect = None
+        self.assertEqual(self.invoke()[1], 200)
+        saved = self.store.get_group_message_task('message-1')
+        self.assertEqual(saved['successful_members'], 2)
+        self.assertEqual(len(self.sent), 2)
+        self.assertEqual(self.module.task_client.create_task.call_count, 2)
+
+    def test_Firestoreの予約登録失敗も再登録成功時だけPendingへ戻す(self):
+        self.store.update_group_message_task('message-1', lambda _data: {
+            'scheduled_at': datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(minutes=5),
+        })
+        self.module.task_client.create_task.side_effect = RuntimeError('予約登録失敗')
+        self.assertEqual(self.invoke()[1], 500)
+        saved = self.store.get_group_message_task('message-1')
+        self.assertEqual(saved['status'], self.db.STATUS_FAILED)
+        self.module.task_client.create_task.side_effect = None
+        self.assertEqual(self.invoke()[1], 200)
+        saved = self.store.get_group_message_task('message-1')
+        self.assertEqual(saved['status'], self.db.STATUS_PENDING)
+        self.assertEqual(saved['current_batch'], 0)
+        self.assertEqual(saved['processed_members'], 0)
+        self.assertIn('予約登録失敗', saved['error_messages'][0])
+        self.assertEqual(self.sent, [])
+
+    def test_Firestore_callback再試行は最新カウントへ加算する(self):
+        self.before_checkpoint_commit = lambda reference: reference.update({
+            'processed_members': 5, 'successful_members': 3, 'failed_members': 2,
+        })
+        self.assertEqual(self.invoke()[1], 200)
+        saved = self.store.get_group_message_task('message-1')
+        self.assertEqual(self.transaction_retries, 1)
+        self.assertEqual(saved['processed_members'], 7)
+        self.assertEqual(saved['successful_members'], 5)
+        self.assertEqual(saved['failed_members'], 2)
+        self.module.task_client.create_task.assert_called_once()
+
+    def test_Firestore_callback再試行は保存済みbatchを二重集計しない(self):
+        self.before_checkpoint_commit = lambda reference: reference.update({
+            'current_batch': 1, 'processed_members': 2, 'successful_members': 2,
+            'error_messages': ['保存済み概要'],
+        })
+        self.assertEqual(self.invoke()[1], 200)
+        saved = self.store.get_group_message_task('message-1')
+        self.assertEqual(self.transaction_retries, 1)
+        self.assertEqual(saved['current_batch'], 1)
+        self.assertEqual(saved['successful_members'], 2)
+        self.assertEqual(saved['processed_members'], 2)
+        self.assertEqual(saved['error_messages'], ['保存済み概要'])
+        self.module.task_client.create_task.assert_not_called()
+
+    def test_Firestore_callback再試行は取消状態と概要を上書きしない(self):
+        self.before_checkpoint_commit = lambda reference: reference.update({
+            'status': self.db.STATUS_ABORTED, 'error_messages': ['利用者取消'],
+        })
+        response, status = self.invoke()
+        saved = self.store.get_group_message_task('message-1')
+        self.assertEqual(status, 200)
+        self.assertEqual(response['status'], self.db.STATUS_ABORTED)
+        self.assertEqual(self.transaction_retries, 1)
+        self.assertEqual(saved['status'], self.db.STATUS_ABORTED)
+        self.assertEqual(saved['current_batch'], 0)
+        self.assertEqual(saved['error_messages'], ['利用者取消'])
         self.module.task_client.create_task.assert_not_called()
 
 
@@ -706,6 +1265,7 @@ class GroupMessageTaskDBTest(unittest.TestCase):
                 raise ObjectNotFoundError('missing')
             return saved[key].encode('utf-8')
 
+        self.state_store.get_group_message_task.side_effect = lambda _task_id: copy.deepcopy(task)
         self.state_store.update_group_message_task.side_effect = update_task
         self.object_store.load_private.side_effect = load_object
         self.object_store.store_private.side_effect = (

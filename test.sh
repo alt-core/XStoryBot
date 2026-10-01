@@ -34,9 +34,12 @@ python3 -m unittest \
     tests.test_auth \
     tests.test_expression \
     tests.test_command_arguments \
+    tests.test_delayed_scenario_policy \
     tests.test_scenario_formatting \
     tests.test_scenario_progression \
     tests.test_runtime_isolation \
+    tests.test_aws_deferred_tasks \
+    tests.test_post_response_tasks \
     tests.test_state_namespace \
     tests.test_scenario_storage \
     tests.plugin.test_google_sheets \
@@ -69,7 +72,8 @@ python3 -m unittest \
     tests.test_build_service \
     tests.test_async_task_processor \
     tests.test_aws_task_handler \
-    tests.test_sqs_worker_app \
+    tests.test_aws_worker_app \
+    tests.test_aws_group_message_batching \
     tests.test_auth_middleware \
     tests.test_generate_admin_auth \
     tests.test_api_endpoints \
