@@ -744,8 +744,8 @@
                             <td>
                                 <div class="btn-group btn-group-sm">
                                     <button class="btn btn-outline-info task-detail" data-task-id="${safeId}">詳細</button>
-                                    ${status === 'running' || status === 'pending' ? `<button class="btn btn-outline-danger task-abort" data-task-id="${safeId}">中止</button>` : ''}
-                                    ${(status === 'completed' || status === 'failed' || status === 'aborted') && task.failed_members > 0 ? `<button class="btn btn-outline-warning task-retry" data-task-id="${safeId}">再送</button>` : ''}
+                                    ${task.can_abort ? `<button class="btn btn-outline-danger task-abort" data-task-id="${safeId}">中止</button>` : ''}
+                                    ${task.can_retry ? `<button class="btn btn-outline-warning task-retry" data-task-id="${safeId}">再送</button>` : ''}
                                 </div>
                             </td>
                         </tr>
@@ -852,8 +852,8 @@
             }
 
             // ボタン制御
-            $('#detail-abort-button').prop('disabled', task.status !== 'running' && task.status !== 'pending');
-            $('#detail-retry-button').prop('disabled', task.failed_members === 0 || task.status === 'pending' || task.status === 'running');
+            $('#detail-abort-button').prop('disabled', !task.can_abort);
+            $('#detail-retry-button').prop('disabled', !task.can_retry);
 
             // タスクIDを保存
             $('#detail-abort-button').data('task-id', task.id);
@@ -971,8 +971,8 @@
                         }
 
                         // ボタン制御
-                        $('#detail-abort-button').prop('disabled', task.status !== 'running' && task.status !== 'pending');
-                        $('#detail-retry-button').prop('disabled', task.failed_members === 0 || task.status === 'pending' || task.status === 'running');
+                        $('#detail-abort-button').prop('disabled', !task.can_abort);
+                        $('#detail-retry-button').prop('disabled', !task.can_retry);
                     });
                 }
             }

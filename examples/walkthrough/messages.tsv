@@ -1,0 +1,41 @@
+*はじめ	表示の確認です。
+絵	@image	https://media.example.test/reference-sample.png
+	絵を表示しました。
+写真	"=IMAGE(""https://media.example.test/reference-sample.png"")"
+原寸	@rawimage	https://media.example.test/full.png	https://media.example.test/preview.png
+音	@audio	https://media.example.test/voice.m4a	3000
+本棚	@carousel
+		赤い本です。	赤い本
+			読む	赤い本を読む
+		青い本です。	青い本
+			読む	青い本を読む
+赤い本を読む	冒険の物語でした。
+地図	@imagemap	https://media.example.test/reference-sample.png
+		0,0,520,520	西の森
+		520,0,520,520	https://example.com/
+西の森	西には森が広がっています。
+かるた	@button	札を選んでください	札の一覧
+		一の札
+		二の札	二を選ぶ
+		お店	https://example.com/
+		三の札	三を選びます	#三
+一の札	一の札を選びました。
+二を選ぶ	二の札を選びました。
+#三	三の札を選びました。
+飾り	@flex	"{{""type"":""bubble"",""body"":{{""type"":""box"",""layout"":""vertical"",""contents"":[{{""type"":""text"",""text"":""飾りの枠です""}}]}}}}"
+色	好きな色を選んでください。
+	@reply
+		赤
+		青	青にする
+赤	赤を選びました。
+青にする	青を選びました。
+記録	@log	確認	記録を残しました
+	記録を残しました。
+気分	今日の気分はどうですか。
+	？	よい	ふつう
+	よい気分ですね。
+	/else
+	ふつうの日ですね。
+	/end
+散歩	散歩に出かけました。
+/^:LINE_STICKER:/	スタンプを受け取りました。

@@ -293,6 +293,31 @@ sys.addaudithook(reject_external)
         self.assertIn('直前の選択肢がありません', resumed_step['error'])
         self.assertNotIn('$choice', resumed_step['player']['flags'])
 
+    def test_画像だけの応答も種類と件数を検査する(self):
+        from tools.local_line import compare_expected
+
+        expected = {'texts': [], 'message_types': ['image']}
+        for count in (0, 1, 2):
+            with self.subTest(count=count):
+                actual, differences = compare_expected(
+                    expected, [{'type': 'image'}] * count, [], {'flags': {}})
+                self.assertEqual(actual['message_types'], ['image'] * count)
+                self.assertEqual(differences, [] if count == 1 else [
+                    {'field': 'message_types', 'expected': ['image'], 'actual': ['image'] * count},
+                ])
+
+        empty = self._case('無応答', [
+            {'input': {'type': 'start'}, 'expect': {'message_types': []}},
+        ])
+        self.assertEqual([empty], validate_suite({'schema_version': 1, 'cases': [empty]}))
+        self.assertEqual([], compare_expected({'message_types': []}, [], [], {'flags': {}})[1])
+
+        for value in ('image', [1]):
+            with self.subTest(value=value), self.assertRaises(LocalInputError):
+                validate_suite({'schema_version': 1, 'cases': [self._case('型の誤り', [
+                    {'input': {'type': 'start'}, 'expect': {'message_types': value}},
+                ])]})
+
     def test_期待値なしと未知inputはエンジン起動前にJSONエラーにする(self):
         invalid_steps = [
             [{'input': {'type': 'start'}}],

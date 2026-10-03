@@ -1,0 +1,3066 @@
+{
+  "schema_version": 1,
+  "cases": [
+    {
+      "name": "開始と案内",
+      "steps": [
+        {
+          "input": {
+            "type": "start"
+          },
+          "expect": {
+            "texts": [
+              "通し確認用の物語です。",
+              "「案内」と入力すると、確認できる項目を表示します。"
+            ]
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "案内"
+          },
+          "expect": {
+            "texts": [
+              "次の言葉を入力すると、それぞれの確認を始めます。",
+              "条件、移動、変数、分岐、選択、呼出、共有、表示、読み物、定数、困りごと"
+            ]
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "案内して"
+          },
+          "expect": {
+            "texts": []
+          }
+        }
+      ]
+    },
+    {
+      "name": "入口：言葉で各確認へ移る",
+      "steps": [
+        {
+          "input": {
+            "type": "start"
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "条件"
+          },
+          "expect": {
+            "texts": [
+              "条件の確認です。"
+            ]
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "移動"
+          },
+          "expect": {
+            "texts": [
+              "広場に着きました。"
+            ]
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "変数"
+          },
+          "expect": {
+            "texts": [
+              "変数の確認です。"
+            ]
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "分岐"
+          },
+          "expect": {
+            "texts": [
+              "分岐の確認です。"
+            ]
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "選択"
+          },
+          "expect": {
+            "texts": [
+              "選択の確認です。"
+            ]
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "呼出"
+          },
+          "expect": {
+            "texts": [
+              "呼び出しの確認です。"
+            ]
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "共有"
+          },
+          "expect": {
+            "texts": [
+              "作業場に着きました。"
+            ]
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "表示"
+          },
+          "expect": {
+            "texts": [
+              "表示の確認です。"
+            ]
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "読み物"
+          },
+          "expect": {
+            "texts": [
+              "読み物の確認です。"
+            ]
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "定数"
+          },
+          "expect": {
+            "texts": [
+              "定数の確認です。"
+            ]
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "困りごと"
+          },
+          "expect": {
+            "texts": [
+              "困ったときの確認です。"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "条件：部分一致と文字の正規化",
+      "steps": [
+        {
+          "input": {
+            "type": "start"
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "条件"
+          },
+          "expect": {
+            "texts": [
+              "条件の確認です。"
+            ]
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "やあ、こんにちは！"
+          },
+          "expect": {
+            "texts": [
+              "こんにちは。"
+            ]
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "ＡＢＣ"
+          },
+          "expect": {
+            "texts": [
+              "英字は大文字と小文字、全角と半角を区別しません。"
+            ]
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "Abc"
+          },
+          "expect": {
+            "texts": [
+              "英字は大文字と小文字、全角と半角を区別しません。"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "条件：かつ・または・括弧",
+      "steps": [
+        {
+          "input": {
+            "type": "start"
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "条件"
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "はい、行くよ"
+          },
+          "expect": {
+            "texts": [
+              "両方の言葉が入っていました。"
+            ]
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "はい"
+          },
+          "expect": {
+            "texts": []
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "ええ"
+          },
+          "expect": {
+            "texts": [
+              "どちらかの言葉が入っていました。"
+            ]
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "うん"
+          },
+          "expect": {
+            "texts": [
+              "どちらかの言葉が入っていました。"
+            ]
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "海へ"
+          },
+          "expect": {
+            "texts": [
+              "行き先は森か海ですね。"
+            ]
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "森"
+          },
+          "expect": {
+            "texts": []
+          }
+        }
+      ]
+    },
+    {
+      "name": "条件：正規表現と完全一致",
+      "steps": [
+        {
+          "input": {
+            "type": "start"
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "条件"
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "3番"
+          },
+          "expect": {
+            "texts": [
+              "3番の扉を開けました。"
+            ]
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "3番です"
+          },
+          "expect": {
+            "texts": []
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "ありがとう"
+          },
+          "expect": {
+            "texts": [
+              "ぴったり一致しました。"
+            ]
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "ありがとうございます"
+          },
+          "expect": {
+            "texts": [
+              "言葉が含まれていました。"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "条件：変数によるガード",
+      "steps": [
+        {
+          "input": {
+            "type": "start"
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "条件"
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "ひらけ"
+          },
+          "expect": {
+            "texts": [
+              "まだ開きません。"
+            ]
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "覚える"
+          },
+          "expect": {
+            "texts": [
+              "合言葉を覚えました。"
+            ],
+            "flags": {
+              "$合言葉": "on"
+            }
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "ひらけ"
+          },
+          "expect": {
+            "texts": [
+              "扉が開きました。"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "条件：本文の書き方",
+      "steps": [
+        {
+          "input": {
+            "type": "start"
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "条件"
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "括弧"
+          },
+          "expect": {
+            "texts": [
+              "{かっこ}はそのまま表示されます。"
+            ]
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "二通"
+          },
+          "expect": {
+            "texts": [
+              "一通目です。",
+              "二通目です。"
+            ]
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "話者"
+          },
+          "expect": {
+            "texts": [
+              "名前つきの発言です。"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "移動：sceneとlabel",
+      "steps": [
+        {
+          "input": {
+            "type": "start"
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "移動"
+          },
+          "expect": {
+            "texts": [
+              "広場に着きました。"
+            ]
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "森へ"
+          },
+          "expect": {
+            "texts": [
+              "森に着きました。"
+            ]
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "ここは"
+          },
+          "expect": {
+            "texts": [
+              "ここは森です。"
+            ]
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "戻る"
+          },
+          "expect": {
+            "texts": [
+              "広場に着きました。"
+            ]
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "街へ"
+          },
+          "expect": {
+            "texts": [
+              "街に着きました。"
+            ]
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "ここは"
+          },
+          "expect": {
+            "texts": [
+              "ここは街です。"
+            ]
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "目印"
+          },
+          "expect": {
+            "texts": []
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "戻る"
+          },
+          "expect": {
+            "texts": [
+              "広場に着きました。"
+            ]
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "目印"
+          },
+          "expect": {
+            "texts": [
+              "目印のところへ来ました。"
+            ]
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "森へ"
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "#奥"
+          },
+          "expect": {
+            "texts": []
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "奥"
+          },
+          "expect": {
+            "texts": []
+          }
+        }
+      ]
+    },
+    {
+      "name": "移動：シート先頭の条件と開始シートの条件",
+      "steps": [
+        {
+          "input": {
+            "type": "start"
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "移動"
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "森へ"
+          },
+          "expect": {
+            "texts": [
+              "森に着きました。"
+            ]
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "地図"
+          },
+          "expect": {
+            "texts": [
+              "この章には、広場と森と街があります。"
+            ]
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "案内"
+          },
+          "expect": {
+            "texts": [
+              "次の言葉を入力すると、それぞれの確認を始めます。",
+              "条件、移動、変数、分岐、選択、呼出、共有、表示、読み物、定数、困りごと"
+            ]
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "ここは"
+          },
+          "expect": {
+            "texts": [
+              "ここは森です。"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "移動：ボタンの選択肢",
+      "steps": [
+        {
+          "input": {
+            "type": "start"
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "移動"
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "案内板"
+          },
+          "expect": {
+            "texts": [],
+            "choices": [
+              {
+                "type": "postback",
+                "label": "森へ行く"
+              },
+              {
+                "type": "message",
+                "label": "街のうわさ"
+              },
+              {
+                "type": "postback",
+                "label": "奥へ進む"
+              }
+            ]
+          }
+        },
+        {
+          "input": {
+            "type": "choice",
+            "index": 1
+          },
+          "expect": {
+            "texts": [
+              "街にはおいしいパン屋があるそうです。"
+            ]
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "案内板"
+          }
+        },
+        {
+          "input": {
+            "type": "choice",
+            "index": 2
+          },
+          "expect": {
+            "texts": [
+              "森の奥には泉がありました。"
+            ]
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "ここは"
+          },
+          "expect": {
+            "texts": [
+              "ここは森です。"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "移動：ボタンを出した後も文字入力で進める",
+      "steps": [
+        {
+          "input": {
+            "type": "start"
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "移動"
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "案内板"
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "街へ"
+          },
+          "expect": {
+            "texts": [
+              "街に着きました。"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "移動：別のシートへ",
+      "steps": [
+        {
+          "input": {
+            "type": "start"
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "移動"
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "街へ"
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "となりの章"
+          },
+          "expect": {
+            "texts": [
+              "変数の確認です。"
+            ]
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "地図"
+          },
+          "expect": {
+            "texts": []
+          }
+        }
+      ]
+    },
+    {
+      "name": "変数：覚える・埋め込む・消す",
+      "steps": [
+        {
+          "input": {
+            "type": "start"
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "変数"
+          },
+          "expect": {
+            "texts": [
+              "変数の確認です。"
+            ]
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "名前"
+          },
+          "expect": {
+            "texts": [
+              "あなたの名前はNoneです。"
+            ]
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "名前は花子"
+          },
+          "expect": {
+            "texts": [
+              "花子さん、よろしくお願いします。"
+            ],
+            "flags": {
+              "$名前": "花子"
+            }
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "名前"
+          },
+          "expect": {
+            "texts": [
+              "あなたの名前は花子です。"
+            ]
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "持ち物"
+          },
+          "expect": {
+            "texts": [
+              "鍵: None"
+            ]
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "鍵を拾う"
+          },
+          "expect": {
+            "texts": [
+              "鍵を拾いました。"
+            ],
+            "flags": {
+              "$鍵": true
+            }
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "持ち物"
+          },
+          "expect": {
+            "texts": [
+              "鍵: True"
+            ]
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "鍵を捨てる"
+          },
+          "expect": {
+            "texts": [
+              "鍵を捨てました。"
+            ],
+            "absent_flags": [
+              "$鍵"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "変数：計算と/if",
+      "steps": [
+        {
+          "input": {
+            "type": "start"
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "変数"
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "扉"
+          },
+          "expect": {
+            "texts": [
+              "鍵がありません。",
+              "扉の前にいます。"
+            ]
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "鍵を拾う"
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "扉"
+          },
+          "expect": {
+            "texts": [
+              "もう少し数えてください。",
+              "扉の前にいます。"
+            ]
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "数える"
+          },
+          "expect": {
+            "texts": [
+              "1回目です。"
+            ],
+            "flags": {
+              "$回数": 1
+            }
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "数える"
+          },
+          "expect": {
+            "texts": [
+              "2回目です。"
+            ],
+            "flags": {
+              "$回数": 2
+            }
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "扉"
+          },
+          "expect": {
+            "texts": [
+              "扉が開きました。",
+              "扉の前にいます。"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "分岐：/seqは最後の枝で止まる",
+      "steps": [
+        {
+          "input": {
+            "type": "start"
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "分岐"
+          },
+          "expect": {
+            "texts": [
+              "分岐の確認です。"
+            ]
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "天気"
+          },
+          "expect": {
+            "texts": [
+              "今日は晴れです。",
+              "空を見上げました。"
+            ]
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "天気"
+          },
+          "expect": {
+            "texts": [
+              "今日は曇りです。",
+              "空を見上げました。"
+            ]
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "天気"
+          },
+          "expect": {
+            "texts": [
+              "今日は雨です。",
+              "空を見上げました。"
+            ]
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "天気"
+          },
+          "expect": {
+            "texts": [
+              "今日は雨です。",
+              "空を見上げました。"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "分岐：/loopは最初へ戻る",
+      "steps": [
+        {
+          "input": {
+            "type": "start"
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "分岐"
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "合図"
+          },
+          "expect": {
+            "texts": [
+              "赤です。"
+            ]
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "合図"
+          },
+          "expect": {
+            "texts": [
+              "青です。"
+            ]
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "合図"
+          },
+          "expect": {
+            "texts": [
+              "赤です。"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "分岐：/randomは同じ枝を続けない",
+      "seed": 7,
+      "steps": [
+        {
+          "input": {
+            "type": "start"
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "分岐"
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "くじ"
+          },
+          "expect": {
+            "texts": [
+              "くじを引きました。"
+            ]
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "くじ"
+          },
+          "expect": {
+            "texts": [
+              "くじを引きました。"
+            ],
+            "flags": {
+              "$くじ甲": 1,
+              "$くじ乙": 1
+            }
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "くじ"
+          },
+          "expect": {
+            "texts": [
+              "くじを引きました。"
+            ]
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "くじ"
+          },
+          "expect": {
+            "texts": [
+              "くじを引きました。"
+            ],
+            "flags": {
+              "$くじ甲": 2,
+              "$くじ乙": 2
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "分岐：/ifの入れ子",
+      "steps": [
+        {
+          "input": {
+            "type": "start"
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "分岐"
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "入れ子"
+          },
+          "expect": {
+            "texts": [
+              "まだ登っていません。"
+            ]
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "登る"
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "入れ子"
+          },
+          "expect": {
+            "texts": [
+              "一段目です。"
+            ]
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "登る"
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "入れ子"
+          },
+          "expect": {
+            "texts": [
+              "二段目です。"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "分岐：順番のやり直し",
+      "steps": [
+        {
+          "input": {
+            "type": "start"
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "分岐"
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "天気"
+          },
+          "expect": {
+            "texts": [
+              "今日は晴れです。",
+              "空を見上げました。"
+            ]
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "天気"
+          },
+          "expect": {
+            "texts": [
+              "今日は曇りです。",
+              "空を見上げました。"
+            ]
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "順番を戻す"
+          },
+          "expect": {
+            "texts": [
+              "順番を最初に戻しました。"
+            ]
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "天気"
+          },
+          "expect": {
+            "texts": [
+              "今日は晴れです。",
+              "空を見上げました。"
+            ]
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "天気"
+          },
+          "expect": {
+            "texts": [
+              "今日は曇りです。",
+              "空を見上げました。"
+            ]
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "新しい章"
+          },
+          "expect": {
+            "texts": [
+              "新しい章を始めます。"
+            ]
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "天気"
+          },
+          "expect": {
+            "texts": [
+              "今日は晴れです。",
+              "空を見上げました。"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "分岐：/ifと選択肢の入れ子",
+      "steps": [
+        {
+          "input": {
+            "type": "start"
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "分岐"
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "冒険"
+          },
+          "expect": {
+            "texts": [
+              "勇気が足りません。",
+              "一日が終わりました。"
+            ]
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "勇気を出す"
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "冒険"
+          },
+          "expect": {
+            "texts": [
+              "どちらへ進みますか。"
+            ],
+            "choices": [
+              {
+                "type": "postback",
+                "label": "洞窟"
+              },
+              {
+                "type": "postback",
+                "label": "山"
+              }
+            ]
+          }
+        },
+        {
+          "input": {
+            "type": "choice",
+            "index": 1
+          },
+          "expect": {
+            "texts": [
+              "山へ登りました。",
+              "冒険を続けます。",
+              "一日が終わりました。"
+            ],
+            "absent_flags": [
+              "$$line.quick_reply"
+            ]
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "冒険"
+          }
+        },
+        {
+          "input": {
+            "type": "choice",
+            "index": 0
+          },
+          "expect": {
+            "texts": [
+              "洞窟へ入りました。奥へ進みますか。"
+            ],
+            "choices": [
+              {
+                "type": "postback",
+                "label": "進む"
+              },
+              {
+                "type": "postback",
+                "label": "引き返す"
+              }
+            ]
+          }
+        },
+        {
+          "input": {
+            "type": "choice",
+            "index": 0
+          },
+          "expect": {
+            "texts": [
+              "宝箱を見つけました。",
+              "洞窟を出ました。",
+              "冒険を続けます。",
+              "一日が終わりました。"
+            ],
+            "absent_flags": [
+              "$$line.quick_reply"
+            ]
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "冒険"
+          }
+        },
+        {
+          "input": {
+            "type": "choice",
+            "index": 0
+          }
+        },
+        {
+          "input": {
+            "type": "choice",
+            "index": 1
+          },
+          "expect": {
+            "texts": [
+              "入口へ引き返しました。",
+              "洞窟を出ました。",
+              "冒険を続けます。",
+              "一日が終わりました。"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "分岐：命令の日本語名と@表記",
+      "steps": [
+        {
+          "input": {
+            "type": "start"
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "分岐"
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "和名"
+          },
+          "expect": {
+            "texts": [
+              "勇気がありません。"
+            ]
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "勇気を出す"
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "和名"
+          },
+          "expect": {
+            "texts": [
+              "勇気があります。"
+            ]
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "うらない"
+          },
+          "expect": {
+            "texts": [
+              "吉です。"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "選択：候補を選ぶと続きから進む",
+      "steps": [
+        {
+          "input": {
+            "type": "start"
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "選択"
+          },
+          "expect": {
+            "texts": [
+              "選択の確認です。"
+            ]
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "質問"
+          },
+          "expect": {
+            "texts": [
+              "どちらへ行きますか。"
+            ],
+            "choices": [
+              {
+                "type": "postback",
+                "label": "森"
+              },
+              {
+                "type": "postback",
+                "label": "街"
+              }
+            ]
+          }
+        },
+        {
+          "input": {
+            "type": "choice",
+            "index": 0
+          },
+          "expect": {
+            "texts": [
+              "森を選びました。",
+              "旅がはじまります。"
+            ],
+            "absent_flags": [
+              "$$line.quick_reply"
+            ]
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "質問"
+          }
+        },
+        {
+          "input": {
+            "type": "choice",
+            "index": 1
+          },
+          "expect": {
+            "texts": [
+              "街を選びました。",
+              "旅がはじまります。"
+            ],
+            "absent_flags": [
+              "$$line.quick_reply"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "選択：候補以外の入力は再提示する",
+      "steps": [
+        {
+          "input": {
+            "type": "start"
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "選択"
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "質問"
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "海"
+          },
+          "expect": {
+            "texts": [
+              "下の候補から選んでください。"
+            ],
+            "choices": [
+              {
+                "type": "postback",
+                "label": "森"
+              },
+              {
+                "type": "postback",
+                "label": "街"
+              }
+            ]
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "案内"
+          },
+          "expect": {
+            "texts": [
+              "下の候補から選んでください。"
+            ],
+            "choices": [
+              {
+                "type": "postback",
+                "label": "森"
+              },
+              {
+                "type": "postback",
+                "label": "街"
+              }
+            ]
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "森"
+          },
+          "expect": {
+            "texts": [
+              "森を選びました。",
+              "旅がはじまります。"
+            ],
+            "absent_flags": [
+              "$$line.quick_reply"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "選択：候補が一つの場合と省略した場合",
+      "steps": [
+        {
+          "input": {
+            "type": "start"
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "選択"
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "準備"
+          },
+          "expect": {
+            "texts": [
+              "準備はいいですか。"
+            ],
+            "choices": [
+              {
+                "type": "postback",
+                "label": "はい"
+              }
+            ]
+          }
+        },
+        {
+          "input": {
+            "type": "choice",
+            "index": 0
+          },
+          "expect": {
+            "texts": [
+              "出発します。"
+            ]
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "昔話"
+          },
+          "expect": {
+            "texts": [
+              "むかしむかし、あるところに。"
+            ],
+            "choices": [
+              {
+                "type": "postback",
+                "label": "続きを読む"
+              }
+            ]
+          }
+        },
+        {
+          "input": {
+            "type": "choice",
+            "index": 0
+          },
+          "expect": {
+            "texts": [
+              "おしまい。"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "選択：確認ボタン",
+      "steps": [
+        {
+          "input": {
+            "type": "start"
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "選択"
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "確認"
+          },
+          "expect": {
+            "texts": [],
+            "choices": [
+              {
+                "type": "message",
+                "label": "進む"
+              },
+              {
+                "type": "message",
+                "label": "やめる"
+              }
+            ]
+          }
+        },
+        {
+          "input": {
+            "type": "choice",
+            "index": 1
+          },
+          "expect": {
+            "texts": [
+              "その場にとどまりました。"
+            ]
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "確認"
+          }
+        },
+        {
+          "input": {
+            "type": "choice",
+            "index": 0
+          },
+          "expect": {
+            "texts": [
+              "先へ進みました。"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "呼出：@callと@return",
+      "steps": [
+        {
+          "input": {
+            "type": "start"
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "呼出"
+          },
+          "expect": {
+            "texts": [
+              "呼び出しの確認です。"
+            ]
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "あいさつ"
+          },
+          "expect": {
+            "texts": [
+              "花子さん、こんにちは。",
+              "結果は済でした。"
+            ]
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "寄り道"
+          },
+          "expect": {
+            "texts": [
+              "寄り道先に着きました。",
+              "元の場所へ戻りました。"
+            ]
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "ここは"
+          },
+          "expect": {
+            "texts": [
+              "ここは呼び出しの入口です。"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "呼出：@deferと@or",
+      "steps": [
+        {
+          "input": {
+            "type": "start"
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "呼出"
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "あとで"
+          },
+          "expect": {
+            "texts": [
+              "先に本文を表示します。",
+              "最後に後片付けをしました。"
+            ]
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "りんご"
+          },
+          "expect": {
+            "texts": [
+              "果物ですね。"
+            ]
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "みかん"
+          },
+          "expect": {
+            "texts": [
+              "果物ですね。"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "困りごと：答えられない入力と見つからない行き先",
+      "steps": [
+        {
+          "input": {
+            "type": "start"
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "困りごと"
+          },
+          "expect": {
+            "texts": [
+              "困ったときの確認です。"
+            ]
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "ぱぴぷぺぽ"
+          },
+          "expect": {
+            "texts": [
+              "「ぱぴぷぺぽ」には答えられません。"
+            ]
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "迷子"
+          },
+          "expect": {
+            "texts": [
+              "行き先が見つかりません。"
+            ]
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "遠くへ"
+          },
+          "expect": {
+            "texts": [
+              "行き先が見つかりません。"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "困りごと：エラー用の条件がない場面では無反応",
+      "steps": [
+        {
+          "input": {
+            "type": "start"
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "困りごと"
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "となりへ"
+          },
+          "expect": {
+            "texts": [
+              "となりの場面です。"
+            ]
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "ぱぴぷぺぽ"
+          },
+          "expect": {
+            "texts": []
+          }
+        }
+      ]
+    },
+    {
+      "name": "困りごと：@resetと合言葉でのリセット",
+      "steps": [
+        {
+          "input": {
+            "type": "start"
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "困りごと"
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "覚える"
+          },
+          "expect": {
+            "flags": {
+              "$記憶": "あり"
+            }
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "やり直す"
+          },
+          "expect": {
+            "texts": [
+              "最初からやり直します。"
+            ],
+            "absent_flags": [
+              "$記憶"
+            ]
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "覚える"
+          },
+          "expect": {
+            "texts": []
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "困りごと"
+          },
+          "expect": {
+            "texts": [
+              "困ったときの確認です。"
+            ]
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "覚える"
+          },
+          "expect": {
+            "flags": {
+              "$記憶": "あり"
+            }
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "!!local-reset!!"
+          },
+          "expect": {
+            "texts": [
+              "リセットしました"
+            ],
+            "absent_flags": [
+              "$記憶"
+            ]
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "覚える"
+          },
+          "expect": {
+            "texts": []
+          }
+        }
+      ]
+    },
+    {
+      "name": "定数：値・一覧・対応表",
+      "steps": [
+        {
+          "input": {
+            "type": "start"
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "定数"
+          },
+          "expect": {
+            "texts": [
+              "定数の確認です。"
+            ]
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "題名"
+          },
+          "expect": {
+            "texts": [
+              "この物語の題名は「通し確認の物語」です。"
+            ]
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "章"
+          },
+          "expect": {
+            "texts": [
+              "最初の章は第一章、次の章は第二章です。"
+            ]
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "値段"
+          },
+          "expect": {
+            "texts": [
+              "りんごは120円です。"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "共有：@includeは書いた位置の順で調べる",
+      "steps": [
+        {
+          "input": {
+            "type": "start"
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "共有"
+          },
+          "expect": {
+            "texts": [
+              "作業場に着きました。"
+            ]
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "道具"
+          },
+          "expect": {
+            "texts": [
+              "作業場の道具棚です。"
+            ]
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "時刻"
+          },
+          "expect": {
+            "texts": [
+              "時刻は正午です。"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "共有：@fallbackは最後に調べる",
+      "steps": [
+        {
+          "input": {
+            "type": "start"
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "共有"
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "助けて"
+          },
+          "expect": {
+            "texts": [
+              "予備の案内です。"
+            ]
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "時刻"
+          },
+          "expect": {
+            "texts": [
+              "時刻は正午です。"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "共有：シート先頭の条件は各場面より先に調べる",
+      "steps": [
+        {
+          "input": {
+            "type": "start"
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "共有"
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "共通のあいさつ"
+          },
+          "expect": {
+            "texts": [
+              "シートの先頭に書いた共通の応答です。"
+            ]
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "合図"
+          },
+          "expect": {
+            "texts": [
+              "シート共通の合図です。"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "共有：@include_ifは式が成り立つ間だけ読み込む",
+      "steps": [
+        {
+          "input": {
+            "type": "start"
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "共有"
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "倉庫へ"
+          },
+          "expect": {
+            "texts": [
+              "倉庫に着きました。"
+            ]
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "道具"
+          },
+          "expect": {
+            "texts": []
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "許可をもらう"
+          },
+          "expect": {
+            "texts": [
+              "許可証をもらいました。"
+            ]
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "道具"
+          },
+          "expect": {
+            "texts": [
+              "部品の道具箱を開きました。"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "共有：@templateで手本の場面を選ぶ・外す",
+      "steps": [
+        {
+          "input": {
+            "type": "start"
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "共有"
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "茶室へ"
+          },
+          "expect": {
+            "texts": [
+              "茶室に着きました。"
+            ]
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "作法"
+          },
+          "expect": {
+            "texts": [
+              "型どおりの作法です。"
+            ]
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "共通のあいさつ"
+          },
+          "expect": {
+            "texts": [
+              "シートの先頭に書いた共通の応答です。"
+            ]
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "離れへ"
+          },
+          "expect": {
+            "texts": [
+              "離れに着きました。"
+            ]
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "合図"
+          },
+          "expect": {
+            "texts": [
+              "離れの合図です。"
+            ]
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "共通のあいさつ"
+          },
+          "expect": {
+            "texts": []
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "案内"
+          },
+          "expect": {
+            "texts": [
+              "次の言葉を入力すると、それぞれの確認を始めます。",
+              "条件、移動、変数、分岐、選択、呼出、共有、表示、読み物、定数、困りごと"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "共有：@filterは後に続く条件へまとめて式を付ける",
+      "steps": [
+        {
+          "input": {
+            "type": "start"
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "共有"
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "夜の広場へ"
+          },
+          "expect": {
+            "texts": [
+              "夜の広場に着きました。"
+            ]
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "看板"
+          },
+          "expect": {
+            "texts": []
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "足音"
+          },
+          "expect": {
+            "texts": [
+              "足音が聞こえます。"
+            ]
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "灯りをつける"
+          },
+          "expect": {
+            "texts": [
+              "灯りをつけました。"
+            ]
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "看板"
+          },
+          "expect": {
+            "texts": [
+              "看板が読めました。"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "表示：画像",
+      "steps": [
+        {
+          "input": {
+            "type": "start"
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "表示"
+          },
+          "expect": {
+            "texts": [
+              "表示の確認です。"
+            ]
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "絵"
+          },
+          "expect": {
+            "texts": [
+              "絵を表示しました。"
+            ],
+            "message_types": [
+              "image",
+              "text"
+            ]
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "写真"
+          },
+          "expect": {
+            "texts": [],
+            "message_types": [
+              "image"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "表示：原寸画像と音声（LINEのみ）",
+      "steps": [
+        {
+          "input": {
+            "type": "start"
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "表示"
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "原寸"
+          },
+          "expect": {
+            "texts": [],
+            "message_types": [
+              "image"
+            ]
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "音"
+          },
+          "expect": {
+            "texts": [],
+            "message_types": [
+              "audio"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "表示：ボタンの選択肢の書き方",
+      "steps": [
+        {
+          "input": {
+            "type": "start"
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "表示"
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "かるた"
+          },
+          "expect": {
+            "texts": [],
+            "choices": [
+              {
+                "type": "message",
+                "label": "一の札"
+              },
+              {
+                "type": "message",
+                "label": "二の札"
+              },
+              {
+                "type": "uri",
+                "label": "お店"
+              },
+              {
+                "type": "postback",
+                "label": "三の札"
+              }
+            ]
+          }
+        },
+        {
+          "input": {
+            "type": "choice",
+            "index": 0
+          },
+          "expect": {
+            "texts": [
+              "一の札を選びました。"
+            ]
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "かるた"
+          }
+        },
+        {
+          "input": {
+            "type": "choice",
+            "index": 1
+          },
+          "expect": {
+            "texts": [
+              "二の札を選びました。"
+            ]
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "かるた"
+          }
+        },
+        {
+          "input": {
+            "type": "choice",
+            "index": 3
+          },
+          "expect": {
+            "texts": [
+              "三の札を選びました。"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "表示：イメージマップ",
+      "steps": [
+        {
+          "input": {
+            "type": "start"
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "表示"
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "地図"
+          },
+          "expect": {
+            "texts": [],
+            "choices": [
+              {
+                "type": "message",
+                "label": null
+              },
+              {
+                "type": "uri",
+                "label": null
+              }
+            ],
+            "message_types": [
+              "imagemap"
+            ]
+          }
+        },
+        {
+          "input": {
+            "type": "choice",
+            "index": 0
+          },
+          "expect": {
+            "texts": [
+              "西には森が広がっています。"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "表示：カルーセルとFlex（LINEのみ）",
+      "steps": [
+        {
+          "input": {
+            "type": "start"
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "表示"
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "本棚"
+          },
+          "expect": {
+            "texts": [],
+            "message_types": [
+              "template"
+            ]
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "赤い本を読む"
+          },
+          "expect": {
+            "texts": [
+              "冒険の物語でした。"
+            ]
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "飾り"
+          },
+          "expect": {
+            "texts": [],
+            "message_types": [
+              "flex"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "表示：本文に付ける返信候補と記録",
+      "steps": [
+        {
+          "input": {
+            "type": "start"
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "表示"
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "色"
+          },
+          "expect": {
+            "texts": [
+              "好きな色を選んでください。"
+            ],
+            "choices": [
+              {
+                "type": "message",
+                "label": "赤"
+              },
+              {
+                "type": "message",
+                "label": "青"
+              }
+            ]
+          }
+        },
+        {
+          "input": {
+            "type": "choice",
+            "index": 1
+          },
+          "expect": {
+            "texts": [
+              "青を選びました。"
+            ]
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "記録"
+          },
+          "expect": {
+            "texts": [
+              "記録を残しました。"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "表示：選ばなくても進める返信候補",
+      "steps": [
+        {
+          "input": {
+            "type": "start"
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "表示"
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "気分"
+          },
+          "expect": {
+            "texts": [
+              "今日の気分はどうですか。"
+            ],
+            "choices": [
+              {
+                "type": "postback",
+                "label": "よい"
+              },
+              {
+                "type": "postback",
+                "label": "ふつう"
+              }
+            ]
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "散歩"
+          },
+          "expect": {
+            "texts": [
+              "散歩に出かけました。"
+            ],
+            "absent_flags": [
+              "$$line.quick_reply"
+            ]
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "気分"
+          }
+        },
+        {
+          "input": {
+            "type": "choice",
+            "index": 1
+          },
+          "expect": {
+            "texts": [
+              "ふつうの日ですね。"
+            ],
+            "absent_flags": [
+              "$$line.quick_reply"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "表示：スタンプは専用の文字列で届く（LINEのみ）",
+      "steps": [
+        {
+          "input": {
+            "type": "start"
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "表示"
+          }
+        },
+        {
+          "input": {
+            "type": "start",
+            "action": ":LINE_STICKER:446,1988"
+          },
+          "expect": {
+            "texts": [
+              "スタンプを受け取りました。"
+            ]
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": ":LINE_STICKER:446,1988"
+          },
+          "expect": {
+            "texts": []
+          }
+        }
+      ]
+    },
+    {
+      "name": "読み物：画像テキストのページ送り",
+      "steps": [
+        {
+          "input": {
+            "type": "start"
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "読み物"
+          },
+          "expect": {
+            "texts": [
+              "読み物の確認です。"
+            ]
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "読む"
+          },
+          "expect": {
+            "texts": [],
+            "choices": [
+              {
+                "type": "postback",
+                "label": "続きを読む"
+              }
+            ],
+            "message_types": [
+              "imagemap"
+            ]
+          }
+        },
+        {
+          "input": {
+            "type": "choice",
+            "index": 0
+          },
+          "expect": {
+            "texts": [
+              "最後のページまで読みました。"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "読み物：名前のない目印へ順に進む",
+      "steps": [
+        {
+          "input": {
+            "type": "start"
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "読み物"
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "階段"
+          },
+          "expect": {
+            "texts": [
+              "一階です。",
+              "二階です。",
+              "三階です。"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "シート：_で始まるシートは読み込まない",
+      "steps": [
+        {
+          "input": {
+            "type": "start"
+          },
+          "expect": {
+            "texts": [
+              "通し確認用の物語です。",
+              "「案内」と入力すると、確認できる項目を表示します。"
+            ]
+          }
+        },
+        {
+          "input": {
+            "type": "text",
+            "text": "下書き"
+          },
+          "expect": {
+            "texts": []
+          }
+        }
+      ]
+    }
+  ]
+}

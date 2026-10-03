@@ -76,17 +76,17 @@ def validate_suite(value, selected=None):
             else:
                 raise LocalInputError(f'{label}: 未対応のinput typeです: {kind}')
             expected = step.get('expect', {})
-            require_keys(expected, (), ('texts', 'choices', 'flags', 'absent_flags'), label)
+            require_keys(expected, (), ('texts', 'choices', 'flags', 'absent_flags', 'message_types'), label)
             for key, expected_value in expected.items():
                 if key == 'flags':
                     if not isinstance(expected_value, dict):
                         raise LocalInputError(f'{label}: flagsはobjectにしてください')
                     assertions += len(expected_value)
-                elif key in ('texts', 'absent_flags'):
+                elif key in ('texts', 'absent_flags', 'message_types'):
                     if not isinstance(expected_value, list) or not all(
                             isinstance(item, str) for item in expected_value):
                         raise LocalInputError(f'{label}: {key}は文字列の配列にしてください')
-                    assertions += 1 if key == 'texts' else len(expected_value)
+                    assertions += len(expected_value) if key == 'absent_flags' else 1
                 else:
                     if not isinstance(expected_value, list):
                         raise LocalInputError(f'{label}: choicesは配列にしてください')

@@ -1096,9 +1096,10 @@ class GroupMessageTaskDBTest(unittest.TestCase):
             'total_members': 500,
             'successful_members': 499,
             'failed_members': 1,
+            'status': self.db.STATUS_COMPLETED,
         }
+        self.state_store.get_group_message_task.return_value = original_task
         with (
-            patch.object(self.db, 'get_task', return_value=original_task),
             patch.object(
                 self.db,
                 '_get_failed_members_from_storage',
@@ -1334,18 +1335,129 @@ class GroupMessageTaskDBTest(unittest.TestCase):
                 with self.assertRaises(type(error)):
                     self.db.get_members_from_storage('task-1')
 
-    def test_failed_JSON読取失敗は空listから上書きする既存挙動を維持する(self):
-        self.object_store.load_private.side_effect = ValueError('broken JSON')
+    def test_一覧と詳細は同じIDと状態別の操作可否を返し保存値を変えない(self):
+        cases = (
+            (self.db.STATUS_PENDING, True, False),
+            (self.db.STATUS_RUNNING, True, False),
+            (self.db.STATUS_FAILED, True, False),
+            (self.db.STATUS_COMPLETED, False, True),
+            (self.db.STATUS_ABORTED, False, True),
+        )
+        for status, can_abort, can_retry in cases:
+            for failed in (0, 2):
+                with self.subTest(status=status, failed=failed):
+                    stored = {'status': status, 'failed_members': failed}
+                    self.state_store.get_group_message_task.return_value = stored
+                    self.state_store.get_recent_group_message_tasks.return_value = [
+                        dict(stored, id='task-1')]
 
+                    detail = self.db.get_task('task-1')
+                    recent = self.db.get_recent_tasks('test-bot')
+
+                    self.assertEqual(detail, recent[0])
+                    self.assertEqual(detail['id'], 'task-1')
+                    self.assertIs(detail['can_abort'], can_abort)
+                    self.assertIs(detail['can_retry'], can_retry and failed > 0)
+                    self.assertEqual(stored, {'status': status, 'failed_members': failed})
+
+        self.state_store.get_group_message_task.return_value = None
+        self.assertIsNone(self.db.get_task('missing'))
+
+    def test_取消はtransaction内の最新状態に従う(self):
+        for status in (
+                self.db.STATUS_PENDING, self.db.STATUS_RUNNING,
+                self.db.STATUS_FAILED, self.db.STATUS_COMPLETED,
+                self.db.STATUS_ABORTED):
+            with self.subTest(status=status):
+                task = {'status': status, 'error_messages': ['送信結果']}
+                updates = []
+
+                def update_task(_task_id, builder):
+                    updates.append(builder(dict(task)))
+                    task.update(updates[-1])
+                    return True
+
+                self.state_store.update_group_message_task.side_effect = update_task
+                result = self.db.abort_task('task-1')
+
+                can_abort = status in (
+                    self.db.STATUS_PENDING, self.db.STATUS_RUNNING, self.db.STATUS_FAILED)
+                self.assertIs(result, can_abort)
+                self.assertEqual(task['status'], self.db.STATUS_ABORTED if can_abort else status)
+                self.assertEqual(task['error_messages'], ['送信結果'])
+                self.assertEqual(updates, [{'status': self.db.STATUS_ABORTED}] if can_abort else [{}])
+        self.state_store.get_group_message_task.assert_not_called()
+
+    def test_取消callback再試行で完了したtaskを上書きせず成功と返さない(self):
+        updates = []
+
+        def update_task(_task_id, builder):
+            updates.append(builder({'status': self.db.STATUS_RUNNING}))
+            updates.append(builder({'status': self.db.STATUS_COMPLETED}))
+            return True
+
+        self.state_store.update_group_message_task.side_effect = update_task
+
+        self.assertIs(self.db.abort_task('task-1'), False)
+        self.assertEqual(updates, [{'status': self.db.STATUS_ABORTED}, {}])
+
+    def test_不存在のtaskは取消できない(self):
+        self.state_store.update_group_message_task.return_value = False
+
+        self.assertIs(self.db.abort_task('missing'), False)
+
+    def test_配信継続中や失敗者ゼロのtaskは再送を作らない(self):
+        for status, failed in (
+                (self.db.STATUS_PENDING, 2), (self.db.STATUS_RUNNING, 2),
+                (self.db.STATUS_FAILED, 2), (self.db.STATUS_COMPLETED, 0),
+                (self.db.STATUS_ABORTED, 0)):
+            with self.subTest(status=status, failed=failed):
+                self.state_store.get_group_message_task.return_value = {
+                    'status': status, 'failed_members': failed,
+                }
+
+                self.assertIsNone(self.db.retry_failed_members('task-1', 'dashboard'))
+
+        self.object_store.load_private.assert_not_called()
+        self.object_store.store_private.assert_not_called()
+        self.state_store.create_group_message_task.assert_not_called()
+
+    def test_失敗一覧のNotFoundだけは空と扱い初回の追記を保存できる(self):
+        self.object_store.load_private.side_effect = ObjectNotFoundError('missing')
+
+        self.assertEqual(self.db._get_failed_members_from_storage('task-1'), [])
         self.db._append_failed_member_list('task-1', ['new-user'])
 
         self.object_store.store_private.assert_called_once_with(
-            'group_tasks/task-1/failed_members.json',
-            json.dumps(['new-user']))
+            'group_tasks/task-1/failed_members.json', json.dumps(['new-user']))
+
+    def test_失敗一覧の取得や復号やJSON障害は旧一覧を上書きせず再送を作らない(self):
+        self.state_store.get_group_message_task.return_value = {
+            'status': self.db.STATUS_COMPLETED, 'failed_members': 2,
+        }
+        cases = (
+            (ObjectStoreError('読み取り失敗'), ObjectStoreError),
+            (b'\xff', UnicodeDecodeError),
+            (b'broken JSON', json.JSONDecodeError),
+            (b'{"user": 1}', ValueError),
+            (b'["old-user", 1]', ValueError),
+        )
+        for content, exception_type in cases:
+            with self.subTest(content=repr(content)):
+                self.object_store.load_private.side_effect = (
+                    content if isinstance(content, Exception) else None)
+                self.object_store.load_private.return_value = content
+
+                with self.assertRaises(exception_type):
+                    self.db._append_failed_member_list('task-1', ['new-user'])
+                with self.assertRaises(exception_type):
+                    self.db.retry_failed_members('task-1', 'dashboard')
+
+                self.object_store.store_private.assert_not_called()
+                self.state_store.create_group_message_task.assert_not_called()
 
     def test_result_JSON取得失敗は空listを返す(self):
         getters = (
-            self.db._get_failed_members_from_storage,
             self.db.get_successful_members,
             self.db.get_error_logs,
         )

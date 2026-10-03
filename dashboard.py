@@ -323,6 +323,9 @@ def api_create_group_message_task():
         if not bot_name or not group_id or not action:
             abort_json(400, 'Bot name, group ID, and action are required')
 
+        if scheduled_at_str is not None and not isinstance(scheduled_at_str, str):
+            abort_json(400, 'Invalid scheduled_at format. Use ISO 8601 format (YYYY-MM-DDTHH:MM:SS)')
+
         if scheduled_at_str is not None and scheduled_at_str != '' and not task_client.allows_delayed_scenarios():
             abort_json(400, 'この環境では予約配信を使えません。即時送信を選んでください')
 
@@ -513,13 +516,13 @@ def api_retry_failed_group_task(task_id):
     try:
         created_by = 'dashboard_retry'
 
+        original_task = GroupMessageTaskDB.get_task(task_id)
+        if not original_task or not original_task['can_retry']:
+            abort_json(400, '再送できる失敗メンバーがありません。処理中のタスクは先に中止してください')
+
         new_task_id = GroupMessageTaskDB.retry_failed_members(task_id, created_by)
 
         if new_task_id:
-            original_task = GroupMessageTaskDB.get_task(task_id)
-            if not original_task:
-                 abort_json(404, f'Original task {task_id} not found for retry')
-
             task_client.create_task(
                 queue_name='group-message-queue',
                 url=f'/api/v1/bots/{original_task["bot_name"]}/process_group_batch',

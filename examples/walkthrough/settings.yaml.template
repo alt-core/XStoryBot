@@ -1,0 +1,49 @@
+# 通し確認用の台本を動かす設定。同じフォルダーのsettings.yamlへコピーして使う。
+'*':
+  cloud:
+    provider: local
+  local:
+    storage_root: ../../outputs/walkthrough
+    public_base_url: http://127.0.0.1:8765/local-media
+    assets:
+      https://media.example.test/reference-sample.png: assets/sample.png
+    allow_external_media: false
+  auth: {}
+  constants: {}
+  options:
+    scenario_version: 3
+    reset_keyword: '!!local-reset!!'
+    timezone: Asia/Tokyo
+  plugins:
+    line:
+      alt_text: 通し確認
+      sender_icon_urls: {}
+    line.quick_reply:
+      command: ['＞']
+      command_without_guard: ['？']
+      default_reply: '続きを読む=>続きを読む'
+      please_select_quick_reply_label: '##please_select_quick_reply'
+    line.image_text:
+      default_frame: default
+      frames:
+        default:
+          more_mode: quick_between
+          size_x: 1040
+          size_y: 520
+          margin_x: 60
+          margin_y: 30
+          font_size: 64
+    tsv: {}
+    webchat:
+      start_action: '##line.follow'
+      scenario_compatibility_epoch: '1'
+      sender_icon_urls: {}
+  bots:
+    bot:
+      state_namespace: walkthrough
+      interfaces:
+        - type: webchat
+      scenario:
+        type: tsv
+        params:
+          manifest: manifest.json

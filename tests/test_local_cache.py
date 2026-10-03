@@ -1,7 +1,9 @@
 """永続するbuild cacheとケース別の会話保存を確認する。"""
 
+import contextlib
 import copy
 import hashlib
+import io
 import json
 import os
 from pathlib import Path
@@ -11,6 +13,7 @@ import sqlite3
 import subprocess
 import sys
 import tempfile
+import threading
 import unittest
 from unittest.mock import patch
 
@@ -154,6 +157,53 @@ class LocalCacheTest(unittest.TestCase):
             root = Path(item['storage_root'])
             self.assertEqual((name, '次へ'), LocalStateStore(root).get_next_label(PLAYER_ID))
             self.assertEqual({'case': name}, json.loads((root / 'metadata/line-session.json').read_text()))
+
+    def test_複数caseは並行して動かし結果とログをsuiteの順に並べる(self):
+        both_running = threading.Barrier(2)
+        second_done = threading.Event()
+        original = self._worker
+
+        def worker(config, environment, request, directory, timeout):
+            case = request.get('case')
+            if case is not None:
+                # 2つのcaseが同時に実行中でなければ、ここで待ちきれずに失敗する。
+                both_running.wait(timeout=5)
+                if case['name'] == 'a':
+                    self.assertTrue(second_done.wait(timeout=5))
+                local_scenario._worker_log.stream.write(f"log-{case['name']}\n".encode('utf-8'))
+            result = original(config, environment, request, directory, timeout)
+            if case is not None and case['name'] == 'b':
+                second_done.set()
+            return result
+
+        self._worker = worker
+        stderr = io.StringIO()
+        with patch.object(local_scenario.os, 'cpu_count', return_value=4), \
+                contextlib.redirect_stderr(stderr):
+            result = self._execute([self._case('a'), self._case('b')])
+        self.assertTrue(result['ok'])
+        # 後のcaseが先に終わっても、結果とログは指定した順に並ぶ。
+        self.assertEqual(['a', 'b'], [item['name'] for item in result['cases']])
+        self.assertEqual(
+            ['log-a', 'log-b'],
+            [line for line in stderr.getvalue().splitlines() if line.startswith('log-')])
+        self.assertFalse(hasattr(local_scenario._worker_log, 'stream'))
+
+    def test_CPUが1つならcaseを順番に動かしログを直接出力する(self):
+        original = self._worker
+        streams = []
+
+        def worker(config, environment, request, directory, timeout):
+            if request.get('case') is not None:
+                streams.append(getattr(local_scenario._worker_log, 'stream', None))
+            return original(config, environment, request, directory, timeout)
+
+        self._worker = worker
+        with patch.object(local_scenario.os, 'cpu_count', return_value=1):
+            result = self._execute([self._case('a'), self._case('b')])
+        self.assertEqual(['a', 'b'], [item['name'] for item in result['cases']])
+        self.assertEqual([('build', 'a'), ('build', 'b')], self.calls[2:])
+        self.assertEqual([None, None], streams)
 
     def test_明示sessionは専用rootでbuildと会話を行い既存セーブを引き継ぐ(self):
         session = self.root / 'session'

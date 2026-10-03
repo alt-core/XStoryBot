@@ -2,6 +2,7 @@
 """ローカルのシナリオをビルドし、LINE検証または実Webchatで確認する。"""
 
 import argparse
+from concurrent.futures import ThreadPoolExecutor
 import contextlib
 import copy
 import hashlib
@@ -18,11 +19,16 @@ import socket
 import subprocess
 import sys
 import tempfile
+import threading
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
+# verifyのcaseは保存先もprocessも独立しているので、この数まで並行して動かす。
+MAX_CASE_WORKERS = 8
+# 並行workerのログ出力先と停止Event。未設定のthreadではstderrへ直接出す。
+_worker_log = threading.local()
 
 from tools.local_support import (
     LocalInputError, read_json, require_keys, validate_suite, write_bytes, write_json,
@@ -520,10 +526,13 @@ def run_worker(config, environment, request, directory, timeout, *, worker_scrip
     write_json(request_path, request)
     env = {**os.environ, 'XSBOT_CLOUD_PROVIDER': 'local',
            'XSBOT_DEPLOY_ENV': environment, 'XSBOT_SETTINGS_FILE': str(config_path)}
+    log = getattr(_worker_log, 'stream', None)
+    output = {'stdout': sys.stderr} if log is None else {'stdout': log, 'stderr': subprocess.STDOUT}
     try:
         completed = run_process(
             [sys.executable, str(worker_script or Path(__file__).resolve()), '_worker', str(request_path)],
-            cwd=PROJECT_ROOT, env=env, timeout=timeout, stdout=sys.stderr,
+            cwd=PROJECT_ROOT, env=env, timeout=timeout,
+            cancel_event=getattr(_worker_log, 'cancel_event', None), **output,
         )
     except subprocess.TimeoutExpired:
         return {'ok': False, 'exit_code': 1, 'phase': request['phase'], 'error': '子processがtimeoutしました'}
@@ -605,7 +614,8 @@ def execute(args, serve=True, expected_identity=None):
                 return result
             request.update(scenario_uri=built['scenario_uri'], asset_urls=built.get('asset_urls', {}))
             result['cache_root'] = str(cache_root)
-        for index, case in enumerate(cases):
+        def run_case_worker(index):
+            case = cases[index]
             case_config = copy.deepcopy(config)
             root = Path(args.session).resolve() if args.session else run_directory / 'cases' / str(index)
             case_config['local']['storage_root'] = str(root if args.session else cache_root)
@@ -617,7 +627,34 @@ def execute(args, serve=True, expected_identity=None):
                 run_directory / 'workers' / str(index), args.timeout)
             case_result.update(name=case['name'], storage_root=str(root),
                                database=str(root / 'state.sqlite3'), continued=bool(args.session))
-            results.append(case_result)
+            return case_result
+
+        def run_case_worker_with_log(index):
+            with tempfile.TemporaryFile() as log:
+                _worker_log.stream = log
+                _worker_log.cancel_event = cancel_event
+                try:
+                    case_result = run_case_worker(index)
+                finally:
+                    del _worker_log.stream
+                    del _worker_log.cancel_event
+                log.seek(0)
+                return case_result, log.read()
+
+        parallel = min(len(cases), os.cpu_count() or 1, MAX_CASE_WORKERS)
+        if parallel > 1:
+            # 待ち時間の大半はcaseごとのprocess起動なので並行して動かす。結果とログはsuiteの順に並べる。
+            pool = ThreadPoolExecutor(max_workers=parallel)
+            cancel_event = threading.Event()
+            try:
+                for case_result, log in pool.map(run_case_worker_with_log, range(len(cases))):
+                    sys.stderr.write(log.decode('utf-8', errors='replace'))
+                    results.append(case_result)
+            finally:
+                cancel_event.set()
+                pool.shutdown(wait=True, cancel_futures=True)
+        else:
+            results = [run_case_worker(index) for index in range(len(cases))]
         result.update(ok=all(item['ok'] for item in results), cases=results,
                       exit_code=max(item.get('exit_code', 1) for item in results))
     else:

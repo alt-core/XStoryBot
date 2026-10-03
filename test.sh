@@ -15,6 +15,7 @@ python3 -m unittest \
     tests.test_local_backend \
     tests.test_local_media_input \
     tests.test_local_scenario \
+    tests.test_walkthrough_story \
     tests.test_local_cache \
     tests.test_local_webchat \
     tests.test_local_process \

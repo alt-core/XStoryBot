@@ -114,7 +114,23 @@ class GroupMessageTaskDB:
 
     @staticmethod
     def get_task(task_id):
-        return GroupMessageTaskDB._state_store.get_group_message_task(task_id)
+        task = GroupMessageTaskDB._state_store.get_group_message_task(task_id)
+        return GroupMessageTaskDB._with_task_operations(task_id, task)
+
+    @staticmethod
+    def _with_task_operations(task_id, task):
+        if task is None:
+            return None
+        status = task.get('status')
+        return dict(task, id=task_id,
+                    can_abort=status in (
+                        GroupMessageTaskDB.STATUS_PENDING,
+                        GroupMessageTaskDB.STATUS_RUNNING,
+                        GroupMessageTaskDB.STATUS_FAILED),
+                    can_retry=status in (
+                        GroupMessageTaskDB.STATUS_COMPLETED,
+                        GroupMessageTaskDB.STATUS_ABORTED
+                    ) and task.get('failed_members', 0) > 0)
 
     @staticmethod
     def update_task(task_id, update_builder):
@@ -202,36 +218,18 @@ class GroupMessageTaskDB:
 
     @staticmethod
     def _append_failed_member_list(task_id, new_failed_members):
-        try:
-            try:
-                content = GroupMessageTaskDB._object_store.load_private(
-                    f"group_tasks/{task_id}/failed_members.json").decode('utf-8')
-                failed_members = json.loads(content)
-            except ObjectNotFoundError:
-                # ファイルが存在しない場合は空リストから開始
-                failed_members = []
-            except Exception as e_read: # ObjectStoreError以外の読み取り/JSONパースエラー
-                 logging.error(f"Failed to read/parse existing failed_members.json for task {task_id}: {type(e_read).__name__} - {str(e_read)}")
-                 failed_members = [] # 読み取りエラーの場合も空から開始（データ損失リスクあり）
+        failed_members = GroupMessageTaskDB._get_failed_members_from_storage(task_id)
+        added_count = 0
+        for member in new_failed_members:
+            if member not in failed_members:
+                failed_members.append(member)
+                added_count += 1
 
-            added_count = 0
-            for member in new_failed_members:
-                if member not in failed_members:
-                    failed_members.append(member)
-                    added_count += 1
-
-            if added_count > 0:
-                GroupMessageTaskDB._object_store.store_private(
-                    f"group_tasks/{task_id}/failed_members.json",
-                    json.dumps(failed_members),
-                )
-                logging.debug(f"Appended {added_count} members to failed_members.json for task {task_id}. Total: {len(failed_members)}")
-            else:
-                logging.debug(f"No new members to append to failed_members.json for task {task_id}.")
-
-        except ObjectStoreError as e:
-            logging.error(f"Failed to append to failed_members.json for task {task_id} in private object storage: {type(e).__name__} - {str(e)}")
-            raise
+        if added_count > 0:
+            GroupMessageTaskDB._store_failed_member_list(task_id, failed_members)
+            logging.debug(f"Appended {added_count} members to failed_members.json for task {task_id}. Total: {len(failed_members)}")
+        else:
+            logging.debug(f"No new members to append to failed_members.json for task {task_id}.")
 
     @staticmethod
     def _get_failed_members_from_storage(task_id):
@@ -239,30 +237,31 @@ class GroupMessageTaskDB:
             content = GroupMessageTaskDB._object_store.load_private(
                 f"group_tasks/{task_id}/failed_members.json").decode('utf-8')
             members = json.loads(content)
+            if not isinstance(members, list) or any(
+                    not isinstance(member, str) for member in members):
+                raise ValueError('失敗メンバー一覧は文字列の配列である必要があります')
             logging.debug(f"Retrieved {len(members)} failed members from private object storage for task {task_id}")
             return members
         except ObjectNotFoundError:
             logging.debug(f"failed_members.json not found in private object storage for task {task_id}. Returning empty list.")
             return []
-        except ObjectStoreError as e:
+        except Exception as e:
             logging.error(f"Failed to retrieve failed members from private object storage for task {task_id}: {type(e).__name__} - {str(e)}")
-            return [] # エラー時は空リストを返す（リトライできない可能性がある）
-        except Exception as e: # ObjectStoreError以外の予期せぬエラー
-            logging.error(f"Unexpected error retrieving failed members from private object storage for task {task_id}: {type(e).__name__} - {str(e)}")
-            return []
+            raise
 
     @staticmethod
     def abort_task(task_id):
-        task = GroupMessageTaskDB.get_task(task_id)
-        if not task:
-            return False
+        applied = False
 
-        # 既に完了または中止されている場合は何もしない
-        if task['status'] in [GroupMessageTaskDB.STATUS_COMPLETED, GroupMessageTaskDB.STATUS_ABORTED]:
-            return False
+        def build_update(task):
+            nonlocal applied
+            applied = GroupMessageTaskDB._with_task_operations(task_id, task)['can_abort']
+            if not applied:
+                return {}
+            return {'status': GroupMessageTaskDB.STATUS_ABORTED}
 
-        # ステータスを中止に変更
-        return GroupMessageTaskDB.update_task_status(task_id, GroupMessageTaskDB.STATUS_ABORTED)
+        updated = GroupMessageTaskDB.update_task(task_id, build_update)
+        return bool(updated and applied)
 
     @staticmethod
     def create_rate_limiter(max_rate=1000):
@@ -465,7 +464,7 @@ class GroupMessageTaskDB:
     @staticmethod
     def retry_failed_members(original_task_id, created_by):
         original_task = GroupMessageTaskDB.get_task(original_task_id)
-        if not original_task:
+        if not original_task or not original_task['can_retry']:
             return None
 
         remaining_members = GroupMessageTaskDB._get_failed_members_from_storage(
@@ -507,8 +506,10 @@ class GroupMessageTaskDB:
     @staticmethod
     def get_recent_tasks(bot_name, limit=10):
         try:
-            return GroupMessageTaskDB._state_store.get_recent_group_message_tasks(
+            tasks = GroupMessageTaskDB._state_store.get_recent_group_message_tasks(
                 bot_name, limit)
+            return [GroupMessageTaskDB._with_task_operations(task['id'], task)
+                    for task in tasks]
         except Exception as e:
             logging.error(f"Error fetching recent tasks: {str(e)}")
             # エラー時でも空のリストを返す

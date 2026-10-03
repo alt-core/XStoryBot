@@ -5,6 +5,7 @@ import json
 import shutil
 import subprocess
 import sys
+import tempfile
 import types
 import unittest
 from functools import wraps
@@ -49,7 +50,7 @@ def make_error_json(code, message):
     }, ensure_ascii=False)
 
 
-def load_dashboard():
+def load_dashboard(group_db=None):
     """外部サービスを初期化せずにdashboard moduleを読み込む。"""
     settings = types.ModuleType('settings')
     settings.DEPLOY_ENV = 'prod'
@@ -137,6 +138,9 @@ def load_dashboard():
     FakeGroupMessageTaskDB.abort_task = Mock(return_value=True)
     FakeGroupMessageTaskDB.retry_failed_members = Mock(return_value=None)
     FakeGroupMessageTaskDB.update_task_status = Mock(return_value=True)
+
+    if group_db is not None:
+        FakeGroupMessageTaskDB = group_db
 
     group_message_task_db = types.ModuleType('group_message_task_db')
     group_message_task_db.GroupMessageTaskDB = FakeGroupMessageTaskDB
@@ -563,21 +567,41 @@ class DashboardTest(unittest.TestCase):
         self.dependencies.task_client.create_task.assert_not_called()
 
     def test_文字列でない予約日時は形式エラーにする(self):
-        status, _, body = call_wsgi(
-            self.module.app,
-            'POST',
-            '/dashboard/api/create_group_message_task',
-            json_body={
-                'bot_name': 'zeta',
-                'group_id': 'group-1',
-                'action': 'hello',
-                'scheduled_at': 20260901,
-            },
-        )
+        for allows_delayed in (True, False):
+            self.dependencies.task_client.allows_delayed_scenarios.return_value = allows_delayed
+            for scheduled_at in (0, 0.0, False, True, 20260901, [], [1], {}, {'date': '2026-10-04'}):
+                with self.subTest(allows_delayed=allows_delayed, scheduled_at=scheduled_at):
+                    status, _, body = call_wsgi(
+                        self.module.app,
+                        'POST',
+                        '/dashboard/api/create_group_message_task',
+                        json_body={
+                            'bot_name': 'zeta',
+                            'group_id': 'group-1',
+                            'action': 'hello',
+                            'scheduled_at': scheduled_at,
+                        },
+                    )
 
-        self.assertEqual(400, status)
-        self.assertIn('Invalid scheduled_at format', body)
-        self.dependencies.group_db.create_task.assert_not_called()
+                    self.assertEqual(400, status)
+                    self.assertIn('Invalid scheduled_at format', body)
+                    self.dependencies.group_db.create_task.assert_not_called()
+                    self.dependencies.task_client.create_task.assert_not_called()
+
+    def test_日時なしと空文字は即時送信として維持する(self):
+        data = {'bot_name': 'zeta', 'group_id': 'group-1', 'action': 'hello'}
+        for allows_delayed in (True, False):
+            self.dependencies.task_client.allows_delayed_scenarios.return_value = allows_delayed
+            for date_input in ({}, {'scheduled_at': None}, {'scheduled_at': ''}):
+                with self.subTest(allows_delayed=allows_delayed, date_input=date_input):
+                    self.dependencies.group_db.create_task.reset_mock()
+                    self.dependencies.task_client.create_task.reset_mock()
+                    status, _, _body = call_wsgi(
+                        self.module.app, 'POST', '/dashboard/api/create_group_message_task',
+                        json_body={**data, **date_input})
+                    self.assertEqual(200, status)
+                    self.assertIsNone(self.dependencies.group_db.create_task.call_args.kwargs['scheduled_at'])
+                    self.dependencies.task_client.create_task.assert_called_once()
 
     def test_予約日時のoffsetなし入力をJSTで保存してenqueueする(self):
         status, _, body = call_wsgi(
@@ -665,6 +689,190 @@ class DashboardTest(unittest.TestCase):
 
         self.assertEqual(status, 400)
         self.assertIn('Group ID is required', body)
+
+
+class DashboardGroupTaskFlowTest(unittest.TestCase):
+    def setUp(self):
+        import cloud_backend
+        from cloud_backend.local.object_store import LocalObjectStore
+        from cloud_backend.local.state_store import LocalStateStore
+
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.state_store = LocalStateStore(directory.name)
+        self.object_store = LocalObjectStore(
+            directory.name, 'http://127.0.0.1:8080/local-media')
+        models = types.ModuleType('models')
+        models.GroupMembersDB = object
+        models.get_state_store = lambda: self.state_store
+        spec = importlib.util.spec_from_file_location(
+            '_dashboard_group_task_db', PROJECT_ROOT / 'group_message_task_db.py')
+        module = importlib.util.module_from_spec(spec)
+        with (
+            patch.dict(sys.modules, {'models': models}),
+            patch.object(cloud_backend, 'create_object_store', return_value=self.object_store),
+        ):
+            spec.loader.exec_module(module)
+            self.group_db = module.GroupMessageTaskDB
+            self.group_db.initialize({}, {})
+        self.module, self.dependencies = load_dashboard(self.group_db)
+        self.task_id = 'task-with-stored-id'
+        self.state_store.create_group_message_task(self.task_id, {
+            'bot_name': 'zeta', 'group_id': 'group-1', 'action': 'notice',
+            'attrs': {}, 'created_by': 'dashboard', 'status': 'failed',
+            'total_members': 2, 'processed_members': 2, 'successful_members': 1,
+            'failed_members': 1, 'current_batch': 0, 'total_batches': 1,
+            'interval_ms': 1, 'error_messages': ['送信失敗'],
+        })
+        self.object_store.store_private(
+            f'group_tasks/{self.task_id}/failed_members.json',
+            json.dumps(['line:user,failed-user']))
+
+    def response(self, path, method='GET', status=200):
+        result_status, _, body = call_wsgi(self.module.app, method, path)
+        self.assertEqual(status, result_status, body)
+        return json.loads(body) if status == 200 else body
+
+    def test_失敗タスクは中止後に失敗者だけを再送する(self):
+        base = f'/dashboard/api/group_tasks/{self.task_id}'
+        listed = self.response('/dashboard/api/bots/zeta/group_tasks')['data']['tasks']
+        task = self.response(base)['data']['task']
+        self.assertEqual(listed[0]['id'], self.task_id)
+        self.assertEqual(task['id'], self.task_id)
+        self.assertTrue(task['can_abort'])
+        self.assertFalse(task['can_retry'])
+        self.assertNotIn('id', self.state_store.get_group_message_task(self.task_id))
+
+        self.response(base + '/retry_failed', method='POST', status=400)
+        self.dependencies.task_client.create_task.assert_not_called()
+        self.assertEqual(len(self.state_store.get_recent_group_message_tasks('zeta', 10)), 1)
+        self.response(base + '/abort', method='POST')
+        stopped = self.response(base)['data']['task']
+        self.assertEqual(stopped['status'], 'aborted')
+        self.assertFalse(stopped['can_abort'])
+        self.assertTrue(stopped['can_retry'])
+
+        from tests.test_group_message_batching import load_group_message_task_manager
+        manager_module = load_group_message_task_manager()
+        manager_module.GroupMessageTaskDB = self.group_db
+        bot = Mock()
+        result, status = manager_module.GroupMessageTaskManager('zeta', bot).handle_batch_process_request(self.task_id)
+        self.assertEqual((status, result['status']), (200, 'aborted'))
+        bot.handle_action.assert_not_called()
+        manager_module.users.get_group_members.assert_not_called()
+        manager_module.task_client.create_task.assert_not_called()
+        self.assertEqual(self.state_store.get_group_message_task(self.task_id)['status'], 'aborted')
+
+        retry = self.response(base + '/retry_failed', method='POST')['data']
+        new_task_id = retry['new_task_id']
+        self.assertEqual(self.group_db.get_members_from_storage(new_task_id), ['line:user,failed-user'])
+        self.assertEqual(self.state_store.get_group_message_task(new_task_id)['status'], 'pending')
+        self.dependencies.task_client.create_task.assert_called_once_with(
+            queue_name='group-message-queue',
+            url='/api/v1/bots/zeta/process_group_batch',
+            params={'message_task_id': new_task_id, 'batch_index': 0})
+
+    def test_完了後の中止はAPIからも拒否して完了状態を保つ(self):
+        self.state_store.update_group_message_task(
+            self.task_id, lambda task: {'status': 'completed'})
+        self.response(f'/dashboard/api/group_tasks/{self.task_id}/abort', method='POST', status=400)
+        self.assertEqual(self.state_store.get_group_message_task(self.task_id)['status'], 'completed')
+
+    def test_再送一覧が壊れている場合はAPIも失敗して元データを保つ(self):
+        self.state_store.update_group_message_task(
+            self.task_id, lambda task: {'status': 'aborted'})
+        key = f'group_tasks/{self.task_id}/failed_members.json'
+        self.object_store.store_private(key, '壊れたJSON')
+        with patch.object(self.module.logging, 'error'):
+            self.response(f'/dashboard/api/group_tasks/{self.task_id}/retry_failed', method='POST', status=500)
+        self.assertEqual(self.object_store.load_private(key), '壊れたJSON'.encode('utf-8'))
+        self.assertEqual(len(self.state_store.get_recent_group_message_tasks('zeta', 10)), 1)
+        self.dependencies.task_client.create_task.assert_not_called()
+
+    @unittest.skipUnless(shutil.which('node'), 'Node.jsが利用できないため省略')
+    def test_保存済みタスクのAPI応答を使い画面のID操作と自動更新を確認する(self):
+        base = f'/dashboard/api/group_tasks/{self.task_id}'
+        responses = {
+            'list': self.response('/dashboard/api/bots/zeta/group_tasks'),
+            'failed': self.response(base),
+        }
+        responses['abort'] = self.response(base + '/abort', method='POST')
+        responses['aborted'] = self.response(base)
+        responses['retry'] = self.response(base + '/retry_failed', method='POST')
+        self.state_store.update_group_message_task(
+            self.task_id, lambda task: {'status': 'completed', 'failed_members': 0})
+        responses['completed'] = self.response(base)
+        template = (PROJECT_ROOT / 'template' / 'dashboard.tpl').read_text(encoding='utf-8')
+        escape_start = template.index('    function escapeHtml(value) {')
+        escape_end = template.index('    function renderBotNavigation', escape_start)
+        start = template.index('    function updateTaskList() {')
+        end = template.index('    let richmenuPlan = null;', start)
+        script = r"""
+const assert = require('node:assert/strict');
+const responses = JSON.parse(process.argv[1]), taskId = 'task-with-stored-id';
+let botName = 'zeta', csrfToken = 'artificial', state = 'failed', poll;
+const fields = new Map(), requests = [];
+const $ = (key) => {
+  if (!fields.has(key)) fields.set(key, {props: {}, data: {}});
+  const field = fields.get(key);
+  return {
+    text(value) { if (value === undefined) return field.text; field.text = value; return this; },
+    html(value) { field.html = value; return this; },
+    prop(name, value) { field.props[name] = value; return this; },
+    data(name, value) { if (value === undefined) return field.data[name]; field.data[name] = value; return this; },
+    css() { return this; }, addClass() { return this; }, removeClass() { return this; },
+    click(handler) { field.click = handler; return this; },
+    modal(command) { field.visible = command === 'show'; return this; },
+    is() { return field.visible || false; },
+  };
+};
+$.ajax = (options) => {
+  requests.push(options);
+  return {done(callback) {
+    const payload = options.type === 'POST'
+      ? responses[options.url.endsWith('/abort') ? 'abort' : 'retry']
+      : options.url.endsWith('/group_tasks') ? responses.list : responses[state];
+    callback(payload);
+    return {fail() {}};
+  }};
+};
+const alert = () => {}, formatDateTime = (value) => value || '-';
+const setInterval = (callback) => { poll = callback; return 1; }, clearInterval = () => {};
+""" + template[escape_start:escape_end] + template[start:end] + r"""
+updateTaskList();
+const html = fields.get('#task-list-body').html;
+assert.match(html, /data-task-id="task-with-stored-id"/);
+assert.match(html, /task-abort/);
+assert.doesNotMatch(html, /task-retry/);
+assert.doesNotMatch(html, /undefined/);
+showTaskDetail(taskId);
+assert.equal(fields.get('#detail-task-id').text, taskId);
+assert.equal(fields.get('#detail-abort-button').props.disabled, false);
+assert.equal(fields.get('#detail-retry-button').props.disabled, true);
+assert.equal(fields.get('#detail-abort-button').data['task-id'], taskId);
+startTaskPolling();
+poll();
+assert.equal(requests.at(-1).url, `/dashboard/api/group_tasks/${taskId}`);
+state = 'aborted'; poll();
+assert.equal(fields.get('#task-status-text').text, 'ステータス: 中止');
+assert.equal(fields.get('#detail-abort-button').props.disabled, true);
+assert.equal(fields.get('#detail-retry-button').props.disabled, false);
+state = 'completed'; poll();
+assert.equal(fields.get('#task-status-text').text, 'ステータス: 完了');
+assert.equal(fields.get('#detail-retry-button').props.disabled, true);
+state = 'failed'; showTaskDetail(taskId);
+abortTask(fields.get('#detail-abort-button').data['task-id']);
+assert.equal(requests.find((item) => item.type === 'POST').url, `/dashboard/api/group_tasks/${taskId}/abort`);
+assert.equal(requests.find((item) => item.type === 'POST').headers['X-CSRF-Token'], csrfToken);
+state = 'aborted'; showTaskDetail(taskId);
+retryFailedMembers(fields.get('#detail-retry-button').data['task-id']);
+assert.equal(requests.filter((item) => item.type === 'POST').at(-1).url, `/dashboard/api/group_tasks/${taskId}/retry_failed`);
+stopTaskPolling();
+"""
+        completed = subprocess.run(
+            ['node', '-e', script, json.dumps(responses, ensure_ascii=False)],
+            capture_output=True, text=True)
+        self.assertEqual(completed.returncode, 0, completed.stderr)
 
 
 class DashboardTemplateTest(unittest.TestCase):

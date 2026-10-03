@@ -31,6 +31,38 @@ python tools/local_scenario.py webchat --settings settings.yaml --bot bot
 
 Webchatの起動後、`http://127.0.0.1:8765/chat/bot`を開きます。候補を選び、その後「画像」と入力すると複数ページの画像テキストが表示されます。`tools/webchat_dev_server.py`は人工応答によるUI確認用で、実シナリオの実行にはこのコマンドを使います。
 
+## 通し確認用の台本
+
+`examples/walkthrough`は、シナリオの主な書き方を一通り使った台本と、その入力・期待する応答の一覧（suite）です。エンジンを変更したときの回帰確認と、書き方の見本を兼ねます。標準のテスト（`./test.sh`）にも含まれます。
+
+```sh
+cp examples/walkthrough/settings.yaml.template examples/walkthrough/settings.yaml
+python tools/local_scenario.py verify --settings examples/walkthrough/settings.yaml --bot bot --suite examples/walkthrough/suite.json
+python tools/local_scenario.py webchat --settings examples/walkthrough/settings.yaml --bot bot
+```
+
+会話を始めて「案内」と入力すると、確認できる項目の一覧が表示されます。項目名を入力すると、その確認の場面へ移ります。
+
+| シート（ファイル） | 確認する内容 |
+|---|---|
+| 入口（`entry.tsv`） | 開始、各確認への移動、返信候補の再提示 |
+| 条件（`conditions.tsv`） | 部分一致、`&`・`\|`・括弧、正規表現と完全一致、変数によるガード、本文の書き方 |
+| 移動（`scenes.tsv`） | sceneとlabelの移動、シート先頭の条件、ボタンの選択肢、別シートへの移動 |
+| 変数（`variables.tsv`） | `@set`、本文への埋め込み、計算、`/if`・`/elif`・`/else` |
+| 分岐（`branches.tsv`） | `/seq`・`/loop`・`/random`、入れ子、`@new_chapter`・`@reset_nodes`、命令の日本語名 |
+| 選択（`choices.tsv`） | 返信候補（Quick Reply）の選択・再提示・省略、確認ボタン |
+| 呼出（`calls.tsv`） | `@call`・`@return`、`@defer`、`@or` |
+| 共有（`sharing.tsv`） | `@include`・`@include_if`・`@fallback`・`@template`・`@filter` |
+| 表示（`messages.tsv`） | 画像、ボタン、イメージマップ、カルーセル、Flex、`@reply`、`@log`、選ばなくても進める返信候補、スタンプの受信 |
+| 読み物（`image_text.tsv`） | 画像テキストのページ送り、名前のない目印（`##`） |
+| `$定数`・定数の確認（`constants.tsv`・`constants_check.tsv`） | 定数Sheetの値・一覧・対応表 |
+| 困りごと（`errors.tsv`） | 答えられない入力、見つからない行き先、`@reset`と合言葉でのリセット |
+| `_メモ`（`notes.tsv`） | `_`で始まるシートを読み込まないこと |
+
+名前に「（LINEのみ）」と付くケースは、Webchatが対応していない表示（カルーセル、Flex、許可していない配信元の媒体）とLINE固有の入力を使います。それ以外のケースは文字入力と選択だけで進むので、Webchatや実機でも同じ手順で確かめられます。
+
+条件は部分一致で上から調べるため、台本へ行を足すときは、既存の条件に含まれない言葉を選んでください（例えば条件`絵`は入力「絵本」にも一致します）。`@delay`・`@forward`、グループ操作、外部API連携、動画、リッチメニューは、この台本の対象外です。
+
 ## 入力元の切り替え
 
 通常は`bots.<bot>.scenario`の設定を使います。TSVを選ぶ場合は次の形です。
@@ -144,9 +176,11 @@ python tools/local_scenario.py verify --settings settings.yaml --bot bot --suite
 suiteの例は[examples/local/suite.json](../examples/local/suite.json)にあります。
 
 - 入力は`start`、`text`、`choice`。choiceは直前の最終送信内容の選択肢を0始まりの番号で選び、実postbackを使います。
-- 期待値は`texts`、`choices`、`flags`、`absent_flags`。flagsは保存後の値を確認します。
+- 期待値は`texts`、`choices`、`flags`、`absent_flags`、`message_types`。flagsは保存後の値を確認します。
+- `message_types`は最終LINE payloadの`type`を送信順に比較します。例えば`["image"]`は画像1件、`[]`は応答がないことの期待値です。画像の欠落や余分なメッセージも検出でき、画像テキストとイメージマップの種類は`imagemap`です。
 - 準備stepの期待値は省略できますが、期待値のないcaseを成功扱いにはしません。
 - ケース内は最初の失敗で止め、他のケースは独立して確認します。
+- 複数のケースは、CPUの数に応じて最大8つまで並行して実行します。ケースごとにプロセスと保存先を分けるため互いに影響せず、結果とログはsuiteに書いた順に並びます。
 - 乱数seedは同じ実装・入力・初期状態での再現用です。日時やUUID、再開を跨ぐ乱数列の一致は保証しません。
 
 ## 媒体と外部通信

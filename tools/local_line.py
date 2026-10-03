@@ -115,9 +115,10 @@ def compare_expected(expected, messages, choices, player):
     actual = {
         'texts': [message['text'] for message in messages if message.get('type') == 'text'],
         'choices': [{'type': choice['type'], 'label': choice.get('label')} for choice in choices],
+        'message_types': [message.get('type') for message in messages],
     }
     differences = []
-    for key in ('texts', 'choices'):
+    for key in ('texts', 'choices', 'message_types'):
         if key in expected and expected[key] != actual[key]:
             differences.append({'field': key, 'expected': expected[key], 'actual': actual[key]})
     flags = player['flags']

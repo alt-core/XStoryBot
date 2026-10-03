@@ -1,0 +1,9 @@
+title	value
+	通し確認の物語
+; この行はコメントです
+chapters	list
+	第一章
+	第二章
+prices	dict
+	りんご	120
+	みかん	80

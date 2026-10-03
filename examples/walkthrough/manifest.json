@@ -1,0 +1,60 @@
+{
+  "sheets": [
+    {
+      "name": "入口",
+      "path": "entry.tsv"
+    },
+    {
+      "name": "条件",
+      "path": "conditions.tsv"
+    },
+    {
+      "name": "移動",
+      "path": "scenes.tsv"
+    },
+    {
+      "name": "変数",
+      "path": "variables.tsv"
+    },
+    {
+      "name": "分岐",
+      "path": "branches.tsv"
+    },
+    {
+      "name": "選択",
+      "path": "choices.tsv"
+    },
+    {
+      "name": "呼出",
+      "path": "calls.tsv"
+    },
+    {
+      "name": "困りごと",
+      "path": "errors.tsv"
+    },
+    {
+      "name": "$定数",
+      "path": "constants.tsv"
+    },
+    {
+      "name": "定数の確認",
+      "path": "constants_check.tsv"
+    },
+    {
+      "name": "共有",
+      "path": "sharing.tsv"
+    },
+    {
+      "name": "表示",
+      "path": "messages.tsv"
+    },
+    {
+      "name": "読み物",
+      "path": "image_text.tsv"
+    },
+    {
+      "name": "_メモ",
+      "path": "notes.tsv"
+    }
+  ]
+}
