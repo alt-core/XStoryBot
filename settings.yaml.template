@@ -43,15 +43,7 @@
       functions:
         action-queue: !env XSBOT_AWS_ACTION_WORKER_FUNCTION
         group-message-queue: !env XSBOT_AWS_GROUP_WORKER_FUNCTION
-      build:
-        cluster: !env XSBOT_AWS_BUILD_CLUSTER
-        task_definition: !env XSBOT_AWS_BUILD_TASK_DEFINITION
-        container_name: !env XSBOT_AWS_BUILD_CONTAINER_NAME
-        subnet_ids:
-          - !env XSBOT_AWS_BUILD_SUBNET_ID_1
-          - !env XSBOT_AWS_BUILD_SUBNET_ID_2
-        security_group_ids:
-          - !env XSBOT_AWS_BUILD_SECURITY_GROUP_ID
+        build-queue: !env XSBOT_AWS_BUILD_WORKER_FUNCTION
     services:
       app:
         base_url: !env XSBOT_APP_BASE_URL

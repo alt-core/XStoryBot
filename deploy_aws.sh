@@ -121,7 +121,7 @@ image_uri="$repository_uri:$image_tag"
 aws ecr get-login-password --region "$AWS_REGION" \
     | docker login --username AWS --password-stdin "$registry_uri"
 
-# API、2つのworker、Fargateで共用する同一imageを1回だけbuild/pushする。
+# API、action・group・buildのworkerで共用する同一imageを1回だけbuild/pushする。
 docker buildx build \
     --platform linux/amd64 \
     --provenance=false \

@@ -1,4 +1,4 @@
-"""Lambda非同期呼出しからaction・グループ配信処理を呼ぶ入口。"""
+"""Lambda非同期呼出しからaction・グループ配信・ビルド処理を呼ぶ入口。"""
 
 import logging
 import os
@@ -17,6 +17,7 @@ _BOT_NAME_PATTERN = re.compile(r'^[-_a-zA-Z0-9]+$')
 _QUEUE_KIND_MAP = {
     'action-queue': 'action',
     'group-message-queue': 'group_batch',
+    'build-queue': 'build',
 }
 _ACTION_LEASE_SECONDS = 360  # ActionWorkerFunctionのTimeout（300秒）より長くする
 _GROUP_LEASE_SECONDS = 960
@@ -43,7 +44,7 @@ def _validate_task_id(value):
 
 def validate_worker_kind(value):
     """起動時と封筒検査時にworker種別の設定不備を検出する。"""
-    if value not in ('action', 'group_batch'):
+    if value not in ('action', 'group_batch', 'build'):
         raise ValueError('AWS workerのkindが設定されていません')
 
 
@@ -125,6 +126,25 @@ def _group_parameters(params):
 def _process_task(event, dependencies, owner):
     envelope = _load_envelope(event, dependencies['worker_kind'])
     params = envelope['params']
+    if envelope['kind'] == 'build':
+        from build_service import build_runtime
+        for name in ('skip_image', 'force'):
+            if name in params and not isinstance(params[name], str):
+                raise ValueError('ビルドオプションは文字列で指定してください')
+        bot = dependencies['get_bot'](envelope['bot_name'])
+        if bot is None:
+            raise ValueError('Botが見つかりません')
+        logging.info('AWS build task: task_id=%s, bot_name=%s', envelope['task_id'], envelope['bot_name'])
+        try:
+            build_runtime(
+                bot, task_id=envelope['task_id'],
+                skip_image=params.get('skip_image') == 'true',
+                force=params.get('force') == 'true',
+                version=dependencies['options'].get('scenario_version', 1))
+        finally:
+            # ビルド専用workerでは次のビルドまでScenarioを保持する必要がない。
+            bot.scenario = bot.scenario_uri = None
+        return
     if envelope['kind'] == 'action':
         serialized_user = params.get('user', '')
         encoded_action = params.get('action', '')

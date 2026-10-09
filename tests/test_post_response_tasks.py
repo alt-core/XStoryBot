@@ -145,6 +145,7 @@ class PostResponseTaskTest(unittest.TestCase):
         self.queue = AwsTaskQueue(client_factory=lambda *_args, **_kwargs: self.sdk)
         self.queue.initialize({'task_queue': {'functions': {
             'action-queue': 'test-action', 'group-message-queue': 'test-group',
+            'build-queue': 'test-build',
         }}})
         self.execution_client = _MemoryDynamoClient()
         self.execution_store = AwsStateStore(

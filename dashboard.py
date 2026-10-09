@@ -3,7 +3,6 @@ from bottle import request, response, Bottle, abort, view, static_file, HTTPErro
 import logging
 import requests
 import json
-import uuid
 from datetime import datetime, timezone
 
 import settings
@@ -24,12 +23,6 @@ def abort_json(code, msg):
 
 def _now_utc():
     return datetime.now(timezone.utc)
-
-def _create_aws_build_task_launcher():
-    # GCP実行時にAWSのビルド実装を読み込まないよう遅延importする。
-    from cloud_backend.aws.build_task_launcher import AwsBuildTaskLauncher
-    return AwsBuildTaskLauncher(settings.BACKEND_SETTINGS)
-
 
 @app.get('/dashboard/')
 @app.get('/dashboard/<bot_name>')
@@ -124,14 +117,6 @@ def api_build_async(bot_name):
             headers={'X-API-Token': auth.get_api_token()}
         )
         return builder_response.text
-    elif settings.CLOUD_SETTINGS.get('provider', 'gcp') == 'aws':
-        task_id = str(uuid.uuid4())
-        task_id = _create_aws_build_task_launcher().launch(
-            task_id=task_id,
-            bot_name=bot_name,
-            skip_image=(options.get('skip_image') == 'true'),
-            force=(options.get('force') == 'true'),
-        )
     else:
         task_id = task_client.create_task(
             queue_name='build-queue',

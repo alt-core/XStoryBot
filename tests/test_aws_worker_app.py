@@ -72,11 +72,12 @@ class AwsWorkerAppTest(unittest.TestCase):
                 raise ValueError('送信先が未設定です')
             return original_import(name, *args, **kwargs)
 
-        with patch.dict(os.environ, {'XSBOT_AWS_WORKER_KIND': 'action'}):
-            with patch.object(builtins, '__import__', side_effect=import_module):
-                with self.assertRaisesRegex(ValueError, '送信先が未設定です'):
-                    importlib.reload(app_aws_worker)
-            importlib.reload(app_aws_worker)
+        for worker_kind in ('action', 'group_batch', 'build'):
+            with self.subTest(worker_kind=worker_kind), patch.dict(os.environ, {'XSBOT_AWS_WORKER_KIND': worker_kind}):
+                with patch.object(builtins, '__import__', side_effect=import_module):
+                    with self.assertRaisesRegex(ValueError, '送信先が未設定です'):
+                        importlib.reload(app_aws_worker)
+                importlib.reload(app_aws_worker)
 
     def test_worker種別の不備は起動時に検出する(self):
         try:
@@ -95,8 +96,8 @@ class AwsWorkerAppTest(unittest.TestCase):
             with patch.dict(os.environ, {'XSBOT_AWS_WORKER_KIND': 'action'}):
                 importlib.reload(app_aws_worker)
 
-    def test_両worker種別で初期化後にhealthを返す(self):
-        for worker_kind in ('action', 'group_batch'):
+    def test_全worker種別で初期化後にhealthを返す(self):
+        for worker_kind in ('action', 'group_batch', 'build'):
             with self.subTest(worker_kind=worker_kind), patch.dict(
                     os.environ, {'XSBOT_AWS_WORKER_KIND': worker_kind}):
                 importlib.reload(app_aws_worker)
@@ -159,6 +160,19 @@ class AwsWorkerAppTest(unittest.TestCase):
                 'POST', '/events', b'{"version": 1}', 'application/json')
 
         self.assertEqual(response.status_int, 500)
+
+    def test_buildも期限headerを要求せず共通handlerへ渡す(self):
+        try:
+            with patch.dict(os.environ, {'XSBOT_AWS_WORKER_KIND': 'build'}):
+                importlib.reload(app_aws_worker)
+                event = {'version': 1, 'kind': 'build'}
+                with patch.object(app_aws_worker, 'lambda_handler', return_value={'status': 'ok'}) as handler:
+                    response = request_app('POST', '/events', json.dumps(event).encode(), 'application/json')
+                    self.assertEqual(response.status_int, 200)
+                    handler.assert_called_once_with(event, None)
+        finally:
+            with patch.dict(os.environ, {'XSBOT_AWS_WORKER_KIND': 'action'}):
+                importlib.reload(app_aws_worker)
 
 
 if __name__ == '__main__':

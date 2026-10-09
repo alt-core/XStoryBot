@@ -1,7 +1,8 @@
-"""単発コンテナからシナリオビルドを実行するCLI。"""
+"""設定された保存先へシナリオをビルドするCLI。"""
 
 import argparse
 import logging
+import uuid
 
 import build_service
 
@@ -10,7 +11,7 @@ def create_parser():
     parser = argparse.ArgumentParser(
         description='指定したBotのシナリオをビルドします。')
     parser.add_argument('--bot-name', required=True)
-    parser.add_argument('--task-id', required=True)
+    parser.add_argument('--task-id')
     parser.add_argument('--skip-image', action='store_true')
     parser.add_argument('--force', action='store_true')
     return parser
@@ -21,7 +22,7 @@ def main(argv=None):
     try:
         ok, _ = build_service.build_bot(
             bot_name=args.bot_name,
-            task_id=args.task_id,
+            task_id=args.task_id or str(uuid.uuid4()),
             skip_image=args.skip_image,
             force=args.force,
         )

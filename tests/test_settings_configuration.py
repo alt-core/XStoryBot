@@ -39,13 +39,7 @@ class SettingsTemplateTest(unittest.TestCase):
             'XSBOT_AWS_CACHE_TABLE': 'test-cache-table',
             'XSBOT_AWS_ACTION_WORKER_FUNCTION': 'test-action-worker',
             'XSBOT_AWS_GROUP_WORKER_FUNCTION': 'test-group-worker',
-            'XSBOT_AWS_BUILD_CLUSTER': 'test-cluster',
-            'XSBOT_AWS_BUILD_TASK_DEFINITION': 'test-builder:1',
-            'XSBOT_AWS_BUILD_CONTAINER_NAME': 'xstorybot',
-            'XSBOT_AWS_BUILD_SUBNET_ID_1': 'subnet-0123456789abcdef0',
-            'XSBOT_AWS_BUILD_SUBNET_ID_2': 'subnet-0123456789abcdef1',
-            'XSBOT_AWS_BUILD_SECURITY_GROUP_ID': (
-                'sg-0123456789abcdef0'),
+            'XSBOT_AWS_BUILD_WORKER_FUNCTION': 'test-build-worker',
             'XSBOT_AWS_SHEETS_CREDENTIAL_PARAMETER': (
                 '/xstorybot/test/google-sheets-service-account'),
             'XSBOT_AWS_ADMIN_AUTH_PARAMETER': (
@@ -145,23 +139,11 @@ class SettingsTemplateTest(unittest.TestCase):
             {
                 'action-queue': 'test-action-worker',
                 'group-message-queue': 'test-group-worker',
+                'build-queue': 'test-build-worker',
             },
             default['aws']['task_queue']['functions'],
         )
-        self.assertEqual({'functions', 'build'}, set(default['aws']['task_queue']))
-        self.assertEqual(
-            {
-                'cluster': 'test-cluster',
-                'task_definition': 'test-builder:1',
-                'container_name': 'xstorybot',
-                'subnet_ids': [
-                    'subnet-0123456789abcdef0',
-                    'subnet-0123456789abcdef1',
-                ],
-                'security_group_ids': ['sg-0123456789abcdef0'],
-            },
-            default['aws']['task_queue']['build'],
-        )
+        self.assertEqual({'functions'}, set(default['aws']['task_queue']))
         self.assertEqual(
             '/xstorybot/test/google-sheets-service-account',
             default['aws']['credential_source'][

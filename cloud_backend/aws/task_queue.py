@@ -12,7 +12,7 @@ from cloud_backend.contracts import TaskQueue, TaskQueueError
 
 
 class AwsTaskQueue(TaskQueue):
-    """actionとグループ配信を専用のLambda workerへ即時登録する。"""
+    """action・グループ配信・ビルドを専用のLambda workerへ即時登録する。"""
 
     allows_delayed_scenarios = False
     defer_until_response = True
@@ -42,12 +42,12 @@ class AwsTaskQueue(TaskQueue):
             self._raise_queue_error(error)
 
     def initialize(self, aws_settings):
-        """両workerの設定を検査し、SDK clientは初回登録まで生成しない。"""
+        """全workerの設定を検査し、SDK clientは初回登録まで生成しない。"""
         task_queue_settings = aws_settings.get('task_queue', {})
         functions = task_queue_settings.get('functions')
         if not isinstance(functions, dict):
             raise ValueError('AWS TaskQueueのfunctionsが設定されていません')
-        for queue_name in ('action-queue', 'group-message-queue'):
+        for queue_name in ('action-queue', 'group-message-queue', 'build-queue'):
             function_name = functions.get(queue_name)
             if not isinstance(function_name, str) or not function_name.strip():
                 raise ValueError(
@@ -76,25 +76,22 @@ class AwsTaskQueue(TaskQueue):
     @staticmethod
     def _parse_destination(queue_name, url):
         routes = {
-            'action-queue': ('action', 'action'),
-            'group-message-queue': ('process_group_batch', 'group_batch'),
+            'action-queue': ('/api/v1/bots/', '/action', 'action'),
+            'group-message-queue': ('/api/v1/bots/', '/process_group_batch', 'group_batch'),
+            'build-queue': ('/api/build/', '', 'build'),
         }
-        if queue_name == 'build-queue':
-            raise TaskQueueError('AWS build-queueはTaskQueueでは扱いません')
         try:
-            route_name, kind = routes[queue_name]
+            prefix, suffix, kind = routes[queue_name]
         except KeyError as error:
             raise TaskQueueError(
                 f'AWS TaskQueueでは扱えない論理キューです: {queue_name}') from error
 
-        prefix = '/api/v1/bots/'
-        suffix = f'/{route_name}'
         if (
                 not isinstance(url, str)
                 or not url.startswith(prefix)
                 or not url.endswith(suffix)):
             raise TaskQueueError('AWS TaskQueueへ渡されたURLが不正です')
-        bot_name = url[len(prefix):-len(suffix)]
+        bot_name = url[len(prefix):-len(suffix) if suffix else None]
         if not AwsTaskQueue._BOT_NAME_PATTERN.fullmatch(bot_name):
             # percent decodeの解釈差や別pathへのdispatchを避ける。
             raise TaskQueueError('AWS TaskQueueへ渡されたBot名が不正です')

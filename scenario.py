@@ -242,30 +242,11 @@ class SyntaxTree:
 
 
 class Command:
-    base_name = None
-    counter = {}
-
-    @classmethod
-    def generate_command_id(cls):
-        # シナリオが変更されてもできるだけIDを維持できるように
-        # ベースネームからの差分で管理している
-        ret = f'{cls.base_name}__{cls.counter[cls.base_name]}'
-        cls.counter[cls.base_name] += 1
-        return ret
-
-    @classmethod
-    def set_base_name(cls, base_name):
-        cls.base_name = base_name
-        if base_name not in cls.counter:
-            cls.counter[base_name] = 0
-
-    def __init__(self, sender, msg, options, children, command_id = None):
+    def __init__(self, sender, msg, options, children, command_id):
         self.sender = sender
         self.msg = msg
         self.options = options
         self.children = children
-        if command_id is None:
-            command_id = Command.generate_command_id()
         self.command_id = command_id
 
     def is_normal_message(self):
@@ -312,6 +293,7 @@ class ScenarioBuilder:
         self.first_top_scene = None
         self.image_file_read_cache = {}
         self.image_file_write_cache = {}
+        self.command_counters = {}
         self.version = version
         expression.set_version(self.version)
 
@@ -525,7 +507,6 @@ class ScenarioBuilder:
             else:
                 self.scene._default_fallback_scene_name = self.top_scene.get_fullpath()
 
-        Command.set_base_name(self.scene.get_fullpath())
         return Condition(CONDITION_KIND_STRING, self.scene.get_entrypoint_label())
 
     def _leave_region(self):
@@ -844,7 +825,12 @@ class ScenarioBuilder:
             for row in children:
                 for value in row:
                     self._check_format_string(value)
-        self.lines.append(Command(sender, msg, options, children))
+        # ビルド単位に採番し、同じsceneの命令IDを再ビルドでも維持する。
+        scene_name = self.scene.get_fullpath()
+        index = self.command_counters.get(scene_name, 0)
+        command_id = f'{scene_name}__{index}'
+        self.command_counters[scene_name] = index + 1
+        self.lines.append(Command(sender, msg, options, children, command_id))
 
     def add_new_string_block(self, label):
         # ユニークなラベルを作る際に使用されるものなので、self.filters はガードに指定しない

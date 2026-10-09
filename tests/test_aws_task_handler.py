@@ -415,3 +415,67 @@ class AwsTaskHandlerTest(unittest.TestCase):
         error_log.assert_called_once_with(
             'AWS task failed: owner=%s, error_type=%s, error=%s',
             str(OWNER_UUID), 'RuntimeError', failure)
+
+    def test_buildは共通ビルド処理へ渡しleaseを使わずScenarioを解放する(self):
+        event = make_envelope(kind='build', queue_name='build-queue', force='true')
+        self.dependencies['options'] = {'scenario_version': 3}
+        self.bot.build_scenario = Mock(return_value=(True, None))
+        self.bot.scenario, self.bot.scenario_uri = object(), 'previous'
+        self.assertEqual(self.invoke(event, 'build'), {'status': 'ok'})
+        self.bot.build_scenario.assert_called_once_with(
+            task_id=event['task_id'], options={'skip_image': False, 'force': True}, version=3)
+        self.assertIsNone(self.bot.scenario)
+        self.assertIsNone(self.bot.scenario_uri)
+        self.assertEqual(self.execution_store.mock_calls, [])
+
+    def test_build封筒の不備や送信封筒の取り違えはビルドしない(self):
+        invalid = make_envelope(kind='build', queue_name='build-queue')
+        invalid['params']['task_id'] = 'different-task'
+        self.bot.build_scenario = Mock()
+        for event in (make_envelope(), make_group_envelope(), invalid, None):
+            with self.subTest(event=event), self.assertRaises(ValueError):
+                self.invoke(event, 'build')
+        self.bot.build_scenario.assert_not_called()
+        self.assertEqual(self.execution_store.mock_calls, [])
+
+    def test_buildの通常失敗は既存の結果保存に任せ通常終了する(self):
+        event = make_envelope(kind='build', queue_name='build-queue')
+        self.bot.build_scenario = Mock(return_value=(False, '台本の書式エラー'))
+        self.assertEqual(self.invoke(event, 'build'), {'status': 'ok'})
+        self.assertIsNone(self.bot.scenario)
+        self.assertIsNone(self.bot.scenario_uri)
+        self.assertEqual(self.execution_store.mock_calls, [])
+
+    def test_build例外はScenarioを解放してLambdaへ伝播する(self):
+        event = make_envelope(kind='build', queue_name='build-queue')
+        failure = StateStoreError('結果の保存失敗')
+        self.bot.build_scenario = Mock(side_effect=failure)
+        self.bot.scenario, self.bot.scenario_uri = object(), 'previous'
+        with self.assertRaises(StateStoreError) as raised:
+            self.invoke(event, 'build')
+        self.assertIs(raised.exception, failure)
+        self.assertIsNone(self.bot.scenario)
+        self.assertIsNone(self.bot.scenario_uri)
+        self.assertEqual(self.execution_store.mock_calls, [])
+
+    def test_buildは文字列trueだけを有効にしoptionの型不備を拒否する(self):
+        self.bot.build_scenario = Mock(return_value=(True, None))
+        for value, enabled in (('true', True), ('false', False), ('True', False), ('', False)):
+            with self.subTest(value=value):
+                event = make_envelope(kind='build', queue_name='build-queue', skip_image=value, force=value)
+                self.invoke(event, 'build')
+                self.assertEqual(self.bot.build_scenario.call_args.kwargs['options'],
+                                 {'skip_image': enabled, 'force': enabled})
+        self.bot.build_scenario.reset_mock()
+        for name in ('skip_image', 'force'):
+            for value in (True, 0, None, {}):
+                with self.subTest(name=name, value=value), self.assertRaises(ValueError):
+                    self.invoke(make_envelope(kind='build', queue_name='build-queue', **{name: value}), 'build')
+        self.bot.build_scenario.assert_not_called()
+        self.assertEqual(self.execution_store.mock_calls, [])
+
+    def test_buildはBot不存在でもleaseを使わず失敗を伝える(self):
+        self.dependencies['get_bot'].return_value = None
+        with self.assertRaisesRegex(ValueError, 'Botが見つかりません'):
+            self.invoke(make_envelope(kind='build', queue_name='build-queue'), 'build')
+        self.assertEqual(self.execution_store.mock_calls, [])

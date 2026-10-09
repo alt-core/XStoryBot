@@ -428,6 +428,7 @@ class DashboardTest(unittest.TestCase):
             self.assertEqual(payload['message'], 'Queued')
             self.assertEqual(payload['task_id'], 'task-123')
             self.assertNotIn('data', payload)
+            self.assertNotIn('max_wait_seconds', payload)
         self.assertEqual(
             self.dependencies.task_client.create_task.call_args_list[0].kwargs,
             {
@@ -470,25 +471,29 @@ class DashboardTest(unittest.TestCase):
             headers={'X-API-Token': 'shared-api-token'},
         )
 
-    def test_AWSではFargateタスクを開始し既存のQueued応答を返す(self):
-        self.dependencies.settings.CLOUD_SETTINGS = {'provider': 'aws'}
-        task_id = '12345678-1234-4abc-8def-1234567890ab'
-        launcher = Mock()
-        launcher.launch.return_value = task_id
+    def test_AWSでは共通queueからLambdaへ登録し既存のQueued応答を返す(self):
+        from botocore.stub import Stubber
+        from cloud_backend.aws.task_queue import AwsTaskQueue
+        from tests.test_aws_task_queue import AWS_SETTINGS, TASK_UUID, expected_body, make_client
 
-        with (
-            patch.object(self.module.uuid, 'uuid4', return_value=task_id),
-            patch.object(
-                self.module,
-                '_create_aws_build_task_launcher',
-                return_value=launcher,
-            ),
-        ):
+        self.dependencies.settings.CLOUD_SETTINGS = {'provider': 'aws'}
+        params = {'skip_image': 'true', 'force': 'false'}
+        client = make_client()
+        queue = AwsTaskQueue(client_factory=lambda service_name, **options: client,
+                             uuid_factory=lambda: TASK_UUID)
+        queue.initialize(AWS_SETTINGS)
+        self.dependencies.task_client.create_task.side_effect = queue.create_task
+        stubber = Stubber(client)
+        stubber.add_response('invoke', {'StatusCode': 202}, {
+            'FunctionName': 'test-build-worker', 'InvocationType': 'Event',
+            'Payload': expected_body(params, 'build-queue', 'zeta'),
+        })
+        with stubber:
             status, _, body = call_wsgi(
                 self.module.app,
                 'POST',
                 '/dashboard/build_async/zeta',
-                params={'skip_image': 'true', 'force': 'false'},
+                params=params,
             )
 
         self.assertEqual(200, status)
@@ -496,15 +501,10 @@ class DashboardTest(unittest.TestCase):
             'code': 200,
             'result': 'Success',
             'message': 'Queued',
-            'task_id': task_id,
+            'task_id': str(TASK_UUID),
         }, json.loads(body))
-        launcher.launch.assert_called_once_with(
-            task_id=task_id,
-            bot_name='zeta',
-            skip_image=True,
-            force=False,
-        )
-        self.dependencies.task_client.create_task.assert_not_called()
+        self.dependencies.task_client.create_task.assert_called_once_with(
+            queue_name='build-queue', url='/api/build/zeta', params=params)
         self.dependencies.requests.post.assert_not_called()
 
     def test_missing_last_build_result_is_200_failure_sentinel(self):
@@ -1009,6 +1009,62 @@ const fetch = async (url, options) => {
             '}).done(function(result)', polling_start)
         self.assertNotIn('X-CSRF-Token',
                          self.template[polling_start:polling_end])
+
+    @unittest.skipUnless(shutil.which('node'), 'Node.jsが利用できないため省略')
+    def test_ビルド結果は全providerで有限待機し通常の成功失敗を表示する(self):
+        module, dependencies = load_dashboard()
+        queued = {}
+        for provider in ('aws', 'gcp'):
+            dependencies.settings.CLOUD_SETTINGS = {'provider': provider}
+            status, _, body = call_wsgi(module.app, 'POST', '/dashboard/build_async/zeta')
+            self.assertEqual(200, status)
+            queued[provider] = json.loads(body)
+        constant = next(line.strip() for line in self.template.splitlines()
+                        if line.strip().startswith('const BUILD_WAIT_TIMEOUT_MS ='))
+        start = self.template.index('    function request_build(endpoint, options) {')
+        end = self.template.index('    function formatDateTime(timestamp) {', start)
+        script = r"""
+const assert = require('node:assert/strict'), queued = JSON.parse(process.argv[1]);
+let csrfToken = 'csrf', botName = 'zeta', pollingInterval, lastBuildTaskId, now, text, requests, poll, stopped, received;
+const Date = {now: () => now}, console = {log() {}}, alert = () => {};
+const $ = () => ({val(value) { if (value === undefined) return text; text = value; }});
+$.ajax = (options) => {
+    requests.push(options);
+    return {done(callback) {
+        callback(options.type === 'POST' ? received : {task_id: 'older', status: 'Success'});
+        return {fail() {}};
+    }};
+};
+const setInterval = (callback, delay) => { assert.equal(delay, 5000); poll = callback; return 1; };
+const clearInterval = () => { stopped = true; };
+""" + constant + "\n" + self.template[start:end] + r"""
+for (const provider of ['aws', 'gcp']) {
+    now = 0; text = ''; requests = []; stopped = false; pollingInterval = null; received = queued[provider];
+    request_build('/dashboard/build_async/zeta', {});
+    poll();
+    assert.equal(requests.at(-1).url, '/dashboard/last_build_result/zeta');
+    assert.equal(requests.at(-1).headers, undefined);
+    assert.equal(stopped, false);
+    now = 31 * 60 * 1000; const count = requests.length; poll();
+    assert.equal(stopped, true);
+    assert.equal(requests.length, count);
+    assert.match(text, /時間内に結果を確認できませんでした/);
+    assert.match(text, /反映済みの可能性/);
+}
+for (const status of ['Success', 'Failure']) {
+    now = 0; text = ''; requests = []; stopped = false; pollingInterval = null; received = queued.aws;
+    $.ajax = (options) => ({done(callback) {
+        callback(options.type === 'POST' ? received : {task_id: received.task_id, status, error: '構文エラー'});
+        return {fail() {}};
+    }});
+    request_build('/dashboard/build_async/zeta', {}); poll();
+    assert.equal(stopped, true);
+    assert.match(text, status === 'Success' ? /完了しました/ : /失敗しました.*\n構文エラー/);
+}
+"""
+        result = subprocess.run(['node', '-e', script, json.dumps(queued)],
+                                capture_output=True, text=True, timeout=10)
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
 
     def test_template_uses_cookie_auth_and_csrf_for_mutations(self):
         self.assertNotIn('firebase', self.template.lower())

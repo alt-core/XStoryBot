@@ -115,6 +115,29 @@ class ScenarioProgressionTest(unittest.TestCase):
             replies = [self._turn('抽選') for _ in range(3)]
         self.assertEqual(replies, [['B'], ['C'], ['A']])
 
+    def test_同じ台本を再ビルドしてもseqとloopとrandomの進行を引き継ぐ(self):
+        rows = [
+            ['順番', '/seq'], ['', '一番'], ['', '/else'], ['', '二番'], ['', '/end'],
+            ['循環', '/loop'], ['', '朝'], ['', '/else'], ['', '夜'], ['', '/end'],
+            ['抽選', '/random'], ['', 'A'], ['', '/else'], ['', 'B'],
+            ['', '/else'], ['', 'C'], ['', '/end'],
+        ]
+        self._build(rows)
+        self.assertEqual(self._turn('順番'), ['一番'])
+        self.assertEqual(self._turn('循環'), ['朝'])
+        with patch.object(self.scenario.random, 'randint', return_value=0):
+            self.assertEqual(self._turn('抽選'), ['A'])
+        saved_ids = set(self.player['flags']['$$node.seq.default'])
+        self.assertEqual(3, len(saved_ids))
+
+        self.bot.scenario = self.scenario.ScenarioBuilder.build_from_table(rows, version=3)
+        self.assertEqual(self._turn('順番'), ['二番'])
+        self.assertEqual(self._turn('循環'), ['夜'])
+        with patch.object(self.scenario.random, 'randint', return_value=0) as choose:
+            self.assertEqual(self._turn('抽選'), ['B'])
+        choose.assert_called_once_with(0, 1)
+        self.assertEqual(saved_ids, set(self.player['flags']['$$node.seq.default']))
+
     def test_callは引数を渡して元のsceneへreturnし結果を次の入力でも読める(self):
         self._build([
             ['呼ぶ', '@call', '*sub', '旅人'],

@@ -22,7 +22,7 @@
 
 ![システム構成図](./docs/system_diagram.png)
 
-この構成図は旧GAE版を基にした概念図です。現行版のGCP構成ではCloud Run、AWS構成ではAPI Gateway、Lambda、Fargateなどが、図中のGoogle App Engineに相当する役割を担います。Webchatだけは署名付き状態をbrowserへ保存し、図中のユーザ状態DBを利用しません。
+この構成図は旧GAE版を基にした概念図です。現行版のGCP構成ではCloud Run、AWS構成ではAPI Gateway、Lambdaなどが、図中のGoogle App Engineに相当する役割を担います。Webchatだけは署名付き状態をbrowserへ保存し、図中のユーザ状態DBを利用しません。
 
 ## できること
 
@@ -166,9 +166,11 @@ GCP・AWSの非同期`@forward`と`@delay`は、親actionの状態保存と応�
 
 ### AWSへデプロイする場合
 
-AWSではAPI GatewayとLambdaでHTTP APIを受け、`@delay 0`、非同期`@forward`、即時のグループ配信をLambdaの非同期呼出しで実行します。バッチ専用の`POST /api/v1/bots/<bot_name>/process_group_batch`はCloud Tasks向けの入口で、AWSでは実行できません。AWSのグループ配信は管理画面からworkerへ登録します。シナリオのbuildはFargateで行います。タスク待機の空ポーリングはなく、未使用時にその要求課金は発生しません。失敗記録を保管するSQSのDLQには常時受信するworkerを置きません。
+AWSではAPI GatewayとLambdaでHTTP APIを受け、`@delay 0`、非同期`@forward`、即時のグループ配信をLambdaの非同期呼出しで実行します。バッチ専用の`POST /api/v1/bots/<bot_name>/process_group_batch`はCloud Tasks向けの入口で、AWSでは実行できません。AWSのグループ配信は管理画面からworkerへ登録します。シナリオのbuildも専用Lambdaへ非同期登録します。タスク待機の空ポーリングはなく、未使用時にその要求課金は発生しません。失敗記録を保管するSQSのDLQには常時受信するworkerを置きません。
 
-AWSの`@delay`は数値の0だけを受け付け、正数・負数はbuildエラーになります。予約配信は提供しません。GCPではCloud Tasksによる遅延・予約配信を利用できます。AWS workerの同時実行上限はaction 10・group 2です。無料のReserved Concurrencyを使い、Provisioned Concurrencyは設定しません。デプロイ前にアカウントの未予約枠を100残せるquotaを確認してください。グループ配信の台本からもactionを登録できるため、大きな配信の同時開始時はLINEのrate上限に注意してください。
+AWSの`@delay`は数値の0だけを受け付け、正数・負数はbuildエラーになります。予約配信は提供しません。GCPではCloud Tasksによる遅延・予約配信を利用できます。AWS workerの同時実行上限はaction 10・group 2・build 2（全Bot合計）です。無料のReserved Concurrencyを使い、Provisioned Concurrencyは設定しません。予約枠は合計14で、デプロイ前にアカウントの未予約枠を100残せるquotaを確認してください。グループ配信の台本からもactionを登録できるため、大きな配信の同時開始時はLINEのrate上限に注意してください。
+
+ビルドLambdaは900秒を上限とし、時間切れの結果はDLQへ残します。再実行は先頭から行い、完了した画像変換のcacheを再利用しますが、forceや全体処理が時間内に収まる保証はありません。管理画面は全providerで約31分まで結果を確認し、結果が分からない場合は、反映済みの可能性もあるためログ・DLQ・動作を確認してください。
 
 AWS CLI、AWS SAM CLI、DockerとAWS認証情報、既存のECR repositoryを準備してください。Google Sheets資格情報、管理者認証JSON、runtime秘密値JSONは、AWS管理KMSキーを使うParameter Storeの`SecureString`へ事前に登録します。
 
@@ -206,21 +208,21 @@ export XSBOT_AWS_ALARMS_ENABLED=false
 ./deploy_aws.sh
 ```
 
-アラームは`AlarmsEnabled=true`のときに3つ、Webchatも有効なら4つ作ります。workerのDLQ配送失敗は、両workerの`DestinationDeliveryFailures`を合算する1つのアラームで監視します。メール通知には別途`XSBOT_AWS_ALARM_EMAIL`を設定し、初回のSNS購読確認メールを承認します。メールなしでも、`AlarmsEnabled=true`にして`AlarmTopicArn`のSNS topicへSlack等を接続できます。メール設定だけではアラームを作りません。アラームをOFFにしてもtopicと購読設定は維持し、メールアドレスに空文字を明示するとメール購読だけを削除します。
+アラームは`AlarmsEnabled=true`のときに3つ、Webchatも有効なら4つ作ります。workerのDLQ配送失敗は、action・group・buildの3workerの`DestinationDeliveryFailures`を合算する1つのアラームで監視します。メール通知には別途`XSBOT_AWS_ALARM_EMAIL`を設定し、初回のSNS購読確認メールを承認します。メールなしでも、`AlarmsEnabled=true`にして`AlarmTopicArn`のSNS topicへSlack等を接続できます。メール設定だけではアラームを作りません。アラームをOFFにしてもtopicと購読設定は維持し、メールアドレスに空文字を明示するとメール購読だけを削除します。
 
-**監視を有効にしている間は、アクセスがなくても継続費用の対象です。** CloudWatch alarmは通知の発生・購読先の有無にかかわらず監視指標数で課金され、workerの配送失敗監視には2指標分が加わります。この構成は合計4指標、Webchatも有効なら5指標です。無料枠は環境ごとに独立して付くものではありません。[CloudWatchの料金](https://aws.amazon.com/cloudwatch/pricing/)も確認してください。
+**監視を有効にしている間は、アクセスがなくても継続費用の対象です。** CloudWatch alarmは通知の発生・購読先の有無にかかわらず監視指標数で課金され、workerの配送失敗監視には3指標分が加わります。この構成は合計5指標、Webchatも有効なら6指標です。無料枠は環境ごとに独立して付くものではありません。[CloudWatchの料金](https://aws.amazon.com/cloudwatch/pricing/)も確認してください。
 
 更新時に未設定のWebchat設定・通知先は、前回値を維持します。既にWebchatが有効なstackを通常更新する場合は、`XSBOT_WEBCHAT_ENABLED`を未設定にします。明示した`false`は無効化、明示したepochは互換性の変更です。許可origin・通知先は空文字を明示すると消去できます。既存の`.env`に設定が残っている場合も明示値として扱うため、維持したい項目はexportしないでください。Webchatのimageは、有効状態の指定を省略しても更新されます。
 
-`.env.template`のAWSデプロイ入力を設定すれば、table、worker関数名、subnetなどのruntime値はSAMが各実行環境へ供給します。これらを手入力するのはローカルからAWS backendを直接使う場合です。`.env`ファイルは自動では読み込まれないため、必要な値を環境変数としてexportしてから実行してください。
+`.env.template`のAWSデプロイ入力を設定すれば、table、worker関数名などのruntime値はSAMが各実行環境へ供給します。これらを手入力するのはローカルからAWS backendを直接使う場合です。`.env`ファイルは自動では読み込まれないため、必要な値を環境変数としてexportしてから実行してください。
 
-API、2つのworker、Fargateで同じECR imageを共用するため、スクリプトはDockerで一度だけ`linux/amd64` imageをbuild/pushし、`ImageUri`をSAMへ渡します。同一imageの再buildを避けるため`sam build`は実行しません。imageにはAWS向けの依存だけが入り、Twilio／Pusher pluginを使う場合は`XSBOT_EXTRA_REQUIREMENTS=requirements-optional.txt`を設定してから実行します。
+API、action・group・buildのworkerで同じECR imageを共用するため、スクリプトはDockerで一度だけ`linux/amd64` imageをbuild/pushし、`ImageUri`をSAMへ渡します。同一imageの再buildを避けるため`sam build`は実行しません。imageにはAWS向けの依存だけが入り、Twilio／Pusher pluginを使う場合は`XSBOT_EXTRA_REQUIREMENTS=requirements-optional.txt`を設定してから実行します。
 
 #### 非同期処理の運用
 
-非同期呼出しの202応答は登録受付であり、実行・送信の成功ではありません。関数エラーは2回再試行し、失敗を既存DLQへ送ります。各eventの保持期限は1時間で、一連の物語やグループ配信全体の完了期限ではありません。throttleやLambda側のsystem errorは別のbackoffで再試行します。workerの同時実行上限を0にするとeventはDLQへ送られるため、処理待ちの保管を目的とした一時停止には使えません。
+非同期呼出しの202応答は登録受付であり、実行・送信の成功ではありません。action・groupの関数エラーは2回再試行し、失敗を既存DLQへ送ります。そのeventの保持期限は1時間で、一連の物語やグループ配信全体の完了期限ではありません。throttleやLambda側のsystem errorは別のbackoffで再試行します。buildは関数エラーを自動再試行せず、保持期限を900秒とし、関数エラー・期限切れを同じDLQへ送ります。台本の文法エラー等は通常の失敗結果として管理画面へ返し、DLQには入りません。関数エラーの再試行0でも、同じeventの重複配送がない保証ではありません。workerの同時実行上限を0にするとeventはDLQへ送られるため、処理待ちの保管を目的とした一時停止には使えません。
 
-通常の例外ではleaseを解放して再試行します。claim直後のcrashでleaseを解放できなかった場合、再試行がleaseに阻まれることがあります。actionは360秒、groupは960秒のlease期限後にDLQから手動復旧してください。DLQの記録は14日保管し、`requestPayload`（タスクの封筒）、`responsePayload`、`requestContext.condition`を含みます。対応するworkerへ`requestPayload`だけを再投入し、受理を確認してからDLQのメッセージを削除します。例えば、actionの封筒を`request-payload.json`へ保存した場合は次のように実行します。
+action・groupでは、通常の例外でleaseを解放して再試行します。claim直後のcrashでleaseを解放できなかった場合、再試行がleaseに阻まれることがあります。actionは360秒、groupは960秒のlease期限後にDLQから手動復旧してください。DLQの記録は14日保管し、`requestPayload`（タスクの封筒）、`responsePayload`、`requestContext.condition`を含みます。action・groupは対応するworkerへ`requestPayload`だけを再投入し、受理を確認してからDLQのメッセージを削除します。buildのやり直しは、原因を修正してから管理画面で新しいビルドを登録してください。例えば、actionの封筒を`request-payload.json`へ保存した場合は次のように実行します。
 
 ```sh
 aws lambda invoke --invocation-type Event \
@@ -228,7 +230,7 @@ aws lambda invoke --invocation-type Event \
     --payload fileb://request-payload.json invoke-response.json
 ```
 
-完了記録が残っている同じtask_idはskipします。ただし外部送信と完了記録の保存は原子的ではないため、送信後・保存前の失敗では再送が起こり得ます。登録応答の喪失後に別task_idで登録し直した場合も重複し得ます。失敗記録には元の入力に応答とmetadataが加わり、DLQの容量上限等で配送に失敗する可能性があります。DLQ件数に加えて、`DestinationDeliveryFailures`、`AsyncEventsDropped`、`AsyncEventAge`を確認してください。
+action・groupは、完了記録が残っている同じtask_idをskipします。ただし外部送信と完了記録の保存は原子的ではないため、送信後・保存前の失敗では再送が起こり得ます。登録応答の喪失後に別task_idで登録し直した場合も重複し得ます。失敗記録には元の入力に応答とmetadataが加わり、DLQの容量上限等で配送に失敗する可能性があります。DLQ件数に加えて、`DestinationDeliveryFailures`、`AsyncEventsDropped`、`AsyncEventAge`を確認してください。
 
 ## シナリオの作成
 
@@ -244,6 +246,18 @@ Google Sheets 上でシナリオを作成します。
 ダッシュボードにある「シナリオ修正の反映」のボタンを押すことで、Google Sheets からシナリオを読み込み、選択したクラウドプロバイダーのオブジェクトストレージ上に中間ファイルを生成します。
 
 この時、build処理の対象となる画像等のリソースファイルも同じオブジェクトストレージ上にコピーされますので、安定したサービス提供が可能です。
+
+## コマンドラインからシナリオをビルドする
+
+通常の`settings.yaml`と環境変数・資格情報を使い、リポジトリのrootで指定したBotをビルドできます。設定ファイルは`XSBOT_SETTINGS_FILE`でも指定できます。
+
+```sh
+python3 -m build_job --bot-name bot
+```
+
+`--task-id`は省略するとUUIDを生成します。`--force`で再生成、`--skip-image`で画像の更新確認を省略できます。
+
+成果物を設定済みの保存先へ書き、成功時に`GlobalBotVariables`の最新Scenario URIを更新します。Webchatの固定Scenario URIやLambda versionは自動で切り替わらないため、[Webchatの更新手順](./docs/webchat.md)を別途行います。ローカルでの制作・検証には[ローカル開発CLI](./docs/local-development.md)を使えます。
 
 ## ログ
 
@@ -264,7 +278,7 @@ Cloud LoggingからBigQueryへエクスポートされるテーブル名とス�
 
 ## 注意事項
 
-Cloud Run、Firestore、Cloud Storage、Cloud Tasks、Cloud Logging、BigQueryに加え、AWSのLambda、API Gateway、DynamoDB、S3、CloudFront、Fargate、CloudWatchとDLQへの配送・手動受信などの[SQS要求](https://aws.amazon.com/sqs/pricing/)は従量課金の対象です。
+Cloud Run、Firestore、Cloud Storage、Cloud Tasks、Cloud Logging、BigQueryに加え、AWSのLambda、API Gateway、DynamoDB、S3、CloudFront、CloudWatchとDLQへの配送・手動受信などの[SQS要求](https://aws.amazon.com/sqs/pricing/)は従量課金の対象です。
 
 不具合により、意図しない課金が発生したとしても、補償いたしかねますので、[アラート](https://cloud.google.com/billing/docs/how-to/budgets?hl=ja&ref_topic=6288636&visit_id=1-636539550464473783-319035179&rd=1)などをご活用ください。
 

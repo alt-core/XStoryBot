@@ -66,7 +66,6 @@ python3 -m unittest \
     tests.test_task_queue_contract \
     tests.test_aws_task_queue \
     tests.test_aws_task_execution_store \
-    tests.test_aws_build_task_launcher \
     tests.test_aws_template \
     tests.test_aws_deploy_script \
     tests.test_webchat_scenario_update \

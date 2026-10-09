@@ -68,13 +68,12 @@ class AwsTemplateTest(unittest.TestCase):
             'AWS::CloudFront::Distribution',
             'AWS::CloudFront::OriginAccessControl',
             'AWS::SQS::Queue',
-            'AWS::ECS::Cluster',
-            'AWS::ECS::TaskDefinition',
             'AWS::CloudWatch::Alarm',
             'AWS::SNS::Topic',
         }
         self.assertTrue(required.issubset(resource_types))
-        self.assertNotIn('AWS::EC2::NatGateway', resource_types)
+        self.assertFalse(any(kind.startswith(('AWS::EC2::', 'AWS::ECS::'))
+                             for kind in resource_types))
         self.assertNotIn('AWS::WAFv2::WebACL', resource_types)
         self.assertNotIn('AWS::ECR::Repository', resource_types)
         self.assertNotIn('AWS::SSM::Parameter', resource_types)
@@ -154,10 +153,11 @@ class AwsTemplateTest(unittest.TestCase):
 
     def test_非同期workerの再試行と上限と実行入口を固定する(self):
         expected = {
-            'ActionWorkerFunction': (300, 1024, 10, 'Terminate', 'action'),
-            'GroupWorkerFunction': (900, 2048, 2, 'Allow', 'group_batch'),
+            'ActionWorkerFunction': (300, 1024, 10, 'Terminate', 'action', 2, 3600),
+            'GroupWorkerFunction': (900, 2048, 2, 'Allow', 'group_batch', 2, 3600),
+            'BuildFunction': (900, 2048, 2, 'Terminate', 'build', 0, 900),
         }
-        for name, (timeout, memory, concurrency, recursion, kind) in expected.items():
+        for name, (timeout, memory, concurrency, recursion, kind, retry, age) in expected.items():
             properties = self.resources[name]['Properties']
             self.assertEqual('Image', properties['PackageType'])
             self.assertEqual(timeout, properties['Timeout'])
@@ -167,8 +167,8 @@ class AwsTemplateTest(unittest.TestCase):
                 concurrency, properties['ReservedConcurrentExecutions'])
             self.assertEqual(recursion, properties['RecursiveLoop'])
             self.assertEqual({
-                'MaximumRetryAttempts': 2,
-                'MaximumEventAgeInSeconds': 3600,
+                'MaximumRetryAttempts': retry,
+                'MaximumEventAgeInSeconds': age,
                 'DestinationConfig': {
                     'OnFailure': {
                         'Type': 'SQS',
@@ -210,7 +210,7 @@ class AwsTemplateTest(unittest.TestCase):
             self.assertNotIn(name, self.template['Outputs'])
 
     def test_PrivateBucketの不存在を404として判定できる権限を持つ(self):
-        for role_name in ('ApiRole', 'WorkerRole', 'BuildTaskRole'):
+        for role_name in ('ApiRole', 'WorkerRole', 'BuildRole'):
             statements = self.resources[role_name]['Properties'][
                 'Policies'][0]['PolicyDocument']['Statement']
             statement = next(
@@ -220,38 +220,31 @@ class AwsTemplateTest(unittest.TestCase):
                 {'GetAtt': 'PrivateBucket.Arn'}, statement['Resource'])
             self.assertNotIn('Condition', statement)
 
-    def test_Fargateはpublic_subnet二つで秘密値名だけを受け取る(self):
-        subnet_count = sum(
-            resource['Type'] == 'AWS::EC2::Subnet'
-            for resource in self.resources.values())
-        self.assertEqual(2, subnet_count)
-        resource_types = {
-            resource['Type'] for resource in self.resources.values()
-        }
-        self.assertNotIn('AWS::EC2::NatGateway', resource_types)
-
-        task = self.resources['BuildTaskDefinition']['Properties']
-        self.assertEqual('1024', task['Cpu'])
-        self.assertEqual('2048', task['Memory'])
-        self.assertEqual(
-            {
-                'OperatingSystemFamily': 'LINUX',
-                'CpuArchitecture': 'X86_64',
-            },
-            task['RuntimePlatform'],
-        )
-        container = task['ContainerDefinitions'][0]
-        self.assertNotIn('Secrets', container)
-        names = {
-            item['Name'] for item in container['Environment']
-        }
-        self.assertIn('XSBOT_AWS_RUNTIME_SECRETS_PARAMETER', names)
-        self.assertNotIn('XSBOT_RUNTIME_SECRETS_JSON', names)
-        self.assertEqual(
-            [],
-            self.resources['BuildSecurityGroup']['Properties'][
-                'SecurityGroupIngress'],
-        )
+    def test_ビルドは専用roleのLambdaで公開HTTPや管理者認証を使わない(self):
+        build = self.resources['BuildFunction']['Properties']
+        self.assertEqual({'Ref': 'ImageUri'}, build['ImageUri'])
+        self.assertEqual({'GetAtt': 'BuildRole.Arn'}, build['Role'])
+        self.assertEqual('', build['Environment']['Variables']['XSBOT_AWS_ADMIN_AUTH_PARAMETER'])
+        self.assertNotIn('VpcConfig', build)
+        self.assertNotIn('EphemeralStorage', build)
+        self.assertNotIn('Events', build)
+        self.assertFalse(any(
+            resource['Type'] == 'AWS::Lambda::Url' or
+            resource['Type'] == 'AWS::Lambda::Permission' and
+            'BuildFunction' in str(resource['Properties'])
+            for resource in self.resources.values()))
+        role = self.resources['BuildRole']['Properties']
+        self.assertEqual('lambda.amazonaws.com', role['AssumeRolePolicyDocument'][
+            'Statement'][0]['Principal']['Service'])
+        self.assertEqual([{'Sub': 'arn:${AWS::Partition}:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole'}],
+                         role['ManagedPolicyArns'])
+        for action in ('ecs:RunTask', 'iam:PassRole'):
+            self.assertNotIn(action, self.source)
+        for name in ('BuildClusterArn', 'BuildTaskDefinitionArn', 'BuildSubnetA',
+                     'BuildSubnetB', 'BuildSecurityGroupId'):
+            self.assertNotIn(name, self.template['Outputs'])
+        self.assertEqual({'Ref': 'BuildFunction'}, self.template['Outputs'][
+            'BuildWorkerFunctionName']['Value'])
 
     def test_秘密値をNoEchoで受け取り公開値と分離する(self):
         parameters = self.template['Parameters']
@@ -376,24 +369,25 @@ class AwsTemplateTest(unittest.TestCase):
         self.assertEqual({'Ref': 'ApiFunction'}, permission['FunctionName'])
         self.assertIn('${HttpApi}/*', permission['SourceArn']['Sub'])
 
-    def test_登録権限は二つのworkerで失敗配送権限はDLQに限る(self):
-        worker_arns = [{
-            'Sub': 'arn:${AWS::Partition}:lambda:${AWS::Region}:'
-                   '${AWS::AccountId}:function:${AWS::StackName}-' + suffix,
-        } for suffix in ('action-worker', 'group-worker')]
-        for role_name in ('ApiRole', 'WorkerRole', 'BuildTaskRole'):
+    def test_登録権限はAPIが三つworkerが二つで失敗配送権限はDLQに限る(self):
+        def worker_arn(suffix):
+            return {'Sub': 'arn:${AWS::Partition}:lambda:${AWS::Region}:'
+                           '${AWS::AccountId}:function:${AWS::StackName}-' + suffix}
+        worker_arns = [worker_arn(suffix) for suffix in ('action-worker', 'group-worker')]
+        for role_name in ('ApiRole', 'WorkerRole', 'BuildRole'):
             statements = self.resources[role_name]['Properties'][
                 'Policies'][0]['PolicyDocument']['Statement']
             invokes = [item for item in statements
                        if item['Action'] == 'lambda:InvokeFunction']
-            if role_name == 'BuildTaskRole':
+            if role_name == 'BuildRole':
                 self.assertEqual([], invokes)
             else:
                 self.assertEqual(1, len(invokes))
-                self.assertEqual(worker_arns, invokes[0]['Resource'])
+                expected = worker_arns + [worker_arn('build-worker')] if role_name == 'ApiRole' else worker_arns
+                self.assertEqual(expected, invokes[0]['Resource'])
             sends = [item for item in statements
                      if item['Action'] == 'sqs:SendMessage']
-            if role_name == 'WorkerRole':
+            if role_name in ('WorkerRole', 'BuildRole'):
                 self.assertEqual(1, len(sends))
                 self.assertEqual({'GetAtt': 'DeadLetterQueue.Arn'},
                                  sends[0]['Resource'])
@@ -411,7 +405,7 @@ class AwsTemplateTest(unittest.TestCase):
                 'RuntimeSecretsParameterName',
             },
             'WorkerRole': {'RuntimeSecretsParameterName'},
-            'BuildTaskRole': {
+            'BuildRole': {
                 'GoogleSheetsCredentialParameterName',
                 'RuntimeSecretsParameterName',
             },
@@ -442,7 +436,7 @@ class AwsTemplateTest(unittest.TestCase):
             ))
 
         self.assertNotIn('ssm:GetParameters', self.source)
-        build_policy = self.resources['BuildTaskRole']['Properties'][
+        build_policy = self.resources['BuildRole']['Properties'][
             'Policies'][0]['PolicyDocument']
         self.assertNotIn('GroupTaskTable', str(build_policy))
 
@@ -460,29 +454,20 @@ class AwsTemplateTest(unittest.TestCase):
         globals_environment = self.template['Globals']['Function'][
             'Environment']['Variables']
         self.assertEqual({'Ref': 'SheetId'}, globals_environment['SHEETS_ID'])
+        for resource in self.resources.values():
+            if resource['Type'] == 'AWS::Serverless::Function':
+                self.assertNotIn('SHEETS_ID', resource['Properties']['Environment']['Variables'])
 
-        build_environment = {
-            item['Name']: item['Value']
-            for item in self.resources['BuildTaskDefinition']['Properties'][
-                'ContainerDefinitions'][0]['Environment']
-        }
-        self.assertEqual({'Ref': 'SheetId'}, build_environment['SHEETS_ID'])
-
-    def test_worker名をGlobalsとFargateへ参照なしで渡す(self):
-        globals_environment = self.template['Globals']['Function'][
-            'Environment']['Variables']
-        build_environment = {
-            item['Name']: item['Value']
-            for item in self.resources['BuildTaskDefinition']['Properties'][
-                'ContainerDefinitions'][0]['Environment']
-        }
-        for environment in (globals_environment, build_environment):
-            self.assertEqual({'Sub': '${AWS::StackName}-action-worker'},
-                             environment['XSBOT_AWS_ACTION_WORKER_FUNCTION'])
-            self.assertEqual({'Sub': '${AWS::StackName}-group-worker'},
-                             environment['XSBOT_AWS_GROUP_WORKER_FUNCTION'])
-            self.assertFalse(any('QUEUE_' in name or 'SCHEDULER_' in name
-                                 for name in environment))
+    def test_worker名をGlobalsへ自己参照なしで渡す(self):
+        environment = self.template['Globals']['Function']['Environment']['Variables']
+        for key, suffix in (
+                ('XSBOT_AWS_ACTION_WORKER_FUNCTION', 'action-worker'),
+                ('XSBOT_AWS_GROUP_WORKER_FUNCTION', 'group-worker'),
+                ('XSBOT_AWS_BUILD_WORKER_FUNCTION', 'build-worker')):
+            self.assertEqual({'Sub': '${AWS::StackName}-' + suffix}, environment[key])
+        self.assertFalse(any('QUEUE_' in name or 'SCHEDULER_' in name or
+                             'SUBNET_' in name or 'SECURITY_GROUP_' in name
+                             for name in environment))
 
     def test_alarmは1つのSNS_topicへ通知し購読はメール任意(self):
         alarms = {
@@ -515,16 +500,17 @@ class AwsTemplateTest(unittest.TestCase):
 
         destination_alarm = alarms['WorkerDestinationFailureAlarm']['Properties']
         metrics = destination_alarm['Metrics']
-        for query, worker in zip(metrics[:2],
-                                 ('ActionWorkerFunction', 'GroupWorkerFunction')):
+        self.assertEqual(4, len(metrics))
+        for query, worker in zip(metrics[:3],
+                                 ('ActionWorkerFunction', 'GroupWorkerFunction', 'BuildFunction')):
             metric = query['MetricStat']['Metric']
             self.assertEqual('AWS/Lambda', metric['Namespace'])
             self.assertEqual('DestinationDeliveryFailures', metric['MetricName'])
             self.assertEqual([{'Name': 'FunctionName', 'Value': {'Ref': worker}}],
                              metric['Dimensions'])
             self.assertFalse(query['ReturnData'])
-        self.assertEqual('SUM([action, group])', metrics[2]['Expression'])
-        self.assertTrue(metrics[2]['ReturnData'])
+        self.assertEqual('SUM([action, group, build])', metrics[3]['Expression'])
+        self.assertTrue(metrics[3]['ReturnData'])
 
     def test_alarmは明示有効時だけ作成しworkerは常に利用できる(self):
         parameter = self.template['Parameters']['AlarmsEnabled']
@@ -556,7 +542,7 @@ class AwsTemplateTest(unittest.TestCase):
             parameters = {'AlarmsEnabled': str(alarms).lower(), 'WebchatEnabled': str(webchat).lower(),
                           'AlarmEmail': 'test@example.invalid' if email else ''}
             with self.subTest(parameters=parameters):
-                for name in ('ActionWorkerFunction', 'GroupWorkerFunction'):
+                for name in ('ActionWorkerFunction', 'GroupWorkerFunction', 'BuildFunction'):
                     self.assertNotIn('Condition', self.resources[name])
                 created = {name for name, resource in self.resources.items()
                            if resource['Type'] == 'AWS::CloudWatch::Alarm'
@@ -571,7 +557,7 @@ class AwsTemplateTest(unittest.TestCase):
             self.assertNotIn('Condition', self.resources[name])
 
     def test_無料の同時実行上限だけを使いprovisionedは設けない(self):
-        for name, limit in (('ActionWorkerFunction', 10), ('GroupWorkerFunction', 2)):
+        for name, limit in (('ActionWorkerFunction', 10), ('GroupWorkerFunction', 2), ('BuildFunction', 2)):
             self.assertEqual(limit, self.resources[name]['Properties'][
                 'ReservedConcurrentExecutions'])
         self.assertNotIn('ProvisionedConcurrencyConfig', self.source)

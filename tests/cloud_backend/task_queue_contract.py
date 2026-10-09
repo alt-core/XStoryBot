@@ -62,7 +62,7 @@ class TaskQueueContractMixin:
         self.assertEqual('日本語のaction', captured.params['action'])
         self.assertEqual('', captured.params['empty'])
 
-    def test_actionとgroupの共通parameter契約を維持する(self):
+    def test_actionとgroupとbuildの共通parameter契約を維持する(self):
         cases = (
             (
                 'action-queue',
@@ -73,6 +73,11 @@ class TaskQueueContractMixin:
                 'group-message-queue',
                 '/api/v1/bots/bot/process_group_batch',
                 {'message_task_id': 'message-1', 'batch_index': '2'},
+            ),
+            (
+                'build-queue',
+                '/api/build/bot',
+                {'skip_image': 'true', 'force': 'false'},
             ),
         )
 

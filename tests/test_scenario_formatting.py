@@ -63,6 +63,56 @@ class ScenarioFormattingTest(unittest.TestCase):
         return [command for _condition, lines in built.scenes['default/'].base_region.blocks
                 for command in lines]
 
+    def test_同じ台本の再ビルドでもsceneごとの命令IDを変えない(self):
+        rows = [
+            ['開始', '本文'], ['次へ', '@set', '$count', '1'],
+            ['*部屋', '入口'], ['確認', '返答'],
+        ]
+
+        def ids(built):
+            return {name: [command.command_id for _condition, lines in scene.base_region.blocks
+                           for command in lines]
+                    for name, scene in built.scenes.items() if name != '*default'}
+
+        for version in (1, 2, 3):
+            with self.subTest(version=version):
+                cold = self._build(rows, version)
+                warm = self._build(rows, version)
+                self.assertEqual(ids(cold), ids(warm))
+                self.assertEqual(ids(warm), {
+                    'default/': ['default/__0', 'default/__1'],
+                    'default/部屋': ['default/部屋__0', 'default/部屋__1'],
+                })
+
+    def test_別Builderのビルドが途中で入っても採番を混ぜない(self):
+        nested = []
+
+        def filter_plain_text(builder, msg, _options, _sender):
+            if msg == '入れ子のビルド':
+                nested.append(self._build([['開始', '別Botの応答']]))
+            return msg
+
+        hub.register_handler('line', builder=types.SimpleNamespace(
+            filter_plain_text=filter_plain_text))
+        rows = [['開始', '本文'], ['次へ', '入れ子のビルド'], ['最後', 'おしまい']]
+        first = self._build(rows)
+        second = self._build(rows)
+        self.assertEqual([command.command_id for command in self._commands(first)],
+                         ['default/__0', 'default/__1', 'default/__2'])
+        self.assertEqual([command.command_id for command in self._commands(second)],
+                         ['default/__0', 'default/__1', 'default/__2'])
+        self.assertEqual([[command.command_id for command in self._commands(built)]
+                          for built in nested], [['default/__0'], ['default/__0']])
+
+    def test_同じビルド内で同名sceneを再定義したときは採番を継続する(self):
+        built = self._build([
+            ['*部屋', '最初の入口'], ['確認', '最初の応答'],
+            ['*部屋', '新しい入口'], ['確認', '新しい応答'],
+        ])
+        self.assertEqual(
+            [command.command_id for _condition, lines in built.scenes['default/部屋'].base_region.blocks
+             for command in lines], ['default/部屋__2', 'default/部屋__3'])
+
     def test_未定義変数の後の不正括弧も作成位置付きで拒否する(self):
         for text in ('{$unknown} の後に }', '{$unknown} の後に {'):
             with self.subTest(text=text):

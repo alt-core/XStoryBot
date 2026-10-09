@@ -18,6 +18,7 @@ AWS_SETTINGS = {
         'functions': {
             'action-queue': 'test-action-worker',
             'group-message-queue': 'test-group-worker',
+            'build-queue': 'test-build-worker',
         },
     },
 }
@@ -42,7 +43,8 @@ def expected_body(params=None, queue_name='action-queue', bot_name='bot'):
         'version': 1,
         'task_id': str(TASK_UUID),
         'queue_name': queue_name,
-        'kind': 'action' if queue_name == 'action-queue' else 'group_batch',
+        'kind': {'action-queue': 'action', 'group-message-queue': 'group_batch',
+                 'build-queue': 'build'}[queue_name],
         'bot_name': bot_name,
         'params': body_params,
     }, ensure_ascii=False, separators=(',', ':')).encode('utf-8')
@@ -111,6 +113,21 @@ class AwsTaskQueueTest(unittest.TestCase):
                 'group-message-queue',
                 '/api/v1/bots/test-bot/process_group_batch', params)
 
+    def test_buildは専用workerへ文字列optionsを変更せず登録する(self):
+        client = make_client()
+        stubber = Stubber(client)
+        params = {'skip_image': 'true', 'force': 'false'}
+        stubber.add_response('invoke', {'StatusCode': 202}, {
+            'FunctionName': 'test-build-worker',
+            'InvocationType': 'Event',
+            'Payload': expected_body(params, 'build-queue', 'test-bot_1'),
+        })
+        queue = self.make_queue(client_factory=lambda service_name, **options: client)
+        with stubber:
+            task_id = queue.create_task('build-queue', '/api/build/test-bot_1', params)
+        self.assertEqual(str(TASK_UUID), task_id)
+        self.assertEqual({'skip_image': 'true', 'force': 'false'}, params)
+
     def test_Noneと数値ゼロだけを即時実行として許可する(self):
         client = Mock()
         client.invoke.return_value = {'StatusCode': 202}
@@ -144,8 +161,8 @@ class AwsTaskQueueTest(unittest.TestCase):
                         'action-queue', '/api/v1/bots/bot/action', {})
                 self.assertEqual(str(TASK_UUID), raised.exception.task_id)
 
-    def test_初期化時に両worker名を必須にする(self):
-        for queue_name in ('action-queue', 'group-message-queue'):
+    def test_初期化時に全worker名を必須にする(self):
+        for queue_name in ('action-queue', 'group-message-queue', 'build-queue'):
             for value in (None, '', ' ', 1, {}, []):
                 with self.subTest(queue_name=queue_name, value=value):
                     settings = copy.deepcopy(AWS_SETTINGS)
@@ -162,12 +179,11 @@ class AwsTaskQueueTest(unittest.TestCase):
             with self.assertRaises(ValueError):
                 self.make_queue(settings={'task_queue': {'functions': functions}})
 
-    def test_build_queueと未知のqueueを拒否する(self):
+    def test_未知のqueueを拒否する(self):
         client_factory = Mock()
         queue = self.make_queue(client_factory=client_factory)
-        for name in ('build-queue', 'missing-queue'):
-            with self.subTest(name=name), self.assertRaises(TaskQueueError):
-                queue.create_task(name, '/api/v1/bots/bot/action', {})
+        with self.assertRaises(TaskQueueError):
+            queue.create_task('missing-queue', '/api/v1/bots/bot/action', {})
         client_factory.assert_not_called()
 
     def test_不正pathやBot名を拒否する(self):
@@ -181,6 +197,17 @@ class AwsTaskQueueTest(unittest.TestCase):
             ('action-queue', '/api/v1/bots/a.b/action'),
             ('action-queue', '/api/v1/bots/bot/process_group_batch'),
             ('group-message-queue', '/api/v1/bots/bot/action'),
+            ('build-queue', '/api/build/'),
+            ('build-queue', '/api/build/bot/'),
+            ('build-queue', '/api/build/a%2Fb'),
+            ('build-queue', '/api/build/a/b'),
+            ('build-queue', '/api/build/日本語'),
+            ('build-queue', '/api/build/a.b'),
+            ('build-queue', '/api/build/bot?option=true'),
+            ('build-queue', '/api/build/bot#label'),
+            ('build-queue', '/api/v1/bots/bot/action'),
+            ('build-queue', '/api/build/bot/action'),
+            ('build-queue', None),
         )
         for queue_name, path in invalid_destinations:
             with self.subTest(queue_name=queue_name, path=path):

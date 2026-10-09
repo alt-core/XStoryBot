@@ -23,6 +23,7 @@ ENV XSBOT_CLOUD_PROVIDER=${XSBOT_CLOUD_PROVIDER}
 
 COPY --chown=xstorybot:xstorybot . ./
 RUN test -s settings.yaml || { echo "settings.yamlを作成してからビルドしてください" >&2; exit 1; }
+RUN chmod a+r settings.yaml
 
 USER xstorybot
 

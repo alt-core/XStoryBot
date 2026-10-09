@@ -27,7 +27,7 @@ def build_bot(
         main_module=None):
     """指定Botを解決してビルドする。"""
     if main_module is None:
-        # CLIの引数検証前にクラウドclientを初期化しないよう遅延importする。
+        # Botの解決が必要になってから初期化する。
         import main as main_module
 
     bot = main_module.get_bot(bot_name)

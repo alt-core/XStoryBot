@@ -389,6 +389,7 @@
     let csrfToken = null;
     let pollingInterval = null;
     let lastBuildTaskId = null;
+    const BUILD_WAIT_TIMEOUT_MS = 31 * 60 * 1000;
     let botName = null;
 
     function escapeHtml(value) {
@@ -584,12 +585,18 @@
                 if (resp.message === 'Queued') {
                     textarea.val('反映作業を開始しました...');
                     var task_id = resp.task_id;
+                    const deadline = Date.now() + BUILD_WAIT_TIMEOUT_MS;
                     // 最後のビルド結果をポーリングして結果を取得
                     if (pollingInterval) {
                         clearInterval(pollingInterval);
                     }
                     lastBuildTaskId = null;
                     pollingInterval = setInterval(function() {
+                        if (Date.now() >= deadline) {
+                            clearInterval(pollingInterval);
+                            textarea.val('時間内に結果を確認できませんでした。反映済みの可能性があります。ログや動作を確認してください。');
+                            return;
+                        }
                         $.ajax({
                             url: '/dashboard/last_build_result/' + botName,
                             type: 'GET',
@@ -622,7 +629,7 @@
                                 textarea.val('反映作業中' + '.'.repeat(dotCount));
                             }
                         });
-                    }, 5000); // Check every 5 seconds
+                    }, 5000); // 5秒ごとに結果を確認する。
                 } else {
                     textarea.val(resp.message);
                 }
