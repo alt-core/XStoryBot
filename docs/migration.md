@@ -15,4 +15,6 @@ AWSでは、スタック削除後も`Retain`指定のS3バケット・DynamoDB�
 - `options.scenario_version`を台本の版に合わせ、More等の使用するpluginを有効にします。設定テンプレートの既定はversion 3です。
 - `@forward`の第3引数と、`@delay 秒 Bot名 action`の第4引数はinterface指定です。この位置にメモを書いていた場合はコメント行へ移します。
 
+LINEのLIFF APIはIDトークン方式です。ページ側を`liff.getIDToken()`へ合わせ、LINE Developersのscopeに`openid`を設定してください。本人識別のためだけに使っていた`profile`は外せます。トークへ発話するページには`chat_message.write`も必要です。XStoryBotとXStoryLIFFは合わせて更新します。
+
 機能ごとの設定は、[シナリオ作成](scenario-authoring.md)、[Webchat](webchat.md)、[LIFF連携](liff-webchat-api.md)、[リッチメニュー](richmenu.md)を参照してください。

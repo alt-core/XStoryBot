@@ -50,6 +50,7 @@ python3 -m unittest \
     tests.plugin.test_tsv \
     tests.plugin.test_chatgpt \
     tests.plugin.test_liff \
+    tests.plugin.test_liff_id_token \
     tests.plugin.test_mock_line \
     tests.plugin.test_images \
     tests.plugin.test_twilio \

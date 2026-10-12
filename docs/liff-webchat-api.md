@@ -20,11 +20,11 @@ Webchatでは親が最新セーブ・API通信・保存・同時操作の調停�
 
 ## 2. LINEのLIFF HTTP API
 
-LINE SDKの初期化と必要なログインを済ませ、`liff.getAccessToken()`で取得したtokenを使います。
+LINE SDKの初期化と必要なログインを済ませ、`liff.getIDToken()`で取得したIDトークンを使います。利用者IDの取得には`openid`のscopeが必要です。表示名やプロフィール画像は使わず、`profile`のscopeは不要です。
 
 ```http
 POST <apiBaseUrl>/liff/<bot>/message
-Authorization: Bearer <access_token>
+Authorization: Bearer <id_token>
 Content-Type: application/json
 
 {"action":"open"}
@@ -65,7 +65,15 @@ HTTP 200でも`Failure`／`Error`なら成功にしません。通信断や不�
 
 `!env`の参照先が未設定の場合の空文字も、チャネルIDの未設定として扱います。この場合もWebchat等の起動は継続し、LINE側のLIFF APIだけが認証要求を送る前に503を返します。数値型・空白付き文字列・数字以外のIDは設定エラーです。AWSでは[追加設定JSON](../README.md#awsへデプロイする場合)へ`"LIFF_LOGIN_CHANNEL_ID": "1234567890"`を入れ、テンプレートの`!env`から参照できます。
 
-サーバーはtokenの発行先と有効期限を検証してからprofileを取得します。各LINE認証要求のtimeoutは10秒で、tokenのキャッシュは行いません。tokenや認証URLをエラーログへ出しません。[LINE公式の検証手順](https://developers.line.biz/en/docs/liff/using-user-profile/)
+サーバーはLINEの公開鍵でES256署名、発行者、発行先のチャネル、発行時刻を検証し、`sub`を利用者IDとして使います。公開鍵はprocessごとに期限付きでキャッシュし、鍵取得のtimeoutは10秒です。操作ごとのプロフィール取得や、LINE側のトークン失効・同意取消のオンライン照会は行いません。token・認証ヘッダー・未検証の内容をログへ出しません。[LINEのIDトークン仕様](https://developers.line.biz/en/docs/line-login/verify-id-token/)
+
+標準ではLINEのIDトークンの有効期限`exp`を検証します。期限切れの要求は認証段階で拒否し、台本やセーブへ触れません。[LIFFのIDトークンの期限](https://developers.line.biz/en/reference/liff/#get-id-token)
+
+XStoryLIFFのLINE送信クライアントは、IDトークンを取得できない場合や、このAPIが401を返した場合に接続を終了してLIFFを閉じる操作を試します。LINEから開き直すと、LIFFの初期化で認証情報を取得します。閉じられない環境では、手動で開き直す案内を残します。設定拒否の403、通信断・timeout・処理結果不明・台本の失敗では自動で閉じず、操作の自動再送もしません。
+
+長時間の利用で独自の受理期間を使う場合だけ、LIFF paramsへ`id_token_max_age_seconds: 86400`などを明示します。この値を省略するかnullにすると、標準の`exp`検証です。明示した正の有限値は、`exp`に代わる`iat`からの固定秒数です。数値の`!env`文字列も使え、操作しても期限は延長しません。LINE SDKの`sendMessages`等の利用期限を延ばす設定ではありません。
+
+IDトークンを持つ人は、その本人として台本のLIFF actionを実行できます。台本に含まれる`@forward`・LINE送信・メニュー変更・外部API等にも作用し得るため、受理期間はコンテンツの操作範囲に合わせて選んでください。期限を過ぎた場合は認証段階で拒否し、台本の実行や状態更新を始めません。
 
 `allow_origin`は文字列（`*`を含む）かoriginの配列です。配列では要求のOriginを照合し、`Vary: Origin`を付けます。これはLINE側のLIFF API設定です。Webchatのiframeを使うために、このCORSを広げる必要はありません。
 

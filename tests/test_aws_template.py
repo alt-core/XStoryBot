@@ -500,6 +500,28 @@ class AwsTemplateTest(unittest.TestCase):
                              'SUBNET_' in name or 'SECURITY_GROUP_' in name
                              for name in environment))
 
+    def test_AWSは応答後に接続を閉じるGunicorn設定を既存CMDへ適用する(self):
+        import json
+        import os
+        import shlex
+        from unittest.mock import patch
+        from gunicorn.app.wsgiapp import WSGIApplication
+
+        environment = self.template['Globals']['Function']['Environment']['Variables']
+        cmd_line = next(line for line in (PROJECT_ROOT / 'Dockerfile').read_text().splitlines()
+                        if line.startswith('CMD '))
+        command = json.loads(cmd_line[4:])[2]
+        command = re.sub(r'\$\{\w+:-([^}]+)\}', lambda match: match[1], command)
+        with patch.dict(os.environ, {'GUNICORN_CMD_ARGS': environment['GUNICORN_CMD_ARGS']}), \
+                patch('sys.argv', shlex.split(command)[1:]):
+            application = WSGIApplication()
+        self.assertEqual(0, application.cfg.keepalive)
+        self.assertEqual((1, 8, 0), (application.cfg.workers, application.cfg.threads,
+                                   application.cfg.timeout))
+        for resource in self.resources.values():
+            if resource['Type'] == 'AWS::Serverless::Function':
+                self.assertNotIn('GUNICORN_CMD_ARGS', resource['Properties'].get('Environment', {}).get('Variables', {}))
+
     def test_alarmは1つのSNS_topicへ通知し購読はメール任意(self):
         alarms = {
             name: resource for name, resource in self.resources.items()

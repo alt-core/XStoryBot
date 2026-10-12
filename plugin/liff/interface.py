@@ -6,6 +6,7 @@ import utility
 import context
 import json
 from urllib.parse import urlsplit
+from plugin.liff.id_token import validate_max_age_seconds
 
 
 class LiffPlugin_ActionContext(context.ActionContext):
@@ -36,6 +37,8 @@ class LiffPlugin_Interface(object):
                 not isinstance(self.login_channel_id, str) or not self.login_channel_id.isascii()
                 or not self.login_channel_id.isdecimal()):
             raise ValueError('login_channel_idにはLINE LoginチャネルIDを文字列で指定してください')
+        self.id_token_max_age_seconds = validate_max_age_seconds(
+            params.get('id_token_max_age_seconds'))
         self.ignore_unhandled_action = params.get('ignore_unhandled_action', False)
         if type(self.ignore_unhandled_action) is not bool:
             raise ValueError('ignore_unhandled_actionはboolにしてください')

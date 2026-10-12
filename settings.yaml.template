@@ -108,6 +108,8 @@
       allow_origin: "*"
       # 実LINEのLIFF APIに必要。LIFFを登録したLINE LoginチャネルのID。
       login_channel_id: !env LIFF_LOGIN_CHANNEL_ID
+      # 既定はLINEのexpを検証する。独自期限を使う場合だけ発行時刻からの秒数を指定する。
+      # id_token_max_age_seconds: 86400
       # 入口の未定義actionだけを空応答にする。内部ジャンプの誤りは検出する。
       ignore_unhandled_action: false
 

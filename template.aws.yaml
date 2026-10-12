@@ -103,6 +103,8 @@ Globals:
       - x86_64
     Environment:
       Variables:
+        # Lambdaの停止・再開をまたいでアプリへの接続を使い回さない。
+        GUNICORN_CMD_ARGS: '--keep-alive 0'
         XSBOT_CLOUD_PROVIDER: aws
         XSBOT_DEPLOY_ENV: !Ref EnvironmentName
         SHEETS_ID: !Ref SheetId

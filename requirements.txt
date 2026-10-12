@@ -2,6 +2,7 @@
 # 任意 plugin のものは requirements-optional.txt にある。開発は requirements-dev.txt を使う。
 bottle~=0.13.2
 google-auth~=2.57.1
+PyJWT[crypto]~=2.15.1
 requests~=2.34.2
 argon2-cffi~=25.1.0
 itsdangerous~=2.2.0

@@ -110,7 +110,7 @@ class SynchronousEntryTest(unittest.TestCase):
         self.liff_api = _load_module('_entry_liff_api', 'plugin/liff/webapi.py', {
             'main': main, 'auth': _module('auth'),
         })
-        self._patch(patch.object(self.liff_api, '_line_json', side_effect=self._authenticate))
+        self._patch(patch.object(self.liff_api, 'verify_id_token', side_effect=self._authenticate))
         self.clients = {'line': TestApp(self.line_api.app), 'liff': TestApp(self.liff_api.app)}
         self.store.save_global_bot_variables('bot', 'first')
         self.bot.select_scenario()
@@ -121,9 +121,8 @@ class SynchronousEntryTest(unittest.TestCase):
         self.addCleanup(patcher.stop)
         return value
 
-    def _authenticate(self, url, **kwargs):
-        return ({'client_id': '123', 'expires_in': 600} if '/verify' in url
-                else {'userId': 'Utest'})
+    def _authenticate(self, token, channel_id, max_age_seconds):
+        return 'Utest'
 
     def _save_generation(self, generation):
         player = self.models.PlayerStatusDB('bot', 'line:user,Utest')
@@ -143,7 +142,7 @@ class SynchronousEntryTest(unittest.TestCase):
             path = '/line/callback/bot'
         else:
             body = b'{"action":"go"}'
-            headers['Authorization'] = 'Bearer artificial-access' if authenticated else ''
+            headers['Authorization'] = 'Bearer artificial-id-token' if authenticated else ''
             path = '/liff/bot/message'
         return self.clients[service].post(
             path, body, headers=headers, content_type='application/json',
@@ -182,19 +181,19 @@ class SynchronousEntryTest(unittest.TestCase):
                 patch.object(self.store, 'get_global_bot_variables') as pointer:
             self._request('line', authenticated=False, status=401)
             self._request('liff', authenticated=False, status=400)
-            with patch.object(self.liff_api, '_line_json', return_value={
-                    'client_id': 'other-channel', 'expires_in': 600}):
+            with patch.object(self.liff_api, 'verify_id_token', side_effect=
+                              self.liff_api.InvalidIdTokenError('other-channel')):
                 self._request('liff', status=401)
         player.assert_not_called()
         pointer.assert_not_called()
 
     def test_LIFF認証で使った時間をAWS期限から差し引き保存前に止める(self):
-        def authenticate(url, **kwargs):
-            self.now += 15
-            return self._authenticate(url, **kwargs)
+        def authenticate(token, channel_id, max_age_seconds):
+            self.now += 30
+            return self._authenticate(token, channel_id, max_age_seconds)
         with patch.dict(os.environ, {'AWS_LAMBDA_FUNCTION_NAME': 'example-api'}), \
                 patch.object(aws_request_context.time, 'time', side_effect=lambda: 100 + self.now), \
-                patch.object(self.liff_api, '_line_json', side_effect=authenticate), \
+                patch.object(self.liff_api, 'verify_id_token', side_effect=authenticate), \
                 patch.object(self.store, 'load_player_status') as player, \
                 patch.object(self.store, 'get_global_bot_variables') as pointer, \
                 self.assertLogs(level='ERROR'):
