@@ -48,6 +48,7 @@ def session_bots(root, get_bot):
 def run_session(root, get_bot, root_context, app_id=None):
     interface = root.get_interface('webchat')
     bots = session_bots(root, get_bot)
+    scenarios = {root.name: root_context.scenario_selection}
     payload = root_context.state_payload
     peers = payload.get('peer_players', {})
     epochs = dict(payload.get('peer_epochs', {}))
@@ -93,14 +94,16 @@ def run_session(root, get_bot, root_context, app_id=None):
         name, service, action = queue.popleft()
         bot = bots[name]
         controller = bot.get_interface('webchat')
-        controller.ensure_scenario(bot)
+        snapshot = players.get(bot.state_namespace, {'scenario_generations': {}})
+        if name not in scenarios:
+            scenarios[name] = controller.ensure_scenario(bot, snapshot)
         if root_context.deadline - time.monotonic() <= 0.5:
             raise TurnDeadlineExceeded('Scenario読込後に処理期限を超えました')
-        snapshot = players.get(bot.state_namespace, {})
         context = controller.create_context_from_state(
             {**payload, 'player': snapshot}, action, root_context.request_id,
             deadline_seconds=root_context.deadline - time.monotonic())
         context.deadline = root_context.deadline
+        context.set_scenario(scenarios[name])
         context.forward_action = forward
         context.service_name = service
         if service == 'webchat':
@@ -110,7 +113,7 @@ def run_session(root, get_bot, root_context, app_id=None):
             context.add_interface('liff', liff)
             context.ignore_unhandled_action = liff.ignore_unhandled_action
             responder = _Output(liff.respond_reaction)
-        result = bot.handle_action(context, interface=responder)
+        result = bot.handle_action(context, interface=responder, selection=context.scenario_selection)
         if root_context.deadline - time.monotonic() <= 0.5:
             raise TurnDeadlineExceeded('同期forwardを含む処理期限を超えました')
         players[bot.state_namespace] = context.saved_player
@@ -133,6 +136,8 @@ def run_session(root, get_bot, root_context, app_id=None):
             'request_id': root_context.request_id, 'bot': name, 'service': service,
             'conversation': root_context.user.user_id, 'action': action,
             'scene': context.saved_player.get('scene'),
+            'scenario_revision': context.scenario_revision,
+            'scenario_generation': context.scenario_generation,
         }, ensure_ascii=False, separators=(',', ':')))
 
     root_context._saved_player = players.pop(root.state_namespace)

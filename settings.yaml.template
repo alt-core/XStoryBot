@@ -59,6 +59,8 @@
     reset_keyword: "!!ここを独自のリセット用合言葉に変更!!"
     timezone: "Asia/Tokyo"
     scenario_version: 3
+    # 最新Scenarioの共通確認間隔（秒）。新しい世代のセーブは期限を待たず再確認する。
+    scenario_check_interval: 10
     group_batch_size: 2000
     group_max_workers: 150
     group_max_rate: 500
@@ -76,8 +78,8 @@
       alt_text: "LINEアプリで確認してください。"
       sender_icon_urls:
         SENDER_NAME: "https://example.com/path/to/line_icon.jpg"
-      access_token: !env LINE_ACCESS_TOKEN
-      channel_secret: !env LINE_CHANNEL_SECRET
+      line_access_token: !env LINE_ACCESS_TOKEN
+      line_channel_secret: !env LINE_CHANNEL_SECRET
 
     line.quick_reply:
       command: ["＞", ">", "▽"]
@@ -127,6 +129,7 @@
       enabled: !env XSBOT_WEBCHAT_ENABLED
       signing_key: !env XSBOT_WEBCHAT_SIGNING_KEY
       scenario_uri: !env XSBOT_WEBCHAT_SCENARIO_URI
+      follow_latest_scenario: !env XSBOT_WEBCHAT_FOLLOW_LATEST_SCENARIO
       scenario_compatibility_epoch: !env XSBOT_WEBCHAT_COMPATIBILITY_EPOCH
       self_origin: !env XSBOT_APP_BASE_URL
       allowed_origins: !env XSBOT_WEBCHAT_ALLOWED_ORIGINS

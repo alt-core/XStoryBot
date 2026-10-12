@@ -20,7 +20,7 @@ def _deployment_settings(config):
     """追加設定が基盤・署名・公開条件を変更していないことを確認する対象。"""
     protected = {key: config.get(key) for key in ('cloud', 'gcp', 'aws', 'local', 'services')}
     fields = (
-        'enabled', 'deployment', 'signing_key', 'scenario_uri', 'scenario_compatibility_epoch',
+        'enabled', 'deployment', 'signing_key', 'scenario_uri', 'follow_latest_scenario', 'scenario_compatibility_epoch',
         'start_action', 'self_origin', 'allowed_origins', 'external_http_origins', 'media_origins',
         'allowed_commands', 'turn_deadline_seconds', 'liff_apps',
     )

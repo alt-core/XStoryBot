@@ -4,8 +4,9 @@ import uuid
 import logging
 
 from cloud_backend import create_object_store
-from cloud_backend.contracts import ObjectNotFoundError, ObjectStoreError
+from cloud_backend.contracts import ObjectNotFoundError, ObjectStoreError, StateRecoveryError
 from models import GroupMembersDB, get_state_store
+from scenario_selection import ScenarioLoadError
 
 class GroupMessageTaskDB:
     # クラス定数
@@ -126,11 +127,71 @@ class GroupMessageTaskDB:
                     can_abort=status in (
                         GroupMessageTaskDB.STATUS_PENDING,
                         GroupMessageTaskDB.STATUS_RUNNING,
-                        GroupMessageTaskDB.STATUS_FAILED),
+                        GroupMessageTaskDB.STATUS_FAILED) and not task.get('rollback_stopped', False),
                     can_retry=status in (
                         GroupMessageTaskDB.STATUS_COMPLETED,
                         GroupMessageTaskDB.STATUS_ABORTED
-                    ) and task.get('failed_members', 0) > 0)
+                    ) and not task.get('rollback_stopped', False)
+                    and task.get('failed_members', 0) > len(task.get('stopped_member_ids', [])))
+
+    @staticmethod
+    def _task_chain(task_id, task=None):
+        visited = set()
+        while task_id:
+            if task_id in visited:
+                raise ValueError('再送taskの参照が循環しています')
+            visited.add(task_id)
+            if task is None:
+                task = GroupMessageTaskDB._state_store.get_group_message_task(task_id)
+            if not isinstance(task, dict):
+                raise ValueError('再送元taskが見つかりません')
+            yield task_id, task
+            task_id, task = task.get('original_task_id'), None
+
+    @staticmethod
+    def get_stopped_member_ids(task_id, task=None):
+        stopped = set()
+        for _task_id, data in GroupMessageTaskDB._task_chain(task_id, task):
+            if data.get('rollback_stopped', False):
+                raise StateRecoveryError('元の配信は状態を確認できず停止しています。管理者の確認が必要です')
+            stopped.update(data.get('stopped_member_ids', []))
+        return stopped
+
+    @staticmethod
+    def record_stopped_member_ids(task_id, member_ids):
+        stopped = set(member_ids)
+        # 根元から記録し、再送taskだけの停止で元の配信から再登録されることを防ぐ。
+        chain = list(GroupMessageTaskDB._task_chain(task_id))
+        for current_id, _task in reversed(chain):
+            def update(data):
+                return {'stopped_member_ids': sorted(set(data.get('stopped_member_ids', [])) | stopped)}
+            if not GroupMessageTaskDB.update_task(current_id, update):
+                raise ValueError('停止対象の配信taskが見つかりません')
+
+    @staticmethod
+    def stop_task_chain(task_id, error):
+        # 個別の停止者を保存できないときは、元配信と各再送taskを隔離する。
+        chain = list(GroupMessageTaskDB._task_chain(task_id))
+        failure = None
+        for current_id, _task in reversed(chain):
+            def update(data):
+                status = data['status']
+                return {
+                    'status': status if status in (
+                        GroupMessageTaskDB.STATUS_COMPLETED, GroupMessageTaskDB.STATUS_ABORTED
+                    ) else GroupMessageTaskDB.STATUS_FAILED,
+                    'rollback_stopped': True,
+                    'error_messages': GroupMessageTaskDB.build_error_messages(data, str(error)),
+                }
+            try:
+                if not GroupMessageTaskDB.update_task(current_id, update):
+                    raise ValueError('停止対象の配信taskが見つかりません')
+            except Exception as storage_error:
+                failure = storage_error
+                logging.error('配信の停止flagを保存できませんでした: task_id=%s error_type=%s',
+                              current_id, type(storage_error).__name__)
+        if failure is not None:
+            raise failure
 
     @staticmethod
     def update_task(task_id, update_builder):
@@ -309,7 +370,7 @@ class GroupMessageTaskDB:
 
     @staticmethod
     def process_members_in_parallel(task_id, process_function, max_workers=None,
-                                    max_rate=None, member_ids=None):
+                                    max_rate=None, member_ids=None, stopped_members=None):
         from concurrent.futures import ThreadPoolExecutor, as_completed
         import time
 
@@ -342,6 +403,8 @@ class GroupMessageTaskDB:
         # 処理結果を保持するメモリ内コレクション
         successful_members = []
         error_logs = []  # (member_id, error_message, timestamp) のタプルリスト
+        scenario_failure_count = 0
+        scenario_load_error = None
 
         # 進捗報告用の変数
         processed_count = 0
@@ -365,6 +428,14 @@ class GroupMessageTaskDB:
                         successful_members.append(member_id)
                     else:
                         error_logs.append((member_id, error_message, time.time()))
+                except ScenarioLoadError as e:
+                    scenario_failure_count += 1
+                    scenario_load_error = e
+                    error_logs.append((member_id, str(e), time.time()))
+                except StateRecoveryError as e:
+                    if stopped_members is not None:
+                        stopped_members.append(member_id)
+                    error_logs.append((member_id, str(e), time.time()))
                 except Exception as e:
                     error_logs.append((member_id, str(e), time.time()))
 
@@ -395,6 +466,10 @@ class GroupMessageTaskDB:
 
         successful_count = len(successful_members)
         failed_count = len(error_logs)
+
+        # 全員が計画前に止まった場合だけ、同じバッチの配送再試行へ戻す。
+        if scenario_load_error is not None and scenario_failure_count == total_members:
+            raise scenario_load_error
 
         return successful_count, failed_count, successful_members, error_logs
 
@@ -470,6 +545,11 @@ class GroupMessageTaskDB:
         remaining_members = GroupMessageTaskDB._get_failed_members_from_storage(
             original_task_id
         )
+        try:
+            stopped = GroupMessageTaskDB.get_stopped_member_ids(original_task_id, original_task)
+        except StateRecoveryError:
+            return None
+        remaining_members = [member for member in remaining_members if member not in stopped]
 
         if not remaining_members:
             return None

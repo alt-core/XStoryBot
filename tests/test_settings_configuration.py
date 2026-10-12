@@ -74,10 +74,15 @@ class SettingsTemplateTest(unittest.TestCase):
         default = loaded['*']
 
         self.assertEqual(3, default['options']['scenario_version'])
+        self.assertEqual(10, default['options']['scenario_check_interval'])
         self.assertEqual(2000, default['options']['group_batch_size'])
         self.assertEqual(150, default['options']['group_max_workers'])
         self.assertEqual(500, default['options']['group_max_rate'])
         self.assertTrue(default['plugins']['chatgpt']['log_conversation'])
+        self.assertEqual('value', default['plugins']['line']['line_access_token'])
+        self.assertEqual('value', default['plugins']['line']['line_channel_secret'])
+        self.assertNotIn('access_token', default['plugins']['line'])
+        self.assertNotIn('channel_secret', default['plugins']['line'])
         self.assertEqual('bot', default['bots']['bot']['state_namespace'])
         self.assertEqual('gcp', default['cloud']['provider'])
         for optional_plugin in ('twilio', 'pusher', 'line.more'):
@@ -439,6 +444,36 @@ class DependencyConfigurationTest(unittest.TestCase):
         self.assertEqual({'twilio', 'pusher'}, self._names(optional))
         for included in ('-r requirements-gcp.txt', '-r requirements-aws.txt', '-r requirements-optional.txt'):
             self.assertIn(included, dev)
+
+
+class LineInterfaceConfigurationTest(unittest.TestCase):
+    def test_有効なLINE窓口だけが空の資格値を拒否し秘密値を表示しない(self):
+        from plugin.line.interface import LinePlugin_InterfaceFactory
+        for key in ('line_access_token', 'line_channel_secret'):
+            for missing in (None, '', '  ', 123):
+                with self.subTest(key=key, missing=missing):
+                    params = {'line_access_token': 'artificial-token', 'line_channel_secret': 'artificial-secret'}
+                    if missing is None:
+                        del params[key]
+                    else:
+                        params[key] = missing
+                    factory = LinePlugin_InterfaceFactory(params)
+                    with self.assertRaises(ValueError) as caught:
+                        factory.create_interface('bot', {})
+                    message = str(caught.exception)
+                    self.assertIn('bot', message)
+                    self.assertIn(key, message)
+                    self.assertNotIn('artificial-token', message)
+                    self.assertNotIn('artificial-secret', message)
+
+    def test_LINE窓口を作らない場合は空の共通資格値を許しBotの上書きを使える(self):
+        from plugin.line.interface import LinePlugin_InterfaceFactory
+        factory = LinePlugin_InterfaceFactory({'line_access_token': '', 'line_channel_secret': ''})
+        interface = factory.create_interface('bot', {
+            'line_access_token': 'bot-token', 'line_channel_secret': 'bot-secret',
+        })
+        self.assertEqual('bot-token', interface.line_access_token)
+        self.assertEqual('bot-secret', interface.line_channel_secret)
 
 
 if __name__ == '__main__':

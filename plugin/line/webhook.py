@@ -33,4 +33,12 @@ def parse(channel_secret, body, signature):
     """署名を検証し、events の list（各要素は dict）を返す。"""
     if not verify_signature(channel_secret, body, signature):
         raise InvalidSignatureError('LINE の署名が一致しません')
-    return json.loads(body).get('events', [])
+    if isinstance(body, bytes):
+        body = body.decode('utf-8')
+    data = json.loads(body)
+    if not isinstance(data, dict):
+        raise ValueError('LINE Webhookの本文はobjectで指定してください')
+    events = data.get('events', [])
+    if not isinstance(events, list) or any(not isinstance(event, dict) for event in events):
+        raise ValueError('LINE Webhookのeventsはobjectのlistで指定してください')
+    return events

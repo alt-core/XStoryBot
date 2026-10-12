@@ -1,6 +1,7 @@
 """外部サービスなしでローカル保存の契約と再接続を確認する。"""
 
 import datetime
+from concurrent.futures import ThreadPoolExecutor
 import hashlib
 import json
 import os
@@ -14,7 +15,7 @@ from unittest.mock import patch
 
 from cloud_backend.contracts import (
     CredentialData, CredentialSourceError, InvalidObjectReferenceError,
-    ObjectNotFoundError, ObjectStoreError, StateConflictError, TaskQueueError,
+    ObjectNotFoundError, ObjectStoreError, StateConflictError, StateStoreError, TaskQueueError,
 )
 from cloud_backend.local.credential_source import LocalCredentialSource
 from cloud_backend.local.object_store import LocalObjectStore
@@ -32,6 +33,40 @@ class LocalStateStoreTest(StateStoreContractMixin, unittest.TestCase):
         directory = tempfile.TemporaryDirectory()
         self.addCleanup(directory.cleanup)
         return LocalStateStore(directory.name)
+
+    def test_並行公開もURIと返された世代が同じ原子的更新になる(self):
+        store = self.contract_store
+
+        def publish(index):
+            uri = f'opaque://scenario/{index}'
+            return uri, store.save_global_bot_variables('bot', uri)
+
+        with ThreadPoolExecutor(max_workers=4) as workers:
+            published = list(workers.map(publish, range(12)))
+        self.assertEqual(list(range(1, 13)), sorted(generation for uri, generation in published))
+        winner = next(uri for uri, generation in published if generation == 12)
+        self.assertEqual({'scenario_uri': winner, 'generation': 12},
+                         store.get_global_bot_variables('bot'))
+
+    def test_旧pointerの欠損は0に見せず初回公開だけ1から始める(self):
+        store = self.contract_store
+        store._put('global', 'bot', {'scenario_uri': 'old'})
+        self.assertEqual({'scenario_uri': 'old', 'generation': None}, store.get_global_bot_variables('bot'))
+        self.assertEqual(1, store.save_global_bot_variables('bot', 'new'))
+
+    def test_不正な公開世代は読み書きとも正常値へ修復しない(self):
+        store = self.contract_store
+        for value in (0, -1, True, 1.5, '2'):
+            with self.subTest(value=value):
+                store._put('global', 'bot', {'scenario_uri': 'old', 'generation': value})
+                with self.assertRaises(StateStoreError):
+                    store.get_global_bot_variables('bot')
+                with self.assertRaises(StateStoreError):
+                    store.save_global_bot_variables('bot', 'new')
+                self.assertEqual('old', store._get('global', 'bot')['scenario_uri'])
+        store._put('global', 'bot', {'scenario_uri': 'old', 'generation': None})
+        with self.assertRaises(StateStoreError):
+            store.save_global_bot_variables('bot', 'new')
 
     def test_再接続でも型を保持し取得値の変更は保存まで反映しない(self):
         data = {'bytes': b'\x00\xff', 'tuple': (1, 2), 'nested': {'items': [1]},
@@ -265,7 +300,7 @@ import settings
 from cloud_backend import create_state_store, create_object_store, create_task_queue, create_credential_source
 state = create_state_store()
 state.save_global_bot_variables('bot', 'local-reference')
-assert create_state_store().get_global_bot_variables('bot') == {'scenario_uri': 'local-reference'}
+assert create_state_store().get_global_bot_variables('bot') == {'scenario_uri': 'local-reference', 'generation': 1}
 objects = create_object_store()
 assert objects.storage_root == state.storage_root
 assert create_task_queue().initialize({}) is None

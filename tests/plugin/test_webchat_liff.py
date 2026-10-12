@@ -65,7 +65,6 @@ class WebchatLiffTest(unittest.TestCase):
         for bot, rows in [(self.root, root_rows), (self.menu, menu_rows)]:
             bot.scenario = fixture_module.WebchatRuntimeE2ETest.scenario_module.ScenarioBuilder.build_from_table(rows, version=3)
             interface = bot.get_interface('webchat')
-            interface._scenario_loaded = True
             bot.scenario_uri = interface.scenario_uri
         self.bots = {'bot': self.root, 'menu': self.menu}
         webapi.configure(self.bots.get)
@@ -155,7 +154,6 @@ class WebchatLiffTest(unittest.TestCase):
         first = self.call(self.start()['state_token']).json
         runtime = fixture_module.WebchatRuntimeE2ETest.runtime
         controller = WebchatInterface('extra', self.menu.get_interface('webchat').params)
-        controller._scenario_loaded = True
         extra = runtime.BotRuntime('extra', {
             'webchat': controller, 'liff': LiffPlugin_Interface('extra', {'allow_origin': '*'}),
         }, None)
@@ -272,7 +270,6 @@ class WebchatLiffTest(unittest.TestCase):
         self.interface = WebchatInterface('bot', {**self.interface.params, 'liff_apps': {
             'menu': {'bot': 'bot', 'url': PAGE, 'match': 'prefix', 'liff_id': '123-example'},
         }, 'constants': {'menu_url': PAGE}}, bot_settings=definitions)
-        self.interface._scenario_loaded = True
         self.root.interfaces['webchat'] = self.interface
         liff = LiffPlugin_Interface('bot', {'allow_origin': '*', 'ignore_unhandled_action': True})
         self.root.interfaces['liff'] = liff

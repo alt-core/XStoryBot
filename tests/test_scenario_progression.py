@@ -12,6 +12,7 @@ import expression
 import hub
 from plugin.line import default_commands, quick_reply
 from plugin.webchat.context import WebchatActionContext
+from scenario_selection import ScenarioSelection
 from tests.test_scenario_formatting import _load_module
 
 
@@ -56,7 +57,8 @@ class ScenarioProgressionTest(unittest.TestCase):
     def _turn(self, action):
         context = WebchatActionContext(
             'bot', self.interface, 'conversation', action, self.player)
-        self.reactions = self.bot.handle_action(context)
+        self.reactions = self.bot.handle_action(context, selection=ScenarioSelection(
+            self.bot.scenario, 'fixture-uri', None))
         self.player = context.saved_player
         self.context = context
         return [row[1] for row, _children in self.reactions if not row[1].startswith('@')]

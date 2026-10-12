@@ -53,30 +53,30 @@ class LineApiClient:
         self._endpoint = endpoint
         self._data_endpoint = data_endpoint
 
-    def reply(self, reply_token, messages):
+    def reply(self, reply_token, messages, timeout=None):
         self._post('/v2/bot/message/reply', {
             'replyToken': reply_token,
             'messages': messages,
             'notificationDisabled': False,
-        })
+        }, timeout=timeout)
 
-    def push(self, to, messages, retry_key=None):
+    def push(self, to, messages, retry_key=None, timeout=None):
         headers = {'X-Line-Retry-Key': retry_key} if retry_key else {}
         self._post('/v2/bot/message/push', {
             'to': to,
             'messages': messages,
             'notificationDisabled': False,
-        }, headers)
+        }, headers, timeout=timeout)
 
-    def link_rich_menu(self, user_id, rich_menu_id):
-        self._post(f'/v2/bot/user/{user_id}/richmenu/{rich_menu_id}')
+    def link_rich_menu(self, user_id, rich_menu_id, timeout=None):
+        self._post(f'/v2/bot/user/{user_id}/richmenu/{rich_menu_id}', timeout=timeout)
 
-    def _post(self, path, body=None, headers=None):
+    def _post(self, path, body=None, headers=None, timeout=None):
         response = requests.post(
             self._endpoint + path,
             headers={**self._headers, **(headers or {})},
             data=json.dumps(body) if body is not None else None,
-            timeout=self._timeout)
+            timeout=self._timeout if timeout is None else timeout)
         if not 200 <= response.status_code < 300:
             raise LineApiError.from_response(response)
 

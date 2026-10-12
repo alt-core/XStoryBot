@@ -68,6 +68,22 @@ class ParseTest(unittest.TestCase):
         with self.assertRaises(webhook.InvalidSignatureError):
             webhook.parse(SECRET, '{"events":[]}', 'abé')
 
+    def test_不正UTF8も署名が違えば本文より先に拒否する(self):
+        with self.assertRaises(webhook.InvalidSignatureError):
+            webhook.parse(SECRET, b'\xff', 'invalid')
+        with self.assertRaises(UnicodeDecodeError):
+            webhook.parse(SECRET, b'\xff', _sign(b'\xff'))
+
+    def test_署名済みでもUTF8以外のJSONは受け付けない(self):
+        body = '{"events":[]}'.encode('utf-16')
+        with self.assertRaises(UnicodeDecodeError):
+            webhook.parse(SECRET, body, _sign(body))
+
+    def test_本文とeventsの構造が違えば拒否する(self):
+        for body in ('[]', '{"events":null}', '{"events":{}}', '{"events":[1]}'):
+            with self.subTest(body=body), self.assertRaises(ValueError):
+                webhook.parse(SECRET, body, _sign(body))
+
 
 if __name__ == '__main__':
     unittest.main()

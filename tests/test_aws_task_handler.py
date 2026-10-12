@@ -1,5 +1,9 @@
+import datetime
+import json
+import tempfile
+from types import SimpleNamespace
 import unittest
-from unittest.mock import Mock, call, patch
+from unittest.mock import ANY, Mock, call, patch
 import uuid
 
 from botocore.exceptions import EndpointConnectionError
@@ -9,9 +13,16 @@ from cloud_backend.aws.state_store import (
     TASK_EXECUTION_BUSY,
     TASK_EXECUTION_CLAIMED,
     TASK_EXECUTION_COMPLETED,
+    TASK_EXECUTION_STOPPED,
     AwsStateStore,
 )
-from cloud_backend.contracts import StateStoreError
+from cloud_backend.contracts import (
+    RollbackConflictError, RollbackError, SaveResultUnknownError, StateStoreError,
+)
+from cloud_backend.local.state_store import LocalStateStore
+from context import ActionContext
+from users import User
+from tests.plugin.test_line_contracts import _load_module, _module
 from tests.test_aws_state_store import (
     AWS_SETTINGS,
     _MemoryDynamoClient,
@@ -178,6 +189,55 @@ class AwsTaskHandlerTest(unittest.TestCase):
         self.dependencies['get_bot'].assert_not_called()
         self.execution_store.release_task_execution.assert_not_called()
 
+    def test_巻戻し不能を成功と分けて記録し同じtaskを再計画しない(self):
+        for error in (RollbackConflictError('競合'), RollbackError('復元未確認'),
+                      SaveResultUnknownError('保存未確認')):
+            with self.subTest(error=type(error).__name__):
+                client = _MemoryDynamoClient()
+                store = AwsStateStore(AWS_SETTINGS, client=client, object_store=_MemoryObjectStore())
+                self.dependencies['execution_store'] = store
+                self.bot.handled.clear()
+                envelope = make_envelope()
+                with patch.object(self.bot, 'handle_action', side_effect=error) as action:
+                    self.assertEqual({'status': 'stopped'}, self.invoke(envelope))
+                    self.assertEqual({'status': 'stopped'}, self.invoke(envelope))
+                action.assert_called_once()
+                item = store._decode_item(next(iter(client.tables['test-cache'].values())))
+                self.assertEqual(TASK_EXECUTION_STOPPED, item['status'])
+                self.assertEqual(['put_item', 'put_item', 'put_item', 'get_item'],
+                                 [operation for operation, request in client.calls])
+
+    def test_停止記録が保存できなくても通常lease解放と再試行へ戻さない(self):
+        self.bot.handle_action = Mock(side_effect=RollbackConflictError('競合'))
+        self.execution_store.complete_task_execution.side_effect = StateStoreError('記録障害')
+        with self.assertLogs(level='ERROR'):
+            self.assertEqual({'status': 'stopped'}, self.invoke(make_envelope()))
+        self.execution_store.complete_task_execution.assert_called_once_with(
+            ANY, str(OWNER_UUID), stopped=True)
+        self.execution_store.release_task_execution.assert_not_called()
+
+    def test_保存結果不明の停止理由とtask情報をtokenなしで記録する(self):
+        self.bot.handle_action = Mock(side_effect=SaveResultUnknownError('private-error-detail'))
+        envelope = make_envelope(action='hello@@private-choice')
+        with self.assertLogs(level='ERROR') as logs:
+            self.assertEqual({'status': 'stopped'}, self.invoke(envelope))
+        record = json.loads(logs.records[0].getMessage())
+        self.assertEqual('state-recovery', record['phase'])
+        self.assertEqual('SaveResultUnknownError', record['error_type'])
+        self.assertEqual(envelope['task_id'], record['task_id'])
+        self.assertEqual('plaintext:user-1', record['user'])
+        self.assertEqual('hello', record['action'])
+        self.assertFalse(record['business_processed'])
+        self.assertNotIn('private-choice', '\n'.join(logs.output))
+        self.assertNotIn('private-error-detail', '\n'.join(logs.output))
+
+    def test_group停止結果も実行記録へ停止として残す(self):
+        self.manager.handle_batch_process_request.return_value = ({'status': 'stopped'}, 200)
+        self.assertEqual({'status': 'stopped'}, self.invoke(make_group_envelope(), 'group_batch'))
+        self.execution_store.complete_task_execution.assert_called_once_with(
+            'group:bot:message-1:2', str(OWNER_UUID), stopped=True)
+        self.execution_store.release_task_execution.assert_not_called()
+
     def test_業務処理失敗時はleaseを解放して元の例外を伝播する(self):
         envelope = make_envelope(action='failure')
         failure = RuntimeError('failure')
@@ -206,22 +266,49 @@ class AwsTaskHandlerTest(unittest.TestCase):
         self.execution_store.release_task_execution.assert_called_once_with(
             'group:bot:message-1:2', str(OWNER_UUID))
 
-    def test_完了保存失敗も同じtry内でleaseを解放する(self):
+    def test_業務成功後の完了保存失敗は停止記録へ回しleaseを解放しない(self):
         failure = RuntimeError('完了保存失敗')
-        self.execution_store.complete_task_execution.side_effect = failure
-        envelope = make_envelope()
-        with self.assertRaises(RuntimeError) as raised:
-            self.invoke(envelope)
-        self.assertIs(failure, raised.exception)
+        self.execution_store.complete_task_execution.side_effect = [failure, None]
+        envelope = make_envelope(action='hello@@private-choice')
+        with self.assertLogs(level='ERROR') as logs:
+            self.assertEqual({'status': 'stopped'}, self.invoke(envelope))
         self.assertEqual(1, len(self.bot.handled))
         self.assertEqual([
             call.try_claim_task_execution(
                 f'action:bot:{envelope["task_id"]}', str(OWNER_UUID), 360),
             call.complete_task_execution(
                 f'action:bot:{envelope["task_id"]}', str(OWNER_UUID)),
-            call.release_task_execution(
-                f'action:bot:{envelope["task_id"]}', str(OWNER_UUID)),
+            call.complete_task_execution(
+                f'action:bot:{envelope["task_id"]}', str(OWNER_UUID), stopped=True),
         ], self.execution_store.mock_calls)
+        logged = '\n'.join(logs.output)
+        self.assertIn('"phase": "complete"', logged)
+        self.assertIn('"action": "hello"', logged)
+        self.assertIn('"business_processed": true', logged)
+        self.assertNotIn('private-choice', logged)
+
+    def test_group完了保存の失敗もSTOPで同じbatchを再処理しない(self):
+        client = _MemoryDynamoClient()
+        store = AwsStateStore(AWS_SETTINGS, client=client, object_store=_MemoryObjectStore())
+        self.dependencies['execution_store'] = store
+        complete = store.complete_task_execution
+
+        def fail_complete(key, owner, *, stopped=False):
+            if not stopped:
+                raise StateStoreError('完了保存失敗')
+            return complete(key, owner, stopped=True)
+
+        envelope = make_group_envelope()
+        with patch.object(store, 'complete_task_execution', side_effect=fail_complete), \
+                self.assertLogs(level='ERROR') as logs:
+            self.assertEqual({'status': 'stopped'}, self.invoke(envelope, 'group_batch'))
+        self.assertEqual({'status': 'stopped'}, self.invoke(envelope, 'group_batch'))
+        self.manager.handle_batch_process_request.assert_called_once_with('message-1', 2)
+        record = json.loads(logs.records[0].getMessage())
+        self.assertEqual('group_batch', record['kind'])
+        self.assertEqual('message-1', record['message_task_id'])
+        self.assertEqual(2, record['batch_index'])
+        self.assertTrue(record['business_processed'])
 
     def test_lease解放失敗が元の例外を上書きしない(self):
         failure = RuntimeError('業務処理失敗')
@@ -371,7 +458,7 @@ class AwsTaskHandlerTest(unittest.TestCase):
             f'action:bot:{envelope["task_id"]}', str(OWNER_UUID))
 
     def test_actionの詳細と完了を運用ログに残す(self):
-        envelope = make_envelope(action='hello')
+        envelope = make_envelope(action='hello@@action-token-must-not-be-logged')
         envelope['api_token'] = 'api-token-must-not-be-logged'
         with patch.object(task_handler.logging, 'info') as info_log:
             self.invoke(envelope)
@@ -382,9 +469,11 @@ class AwsTaskHandlerTest(unittest.TestCase):
         info_log.assert_any_call(
             'AWS action task completed: task_id=%s, owner=%s',
             envelope['task_id'], str(OWNER_UUID))
-        self.assertNotIn(envelope['api_token'], ' '.join(
+        logged = ' '.join(
             str(value) for log_call in info_log.call_args_list
-            for value in log_call.args))
+            for value in log_call.args)
+        self.assertNotIn(envelope['api_token'], logged)
+        self.assertNotIn('action-token-must-not-be-logged', logged)
 
     def test_検証前の不正envelope値は詳細ログに出さない(self):
         untrusted = 'untrusted-kind-value'
@@ -479,3 +568,146 @@ class AwsTaskHandlerTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'Botが見つかりません'):
             self.invoke(make_envelope(kind='build', queue_name='build-queue'), 'build')
         self.assertEqual(self.execution_store.mock_calls, [])
+
+class AwsCompletionRecoveryTest(unittest.TestCase):
+    """実Runtimeの保存・応答・子登録の後だけを止め、同じtaskの再実行を防ぐ。"""
+
+    def setUp(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.players = LocalStateStore(directory.name)
+        self._patch(patch('cloud_backend.create_state_store', return_value=self.players))
+        self.models = _load_module('_aws_completion_models', 'models.py', {})
+        self._patch(patch('context._player_status_class', self.models.PlayerStatusDB))
+        artifact = SimpleNamespace(version=3, constants={})
+        self._patch(patch.dict('sys.modules', {'scenario': _module(
+            'scenario', Scenario=SimpleNamespace(load_from_uri=lambda uri: artifact))}))
+        self.runtime = _load_module('_aws_completion_runtime', 'runtime.py', {
+            'settings': _module('settings', CONSTANTS={}, OPTIONS={}),
+            'commands': _module('commands', get_runtime_object_dictionary=lambda *args: {}),
+            'task_client': _module('task_client', defer_until_response=lambda: True),
+        })
+        self.replies, self.children = [], []
+        test = self
+
+        class Interface:
+            def get_retry_count(self):
+                return 0
+
+            def create_context(self, user, action, attrs):
+                return ActionContext('bot', 'plaintext', self, user, action, attrs)
+
+            def respond_reaction(self, context, reactions):
+                test.replies.append(reactions)
+                return 'OK'
+
+        class Director:
+            def __init__(self, scenario, context):
+                self.context = context
+
+            def plan_reactions(self):
+                context = self.context
+                context.status['$step'] = context.status.get('$step', 0) + 1
+                context.reactions = [([None, '応答'], None)]
+                context.pending_tasks.append((
+                    lambda: test.children.append('child'), {
+                        'bot': 'child', 'user': context.user.serialize(), 'action': '#child',
+                    }))
+
+        self.runtime._director_class = Director
+        self.bot = self.runtime.BotRuntime('bot', {'plaintext': Interface()}, None)
+        self.players.save_global_bot_variables('bot', 'fixture-uri')
+        self.client = _MemoryDynamoClient()
+        self.execution_store = AwsStateStore(
+            AWS_SETTINGS, client=self.client, object_store=_MemoryObjectStore(),
+            clock=lambda: datetime.datetime(2026, 10, 12, tzinfo=datetime.timezone.utc))
+        dependencies = {
+            'get_bot': lambda name: self.bot, 'user_class': User,
+            'get_group_members': lambda name: [], 'options': {},
+            'manager_class': Mock(), 'execution_store': self.execution_store,
+            'worker_kind': 'action',
+        }
+        self._patch(patch.object(task_handler, '_load_dependencies', return_value=dependencies))
+        self.envelope = make_envelope(action='go')
+
+    def _patch(self, patcher):
+        result = patcher.start()
+        self.addCleanup(patcher.stop)
+        return result
+
+    def _invoke(self):
+        return task_handler.lambda_handler(self.envelope, None)
+
+    def _record(self):
+        return self.execution_store._decode_item(next(iter(self.client.tables['test-cache'].values())))
+
+    def _player(self):
+        return self.models.PlayerStatusDB('bot', 'plaintext:user-1')
+
+    def _completion_failure(self, mode):
+        complete = self.execution_store.complete_task_execution
+
+        def failing(key, owner, *, stopped=False):
+            if not stopped:
+                if mode == 'ack-lost':
+                    complete(key, owner)
+                raise StateStoreError('完了保存の受付を確認できません')
+            if mode == 'all-failed':
+                raise StateStoreError('停止記録も保存できません')
+            return complete(key, owner, stopped=True)
+
+        with patch.object(self.execution_store, 'complete_task_execution', side_effect=failing), \
+                patch.object(self.execution_store, 'release_task_execution', wraps=self.execution_store.release_task_execution) as release, \
+                self.assertLogs(level='ERROR') as logs:
+            self.assertEqual({'status': 'stopped'}, self._invoke())
+        release.assert_not_called()
+        self.assertEqual(1, self._player()['$step'])
+        self.assertEqual((1, 1), (len(self.replies), len(self.children)))
+        completion = next(json.loads(record.getMessage()) for record in logs.records
+                          if record.getMessage().startswith('{'))
+        self.assertEqual('complete', completion['phase'])
+        self.assertTrue(completion['business_processed'])
+        self.assertEqual(self.envelope['task_id'], completion['task_id'])
+
+    def test_完了保存のcommit前失敗はSTOPを残し同封筒で業務と子を増やさない(self):
+        self._completion_failure('before-commit')
+        self.assertEqual(TASK_EXECUTION_STOPPED, self._record()['status'])
+        self.assertEqual({'status': 'stopped'}, self._invoke())
+        self.assertEqual(1, self._player()['$step'])
+        self.assertEqual((1, 1), (len(self.replies), len(self.children)))
+
+    def test_完了commit後のACK喪失でも同封筒で業務と子を増やさない(self):
+        self._completion_failure('ack-lost')
+        self.assertEqual(TASK_EXECUTION_COMPLETED, self._record()['status'])
+        self.assertEqual({'status': 'ok'}, self._invoke())
+        self.assertEqual(1, self._player()['$step'])
+        self.assertEqual((1, 1), (len(self.replies), len(self.children)))
+
+    def test_完了とSTOPが全失敗してもclaimを残し即時dupで業務を増やさない(self):
+        self._completion_failure('all-failed')
+        self.assertEqual(TASK_EXECUTION_CLAIMED, self._record()['status'])
+        with self.assertRaises(task_handler._TaskExecutionBusy):
+            self._invoke()
+        self.assertEqual(1, self._player()['$step'])
+        self.assertEqual((1, 1), (len(self.replies), len(self.children)))
+
+    def test_状態保存のACK喪失はSTOPで同taskの再計画と子登録を止める(self):
+        create = self.players.create_player_status
+
+        def committed_without_ack(*args):
+            create(*args)
+            raise StateStoreError('状態保存のACK喪失')
+
+        with patch.object(self.players, 'create_player_status', side_effect=committed_without_ack), \
+                self.assertLogs(level='ERROR') as logs:
+            self.assertEqual({'status': 'stopped'}, self._invoke())
+        self.assertEqual(TASK_EXECUTION_STOPPED, self._record()['status'])
+        self.assertEqual({'status': 'stopped'}, self._invoke())
+        self.assertEqual(1, self._player()['$step'])
+        self.assertEqual((0, 0), (len(self.replies), len(self.children)))
+        records = [json.loads(record.getMessage()) for record in logs.records
+                   if record.getMessage().startswith('{')]
+        stopped = next(record for record in records if record['phase'] == 'state-recovery')
+        self.assertEqual('SaveResultUnknownError', stopped['error_type'])
+        self.assertEqual(self.envelope['task_id'], stopped['task_id'])
+        self.assertFalse(stopped['business_processed'])

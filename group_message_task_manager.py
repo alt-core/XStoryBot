@@ -5,6 +5,8 @@ from group_message_task_db import GroupMessageTaskDB
 import users
 import task_client
 import settings
+from cloud_backend.contracts import StateRecoveryError
+from scenario_selection import ScenarioLoadError
 
 class GroupMessageTaskManager:
 
@@ -18,7 +20,7 @@ class GroupMessageTaskManager:
 
     @staticmethod
     def _is_finished(task):
-        return task['status'] in (
+        return task.get('rollback_stopped', False) or task['status'] in (
             GroupMessageTaskDB.STATUS_COMPLETED,
             GroupMessageTaskDB.STATUS_ABORTED,
         )
@@ -28,7 +30,7 @@ class GroupMessageTaskManager:
         return {
             'message': f"タスク {task_id} のバッチは処理済み、または中止されています",
             'task_id': task_id,
-            'status': task['status'],
+            'status': 'stopped' if task.get('rollback_stopped', False) else task['status'],
         }, 200
 
     def _update_batch_status(self, task_id, batch_index, status, error=None):
@@ -75,6 +77,14 @@ class GroupMessageTaskManager:
                 return self._register_next_batch(task_id, task, batch_index)
             return self.process_batch(
                 task_id, batch_index, batch_size, max_workers, max_rate)
+        except StateRecoveryError as error:
+            logging.exception('安全に再送できない停止を記録できないため配信を停止します: task_id=%s', task_id)
+            try:
+                GroupMessageTaskDB.stop_task_chain(task_id, error)
+            except Exception:
+                logging.exception('配信停止状態を保存できませんでした: task_id=%s', task_id)
+            return {'error': '安全に再送できないため配信を停止しました',
+                    'task_id': task_id, 'status': 'stopped'}, 200
         except Exception as error:
             logging.exception(
                 'グループ配信バッチを処理できませんでした: task_id=%s, batch_index=%s',
@@ -167,25 +177,41 @@ class GroupMessageTaskManager:
 
         batch_task_id = f"{task_id}_batch_{batch_index}"
 
+        stopped_members = []
         success_count, error_count, successful_members, error_logs = self._process_batch_members(
-            batch_task_id, current_batch_member_ids, task, max_workers, max_rate
+            batch_task_id, current_batch_member_ids, task, max_workers, max_rate,
+            stopped_members=stopped_members,
         )
+        if stopped_members:
+            try:
+                GroupMessageTaskDB.record_stopped_member_ids(task_id, stopped_members)
+            except Exception as error:
+                raise StateRecoveryError('配信の再送除外を記録できませんでした') from error
 
         return self._handle_batch_completion(
             task_id, task, batch_index, batch_count,
             success_count, error_count, error_logs,
-            batch_size, total_count
+            batch_size, total_count, stopped_members=stopped_members,
         )
 
-    def _process_batch_members(self, batch_task_id, member_ids, task, max_workers, max_rate):
+    def _process_batch_members(self, batch_task_id, member_ids, task, max_workers, max_rate,
+                               stopped_members=None):
         logging.info(f"バッチの処理を開始（メンバー数: {len(member_ids)}, max_workers: {max_workers}, max_rate: {max_rate}）")
+
+        task_id = batch_task_id.rsplit('_batch_', 1)[0]
+        blocked = GroupMessageTaskDB.get_stopped_member_ids(task_id, task)
+
+        def process(member_id):
+            if member_id in blocked:
+                raise StateRecoveryError('この配信では既に状態を確認できず停止した利用者です')
+            return self._process_member(member_id, task)
 
         return GroupMessageTaskDB.process_members_in_parallel(
             task_id=batch_task_id,
-            process_function=lambda member_id: self._process_member(member_id, task),
+            process_function=process,
             max_workers=max_workers,
             max_rate=max_rate,
-            member_ids=member_ids
+            member_ids=member_ids, stopped_members=stopped_members,
         )
 
     def _process_member(self, member_id, task):
@@ -201,15 +227,18 @@ class GroupMessageTaskManager:
                 return True, None
             else:
                 return False, f"インターフェースが見つかりません: {member.service_name}"
+        except (StateRecoveryError, ScenarioLoadError):
+            raise
         except Exception as e:
             logging.error(f"Error processing group message for {member_id}: {str(e)}")
             return False, str(e)
 
     def _handle_batch_completion(self, task_id, task, batch_index, batch_count,
                                 success_count, error_count, error_logs,
-                                batch_size, total_count):
+                                batch_size, total_count, stopped_members=()):
         errors = [f'{entry[0]}: {entry[1]}' for entry in error_logs]
-        failed_member_ids = [entry[0] for entry in error_logs]
+        stopped = set(stopped_members)
+        failed_member_ids = [entry[0] for entry in error_logs if entry[0] not in stopped]
         if failed_member_ids:
             try:
                 GroupMessageTaskDB._append_failed_member_list(

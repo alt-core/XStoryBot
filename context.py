@@ -1,6 +1,18 @@
 # coding: utf-8
 
+import time
+
 from utility import safe_list_get
+
+
+class ActionDeadlineExceeded(TimeoutError):
+    """終了処理の余裕を残すため、新しい計画・送信を開始できない。"""
+
+
+def check_action_deadline(context):
+    deadline = getattr(context, 'action_deadline', None)
+    if deadline is not None and time.monotonic() >= deadline:
+        raise ActionDeadlineExceeded('操作の処理期限を超えました')
 
 
 _player_status_class = None

@@ -1,4 +1,4 @@
-"""DynamoDBへ依存しないWebchat専用Bottle entry point。"""
+"""署名付きclient状態を使うWebchat専用Bottle entry point。"""
 
 import settings
 from bottle import Bottle, response, static_file

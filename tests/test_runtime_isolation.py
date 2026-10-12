@@ -3,12 +3,16 @@ import importlib.util
 import json
 from pathlib import Path
 import sys
+import tempfile
 import types
 import unittest
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 from cloud_backend import factory as backend_factory
+from cloud_backend.contracts import RollbackConflictError, RollbackError, StateStoreError
+from cloud_backend.local.state_store import LocalStateStore
+from scenario_selection import stamp_scenario_generation
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -117,6 +121,7 @@ class BuildResultIsolationTest(unittest.TestCase):
                 key, json.loads(value))))
         self.models = types.ModuleType('models')
         self.models.GlobalBotVariablesDB = Mock()
+        self.models.GlobalBotVariablesDB.save.return_value = 1
         self.scenario = types.ModuleType('scenario')
         self.scenario.ScenarioSyntaxError = type(
             'ScenarioSyntaxError', (Exception,), {})
@@ -197,13 +202,17 @@ class RollbackSnapshotTest(unittest.TestCase):
         }
         document = Mock()
         document.get.return_value = snapshot
+        document.update.return_value = SimpleNamespace(
+            update_time=datetime.datetime(2026, 10, 12, tzinfo=datetime.timezone.utc))
         fake_db = Mock()
         fake_db.collection.return_value.document.return_value = document
         module = load_models(fake_db)
         status = module.PlayerStatusDB('bot', 'line:user-1')
-        status.save = Mock()
 
         status.entry['scene_history'].append('scene-2')
+        status.scene = 'scene-2'
+        status.save()
+        document.update.reset_mock()
         status.rollback()
 
         self.assertEqual(status.entry['scene_history'], ['scene-0'])
@@ -211,8 +220,8 @@ class RollbackSnapshotTest(unittest.TestCase):
         status.rollback()
 
         self.assertEqual(status.entry['scene_history'], ['scene-0'])
-        self.assertEqual(status.save.call_count, 2)
-        status.save.assert_called_with(force=True)
+        self.assertEqual(document.update.call_count, 1)
+        document.set.assert_not_called()
 
     def test_namespaceを含むPlayerStatus文書IDを使う(self):
         snapshot = Mock()
@@ -230,6 +239,193 @@ class RollbackSnapshotTest(unittest.TestCase):
         self.assertEqual(status.id, 'shared:line:user-1')
         fake_db.collection.assert_called_once_with('player_status')
         collection.document.assert_called_once_with('shared:line:user-1')
+
+
+class RollbackConcurrencyTest(unittest.TestCase):
+    def setUp(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.store = LocalStateStore(directory.name)
+        spec = importlib.util.spec_from_file_location(
+            'models_for_concurrent_rollback_test', PROJECT_ROOT / 'models.py')
+        self.models = importlib.util.module_from_spec(spec)
+        with patch('cloud_backend.create_state_store', return_value=self.store):
+            spec.loader.exec_module(self.models)
+
+    def _player(self):
+        return self.models.PlayerStatusDB('shared', 'line:user,U1')
+
+    def _seed(self):
+        status = self._player()
+        status.scene = 'before'
+        status['$count'] = 1
+        status.save()
+
+    def test_公開保存の戻り値を呼出し元へ返す(self):
+        with patch.object(self.store, 'save_global_bot_variables', return_value=7) as publish:
+            self.assertEqual(7, self.models.GlobalBotVariablesDB.save('bot', 'scenario-reference'))
+        publish.assert_called_once_with('bot', 'scenario-reference')
+
+    def test_同じ公開世代の記録だけなら保存versionとDB書込みを増やさない(self):
+        seeded = self._player()
+        stamp_scenario_generation(seeded, 'bot_a', 3)
+        seeded.save()
+        before = self.store.load_player_status(seeded.id)
+        unchanged = self._player()
+        with patch.object(self.store, 'update_player_status', wraps=self.store.update_player_status) as update:
+            stamp_scenario_generation(unchanged, 'bot_a', 3)
+            unchanged.save()
+        update.assert_not_called()
+        self.assertEqual(before, self.store.load_player_status(seeded.id))
+
+    def test_新しい公開世代の記録は保存し巻戻しで前の世代へ戻す(self):
+        seeded = self._player()
+        seeded.scenario_generations = {'bot_a': 3, 'bot_b': 7}
+        seeded.save()
+        before = self.store.load_player_status(seeded.id)
+        changed = self._player()
+        stamp_scenario_generation(changed, 'bot_a', 4)
+        changed.save()
+        after = self.store.load_player_status(changed.id)
+        self.assertNotEqual(before.version, after.version)
+        self.assertEqual({'bot_a': 4, 'bot_b': 7}, after.data['scenario_generations'])
+        changed.rollback()
+        self.assertEqual(before.data, self.store.load_player_status(changed.id).data)
+
+    def test_世代metadataはflagsと分離し共有namespaceのBot別情報を保存する(self):
+        status = self._player()
+        self.assertEqual({}, status.scenario_generations)
+        generations = {'bot_a': 4, 'bot_b': 7, 'fixed': None}
+        status.scenario_generations = generations
+        generations['bot_a'] = 99
+        self.assertEqual({'bot_a': 4, 'bot_b': 7, 'fixed': None}, status.scenario_generations)
+        self.assertNotIn('scenario_generations', status.keys())
+        status.save()
+        stored = self.store.load_player_status(status.id)
+        self.assertEqual('{}', stored.data['value'])
+        self.assertEqual(status.scenario_generations, self._player().scenario_generations)
+
+    def test_世代だけの変更も保存し古い保存の欠落を0に変換しない(self):
+        self.store.force_put_player_status('shared:line:user,U1', {
+            'scene': 'old', 'action_token': 'old-action', 'value': '{"$flag": 1}',
+        })
+        status = self._player()
+        self.assertIsNone(status.scenario_generations)
+        status['$flag'] = 2
+        status.save()
+        self.assertIsNone(self._player().scenario_generations)
+        previous_version = status.last_update_time
+        status.scenario_generations = {'bot_a': None}
+        status.save()
+        self.assertNotEqual(previous_version, status.last_update_time)
+        self.assertEqual({'bot_a': None}, self._player().scenario_generations)
+        self.assertEqual(2, self._player()['$flag'])
+
+    def test_保存済みmetadataの巻戻しと明示resetを維持する(self):
+        status = self._player()
+        status.scenario_generations = {'bot_a': 1}
+        status.save()
+        changed = self._player()
+        changed.scenario_generations = {'bot_a': 2, 'bot_b': 3}
+        changed.save()
+        changed.rollback()
+        self.assertEqual({'bot_a': 1}, changed.scenario_generations)
+        self.assertEqual({'bot_a': 1}, self._player().scenario_generations)
+        changed.reset()
+        self.assertEqual({}, changed.scenario_generations)
+        changed.save()
+        self.assertEqual({}, self._player().scenario_generations)
+
+    def test_後続Botが保存した世代情報も古い巻戻しから保護する(self):
+        first = self._player()
+        first.scenario_generations = {'bot_a': 1}
+        first.save()
+        second = self._player()
+        second.scenario_generations = {'bot_a': 1, 'bot_b': 2}
+        second.save()
+        with self.assertRaises(RollbackConflictError):
+            first.rollback()
+        self.assertEqual({'bot_a': 1, 'bot_b': 2}, self._player().scenario_generations)
+
+    def test_後続保存を保護し巻戻し競合を呼出し元へ伝える(self):
+        for existing in (False, True):
+            with self.subTest(existing=existing):
+                self.store.delete_player_status('shared:line:user,U1')
+                if existing:
+                    self._seed()
+                first = self._player()
+                first.scene = 'first'
+                first.save()
+                second = self._player()
+                second.scene = 'second'
+                second['$count'] = 2
+                second.save()
+                winner = self.store.load_player_status(second.id)
+                with self.assertRaises(RollbackConflictError):
+                    first.rollback()
+                self.assertEqual(winner, self.store.load_player_status(second.id))
+
+    def test_自分の保存だけを戻し二度目の巻戻しはDBを変更しない(self):
+        for existing in (False, True):
+            with self.subTest(existing=existing):
+                self.store.delete_player_status('shared:line:user,U1')
+                if existing:
+                    self._seed()
+                before = self.store.load_player_status('shared:line:user,U1')
+                status = self._player()
+                status.scene = 'first'
+                status['$count'] = 2
+                status.save()
+                with patch.object(self.store, 'update_player_status', wraps=self.store.update_player_status) as update, \
+                        patch.object(self.store, 'delete_player_status', wraps=self.store.delete_player_status) as delete:
+                    status.rollback()
+                    status.rollback()
+                self.assertEqual((1, 0) if existing else (0, 1), (update.call_count, delete.call_count))
+                restored = self.store.load_player_status(status.id)
+                self.assertEqual(before.data if before else None, restored.data if restored else None)
+
+    def test_保存なしの巻戻しはDBを書き換えず未保存の値だけ戻す(self):
+        for existing in (False, True):
+            with self.subTest(existing=existing):
+                self.store.delete_player_status('shared:line:user,U1')
+                if existing:
+                    self._seed()
+                status = self._player()
+                status['$count'] = 2
+                other = self._player()
+                other['$count'] = 3
+                other.save()
+                winner = self.store.load_player_status(status.id)
+                with patch.object(self.store, 'update_player_status') as update, \
+                        patch.object(self.store, 'delete_player_status') as delete:
+                    status.rollback()
+                update.assert_not_called()
+                delete.assert_not_called()
+                self.assertEqual(1 if existing else None, status.get('$count'))
+                self.assertEqual(winner, self.store.load_player_status(status.id))
+
+    def test_巻戻しの一般DB障害は隠さない(self):
+        for existing in (False, True):
+            with self.subTest(existing=existing):
+                self.store.delete_player_status('shared:line:user,U1')
+                if existing:
+                    self._seed()
+                status = self._player()
+                status.scene = 'first'
+                status.save()
+                operation = 'update_player_status' if existing else 'delete_player_status'
+                with patch.object(self.store, operation, side_effect=StateStoreError('保存先の障害')):
+                    with self.assertRaisesRegex(RollbackError, '保存先の障害'):
+                        status.rollback()
+
+    def test_明示した強制保存は競合を上書きできる(self):
+        self._seed()
+        first, second = self._player(), self._player()
+        second.scene = 'second'
+        second.save()
+        first.scene = 'forced'
+        first.save(force=True)
+        self.assertEqual('forced', self.store.load_player_status(first.id).data['scene'])
 
 
 if __name__ == '__main__':

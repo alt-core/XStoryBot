@@ -76,6 +76,7 @@ def prepare_settings(config, bot_name, scenario_uri, asset_urls):
     params.update({
         'enabled': True,
         'scenario_uri': scenario_uri,
+        'follow_latest_scenario': False,
         'signing_key': key,
         'deployment': store.store_id,
         'scenario_compatibility_epoch': params.get('scenario_compatibility_epoch') or 'local-v1',

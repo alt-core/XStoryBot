@@ -39,6 +39,9 @@ python3 -m unittest \
     tests.test_scenario_formatting \
     tests.test_scenario_progression \
     tests.test_runtime_isolation \
+    tests.test_runtime_recovery \
+    tests.test_request_deadline \
+    tests.test_scenario_reload \
     tests.test_aws_deferred_tasks \
     tests.test_post_response_tasks \
     tests.test_state_namespace \
@@ -51,6 +54,7 @@ python3 -m unittest \
     tests.plugin.test_images \
     tests.plugin.test_twilio \
     tests.plugin.test_webchat \
+    tests.plugin.test_webchat_follow \
     tests.plugin.test_webchat_runtime_e2e \
     tests.plugin.test_webchat_liff \
     tests.test_webchat_dev_server \

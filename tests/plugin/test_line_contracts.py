@@ -7,6 +7,8 @@ action への変換、送信失敗の分類と再試行、Webhook callback の H
 """
 
 import base64
+import copy
+from contextlib import ExitStack
 import hashlib
 import hmac
 import importlib.util
@@ -26,9 +28,11 @@ import requests
 from webtest import TestApp
 
 from cloud_backend import factory as backend_factory
+from cloud_backend.contracts import RollbackConflictError, SaveResultUnknownError
 from plugin.line import api as line_api
 from plugin.line.api import LineApiError
 from plugin.line.webhook import InvalidSignatureError
+from scenario_selection import ScenarioSelection
 import utility as utility_module
 
 
@@ -87,6 +91,7 @@ def _base_stubs():
             utility_module.encode_line_video_tracking_id),
         decode_line_video_tracking_id=(
             utility_module.decode_line_video_tracking_id),
+        redact_line_payload=lambda value: utility_module.redact_line_payload(value),
         sanitize_action=lambda value: (
             ' ' + value if value.startswith(('*', '＊', '#', '＃', ':', '：')) else value),
     )
@@ -213,7 +218,7 @@ class LineWebhookContractTest(unittest.TestCase):
         def parse_webhook(body, signature):
             self.trace.append('parse')
             expected = base64.b64encode(hmac.new(
-                self.secret.encode('utf-8'), body.encode('utf-8'), hashlib.sha256
+                self.secret.encode('utf-8'), body, hashlib.sha256
             ).digest()).decode('ascii')
             if not hmac.compare_digest(signature, expected):
                 raise InvalidSignatureError()
@@ -238,6 +243,7 @@ class LineWebhookContractTest(unittest.TestCase):
             'utility',
             make_error_json=lambda status, message: json.dumps({'status': status, 'message': message}),
             make_ok_json=lambda message: json.dumps({'message': message}),
+            redact_line_payload=lambda value: utility_module.redact_line_payload(value),
         )
         replacements = {
             'bottle': bottle,
@@ -245,6 +251,7 @@ class LineWebhookContractTest(unittest.TestCase):
             'utility': utility,
             'main': _module('main', get_bot=Mock(return_value=self.bot)),
             'users': _module('users'),
+            'aws_request_context': _module('aws_request_context', get_lambda_deadline=lambda: None),
         }
         self.webapi = _load_module(
             '_line_contract_webapi', 'plugin/line/webapi.py', replacements)
@@ -288,7 +295,7 @@ class LineWebhookContractTest(unittest.TestCase):
         self.assertEqual(['parse'], self.trace)
         info.assert_not_called()
 
-    def test_valid_signature_logs_body_only_after_parse_then_reloads(self):
+    def test_valid_signature_logs_body_only_after_parse_without_early_reload(self):
         body = '{"events":[]}'
         signature = base64.b64encode(hmac.new(
             self.secret.encode('utf-8'), body.encode('utf-8'), hashlib.sha256
@@ -298,10 +305,163 @@ class LineWebhookContractTest(unittest.TestCase):
                 self.webapi.logging, 'info',
                 side_effect=lambda *_args, **_kwargs: self.trace.append('log')) as info:
             result = self.webapi.callback('bot')
-        self.assertEqual(['parse', 'log', 'reload'], self.trace)
-        info.assert_called_once_with('Request body: {}'.format(body))
+        self.assertEqual(['parse', 'log'], self.trace)
+        self.bot.check_reload.assert_not_called()
+        info.assert_called_once_with('Request body: %s', '{"events": []}')
         self.assertEqual({'message': 'OK'}, json.loads(result))
         self.interface.create_context_from_line_event.assert_called_once_with({'type': 'message'})
+
+
+class LineWebhookHttpTest(unittest.TestCase):
+    def setUp(self):
+        interface_module = _load_module(
+            '_line_http_interface', 'plugin/line/interface.py', _interface_replacements())
+        self.interface = interface_module.LinePlugin_Interface('bot', {
+            'line_access_token': 'artificial-access-token',
+            'line_channel_secret': 'artificial-channel-secret',
+        })
+        self.bot = SimpleNamespace(
+            get_interface=lambda _name: self.interface,
+            check_reload=Mock(), handle_action=Mock(return_value='OK'))
+        self.webapi = _load_module(
+            '_line_http_webapi', 'plugin/line/webapi.py', {
+                'main': _module('main', get_bot=lambda _name: self.bot),
+                'auth': _module('auth'),
+            })
+        self.client = TestApp(self.webapi.app)
+
+    def _post(self, body, *, signature=None, status=200):
+        if signature is None:
+            signature = base64.b64encode(hmac.new(
+                self.interface.line_channel_secret.encode('utf-8'), body, hashlib.sha256,
+            ).digest()).decode('ascii')
+        return self.client.post(
+            '/line/callback/bot', body, headers={'X-Line-Signature': signature},
+            content_type='application/json', status=status, expect_errors=status >= 400)
+
+    @staticmethod
+    def _event(index):
+        return {
+            'type': 'message', 'webhookEventId': f'event-{index}',
+            'source': {'type': 'user', 'userId': 'Utest'},
+            'replyToken': f'artificial-reply-token-{index}',
+            'message': {'type': 'text', 'text': f'入力{index}'},
+        }
+
+    def test_署名が不正なら不正UTF8でも401で本文を記録しない(self):
+        with patch.object(self.webapi.logging, 'info') as info:
+            self._post(b'\xff', signature='invalid', status=401)
+        info.assert_not_called()
+        self.bot.check_reload.assert_not_called()
+        self.bot.handle_action.assert_not_called()
+
+    def test_AWSのcontext不備でも署名不正を先に401で拒否する(self):
+        with patch.dict(os.environ, {'AWS_LAMBDA_FUNCTION_NAME': 'artificial-api'}):
+            self._post(b'\xff', signature='invalid', status=401)
+        self.bot.check_reload.assert_not_called()
+        self.bot.handle_action.assert_not_called()
+
+    def test_署名済みの不正UTF8とJSONと構造は400で処理しない(self):
+        for body in (b'\xff', b'{', b'[]', b'{"events":null}', b'{"events":[1]}'):
+            with self.subTest(body=body), patch.object(self.webapi.logging, 'info') as info:
+                self._post(body, status=400)
+                info.assert_not_called()
+        self.bot.check_reload.assert_not_called()
+        self.bot.handle_action.assert_not_called()
+
+    def test_未知sourceを挟んでも前後のeventを処理して200を返す(self):
+        events = [self._event(1), {'type': 'delivery', 'webhookEventId': 'event-2'}, self._event(3)]
+        body = json.dumps({'events': events}, ensure_ascii=False).encode('utf-8')
+        with patch.object(self.webapi.logging, 'warning') as warning:
+            result = self._post(body)
+        self.assertEqual(200, result.status_int)
+        self.assertEqual(['入力1', '入力3'], [
+            call.args[0].action for call in self.bot.handle_action.call_args_list])
+        warning.assert_called_once()
+
+    def test_未知sourceやsourceなしは状態を作らず無視する(self):
+        for source in ({'type': 'unknown'}, 'unknown', None):
+            event = dict(self._event(1), source=source)
+            with self.subTest(source=source), patch.object(self.webapi.logging, 'warning'):
+                self._post(json.dumps({'events': [event]}).encode('utf-8'))
+        self.bot.handle_action.assert_not_called()
+
+    def test_既知sourceの必須ID欠落や型不正は500で伝える(self):
+        for source in (
+                {'type': 'user'}, {'type': 'user', 'userId': ''},
+                {'type': 'group', 'groupId': None}, {'type': 'room', 'roomId': 1}):
+            event = dict(self._event(1), source=source)
+            with self.subTest(source=source):
+                self._post(json.dumps({'events': [event]}).encode('utf-8'), status=500)
+        self.bot.handle_action.assert_not_called()
+
+    def test_eventの一般例外は既存どおり500にし以後を処理しない(self):
+        malformed = self._event(2)
+        del malformed['message']
+        body = json.dumps({'events': [self._event(1), malformed, self._event(3)]}).encode('utf-8')
+        self._post(body, status=500)
+        self.assertEqual(1, self.bot.handle_action.call_count)
+
+    def test_既存のNone失敗は200で次eventを処理する(self):
+        self.bot.handle_action.side_effect = [None, 'OK', 'OK']
+        body = json.dumps({'events': [self._event(index) for index in range(3)]}).encode('utf-8')
+        self._post(body)
+        self.assertEqual(3, self.bot.handle_action.call_count)
+
+    def test_Rollback競合だけは当該eventを停止し後続を処理する(self):
+        def handle(context):
+            context.status = SimpleNamespace(scene='story/scene')
+            if context.action == '入力1':
+                raise RollbackConflictError('競合')
+            return 'OK'
+        self.bot.handle_action.side_effect = handle
+        body = json.dumps({'events': [self._event(1), self._event(2)]}).encode('utf-8')
+        with self.assertLogs(level='ERROR') as logs:
+            self._post(body)
+        self.assertEqual(2, self.bot.handle_action.call_count)
+        self.assertIn('event_id=event-1', logs.output[0])
+        self.assertIn('action=入力1 scene=story/scene', logs.output[0])
+        self.assertIn('RollbackConflictError', logs.output[0])
+
+    def test_保存結果不明も当該eventを停止し後続を処理する(self):
+        def handle(context):
+            context.status = SimpleNamespace(scene='story/scene')
+            if context.action == '入力1':
+                raise SaveResultUnknownError('保存を確認できません')
+            return 'OK'
+        self.bot.handle_action.side_effect = handle
+        body = json.dumps({'events': [self._event(1), self._event(2)]}).encode('utf-8')
+        with self.assertLogs(level='ERROR') as logs:
+            self._post(body)
+        self.assertEqual(2, self.bot.handle_action.call_count)
+        self.assertIn('event_id=event-1', logs.output[0])
+        self.assertIn('state recovery failed', logs.output[0])
+        self.assertIn('SaveResultUnknownError', logs.output[0])
+        self.assertNotIn('rollback failed', logs.output[0])
+
+    def test_受信したAWSの期限を全eventで共有し期限なしも維持する(self):
+        body = json.dumps({'events': [self._event(1), self._event(2)]}).encode('utf-8')
+        for deadline in (None, 128):
+            self.bot.handle_action.reset_mock()
+            with self.subTest(deadline=deadline), patch.object(
+                    self.webapi, 'get_lambda_deadline', return_value=deadline) as clock:
+                self._post(body)
+                clock.assert_called_once()
+            self.assertEqual([deadline, deadline], [
+                call.args[0].action_deadline for call in self.bot.handle_action.call_args_list])
+
+    def test_認証済みログはtokenを隠し通常本文とUIDを残す(self):
+        event = self._event(1)
+        event.update(type='postback', postback={'data': '#選択@@ActionSecret'})
+        body = json.dumps({'events': [event, self._event(2)]}, ensure_ascii=False).encode('utf-8')
+        with self.assertLogs(level='INFO') as logs:
+            self._post(body)
+        logged = '\n'.join(logs.output)
+        self.assertNotIn('artificial-reply-token', logged)
+        self.assertNotIn('ActionSecret', logged)
+        self.assertIn('#選択', logged)
+        self.assertIn('Utest', logged)
+        self.assertIn('入力2', logged)
 
 
 class LineInterfaceContractTest(unittest.TestCase):
@@ -343,25 +503,89 @@ class LineInterfaceContractTest(unittest.TestCase):
     def _api_error(status):
         return LineApiError(status, 'test')
 
-    def test_LINEの5xxと429は送信側で短く再試行する(self):
-        result = self._send([self._api_error(500), self._api_error(429), None])
+    def test_LINEの5xxは同じ内容で送信側だけが再試行する(self):
+        result = self._send([self._api_error(500), None])
         self.assertEqual('OK', result)
-        self.assertEqual(3, self.interface.api.reply.call_count)
+        self.assertEqual(2, self.interface.api.reply.call_count)
+        self.assertEqual(self.interface.api.reply.call_args_list[0].args,
+                         self.interface.api.reply.call_args_list[1].args)
 
-    def test_LINEの409は送信済みとして扱う(self):
-        result = self._send([self._api_error(409)])
+    def test_LINEのpushの409だけを受付済みとして扱う(self):
+        context = self._sending_context()
+        context.event = None
+        self.interface.api.push.side_effect = self._api_error(409)
+        result = self.interface.respond_reaction(context, [([None, 'こんにちは'], None)])
         self.assertEqual('OK', result)
-        self.assertEqual(1, self.interface.api.reply.call_count)
+        self.assertEqual(1, self.interface.api.push.call_count)
+        with self.assertRaises(LineApiError):
+            self._send([self._api_error(409)])
 
     def test_LINEの400は再送せず即座に上へ返す(self):
         with self.assertRaises(LineApiError):
             self._send([self._api_error(400)])
         self.assertEqual(1, self.interface.api.reply.call_count)
 
-    def test_再試行を尽くした通信例外は上へ返す(self):
+    def test_LINEの429も既存どおり再試行する(self):
+        self.assertEqual('OK', self._send([self._api_error(429), None]))
+        self.assertEqual(2, self.interface.api.reply.call_count)
+
+    def test_再試行を尽くした通信例外は元の型で上へ返す(self):
         with self.assertRaises(requests.ConnectionError):
             self._send(requests.ConnectionError('down'))
         self.assertEqual(3, self.interface.api.reply.call_count)
+
+    def test_AWSの共有期限に残時間のtimeoutを収める(self):
+        context = self._sending_context()
+        context.action_deadline = 101
+        with patch.object(self.interface_module.time, 'monotonic', return_value=100):
+            self.interface.respond_reaction(context, [([None, '本文'], None)])
+        self.assertEqual((0.5, 0.5), self.interface.api.reply.call_args.kwargs['timeout'])
+        self.assertEqual(101, context.action_deadline)
+
+    def test_期限切れは未送信で例外にしメニューも省略しない(self):
+        context = self._sending_context()
+        context.action_deadline = 100
+        with patch.object(self.interface_module.time, 'monotonic', return_value=100):
+            with self.assertRaises(TimeoutError):
+                self.interface.respond_reaction(context, [([None, '本文'], None)])
+            with self.assertRaises(TimeoutError):
+                self.interface.link_rich_menu(context, 'richmenu-artificial')
+        self.interface.api.reply.assert_not_called()
+        self.interface.api.link_rich_menu.assert_not_called()
+
+    def test_再試行のsleepが期限を越えるなら元のエラーで終了する(self):
+        context = self._sending_context()
+        context.action_deadline = 101
+        self.interface.line_api_retry_sleep = 1
+        failure = requests.ReadTimeout('lost')
+        self.interface.api.reply.side_effect = failure
+        with patch.object(self.interface_module.time, 'monotonic', return_value=100), \
+                patch.object(self.interface_module.time, 'sleep') as sleep:
+            with self.assertRaises(requests.ReadTimeout) as caught:
+                self.interface.respond_reaction(context, [([None, '本文'], None)])
+        self.assertIs(failure, caught.exception)
+        self.interface.api.reply.assert_called_once()
+        sleep.assert_not_called()
+
+    def test_期限のない経路は既存の送信と外側の再試行設定を保つ(self):
+        self.assertEqual(5, self.interface.line_api_retry_count)
+        self.assertEqual(3, self.interface.get_retry_count())
+        self.interface.api.reply.side_effect = requests.ReadTimeout('lost')
+        context = self._sending_context()
+        self.interface.line_api_retry_count = 5
+        with patch.object(self.interface_module.time, 'sleep'):
+            with self.assertRaises(requests.ReadTimeout):
+                self.interface.respond_reaction(context, [([None, '本文'], None)])
+        self.assertEqual(5, self.interface.api.reply.call_count)
+        self.assertTrue(all('timeout' not in call.kwargs for call in self.interface.api.reply.call_args_list))
+
+    def test_メニューのAPI失敗を握り潰さず同じ例外を返す(self):
+        context = self._sending_context()
+        failure = LineApiError(400, 'missing')
+        self.interface.api.link_rich_menu.side_effect = failure
+        with self.assertRaises(LineApiError) as caught:
+            self.interface.link_rich_menu(context, 'richmenu-artificial')
+        self.assertIs(failure, caught.exception)
 
     def test_通信例外でもLINEのエラーでもない例外は再試行しない(self):
         class Unexpected(Exception):
@@ -528,10 +752,10 @@ class LineInterfaceContractTest(unittest.TestCase):
                 self.assertEqual(('line', expected), (context.user.service, context.user.user_id))
                 self.assertEqual(source['type'], context.source_type)
                 self.assertIs(event, context.event)
-        with self.assertRaises(NotImplementedError):
-            self.interface.create_context_from_line_event(
+        with patch.object(self.interface_module.logging, 'warning'):
+            self.assertIsNone(self.interface.create_context_from_line_event(
                 {'type': 'message', 'source': {'type': 'unknown'},
-                 'message': {'type': 'text', 'text': 'やあ'}})
+                 'message': {'type': 'text', 'text': 'やあ'}}))
 
     def test_actionにならないeventはcontextを作らない(self):
         event = {'type': 'memberJoined', 'source': {'type': 'group', 'groupId': 'G1'}}
@@ -543,7 +767,22 @@ class LineInterfaceContractTest(unittest.TestCase):
         with patch.object(self.interface_module.logging, 'info') as info:
             self.interface._reply_message(context, messages)
         info.assert_called_once_with(
-            "event unfollow doesnt have reply_token: ['生成本文']")
+            "event %s doesnt have reply_token: %s", 'unfollow', ['生成本文'])
+
+    def test_未送信の生成messageログは本文を残し選択肢tokenを隠す(self):
+        context = SimpleNamespace(event={'type': 'unfollow'})
+        messages = [{
+            'type': 'text', 'text': '表示する本文',
+            'quickReply': {'items': [{'type': 'action', 'action': {
+                'type': 'postback', 'label': '選択', 'data': '#next@@ActionSecret',
+            }}]},
+        }]
+        with self.assertLogs(level='INFO') as logs:
+            self.interface._reply_message(context, messages)
+        self.assertNotIn('ActionSecret', logs.output[0])
+        self.assertIn('表示する本文', logs.output[0])
+        self.assertIn('#next', logs.output[0])
+        self.assertEqual('#next@@ActionSecret', messages[0]['quickReply']['items'][0]['action']['data'])
         self.interface.api.reply.assert_not_called()
         self.interface.api.push.assert_not_called()
 
@@ -593,6 +832,160 @@ class LinePushRetryKeyTest(unittest.TestCase):
         self.assertNotIn('X-Line-Retry-Key', self.posts[2][1])
 
 
+class LineDeliveryRuntimeTest(unittest.TestCase):
+    """実RuntimeとLINE送信を通し、既存再試行とAWSの期限を確認する。"""
+
+    def setUp(self):
+        settings = _module('settings', CONSTANTS={})
+        self.runtime = _load_module('_line_delivery_runtime', 'runtime.py', {'settings': settings})
+        interface_module = _load_module('_line_delivery_interface', 'plugin/line/interface.py', {})
+        self.interface = interface_module.LinePlugin_Interface('bot', {
+            'line_access_token': 'artificial', 'line_channel_secret': 'artificial',
+            'line_api_retry_sleep': 0})
+        self.interface.api = Mock()
+        self._original_create_context = self.interface.create_context
+        self.interface.create_context = self._context
+        self.bot = self.runtime.BotRuntime('bot', {'line': self.interface}, None)
+        self.bot.scenario = SimpleNamespace(version=3, constants={})
+        self.selection = ScenarioSelection(self.bot.scenario, 'fixture-uri', None)
+        self.persisted = {'count': 0, 'action_token': 'old'}
+        self.generations = {}
+        self.trace = []
+        self.register_child = Mock()
+        self.use_menu = False
+        test = self
+
+        class Director:
+            def __init__(self, scenario, context):
+                self.context = context
+
+            def plan_reactions(self):
+                context = self.context
+                test.trace.append('plan')
+                context.status.count += 1
+                context.status.action_token = f'token-{context.status.count}'
+                context.reactions = [([None, f'本文{context.status.count}'], None)]
+                if test.use_menu:
+                    context.reactions.insert(0, ([None, '@richmenu', 'richmenu-artificial'], None))
+                context.pending_tasks.append((test.register_child, {
+                    'bot': 'child', 'action': '#next', 'user': 'line:user,U1'}))
+
+        self.runtime._director_class = Director
+
+    def _context(self, user, action, attrs):
+        context = self._original_create_context(user, action, attrs)
+
+        def load():
+            self.trace.append('load')
+            context.old = copy.deepcopy(self.persisted)
+            context.old_generations = copy.deepcopy(self.generations)
+            context.status = SimpleNamespace(
+                **self.persisted, scene='scene', scenario_generations=copy.deepcopy(self.generations))
+
+        def save():
+            self.trace.append('save')
+            self.persisted.update(count=context.status.count, action_token=context.status.action_token)
+            self.generations = copy.deepcopy(context.status.scenario_generations)
+
+        def rollback():
+            self.trace.append('rollback')
+            self.persisted = context.old
+            self.generations = context.old_generations
+
+        context.load_status, context.save_status, context.rollback_status = load, save, rollback
+        return context
+
+    def _runtime_scope(self):
+        from plugin.line.default_commands import LineDefaultCommandsPlugin_Runtime
+        menu_runtime = LineDefaultCommandsPlugin_Runtime({'alt_text': 'artificial'})
+
+        def construct(context, sender, message, options, children):
+            if message == '@richmenu':
+                return menu_runtime.construct_response(context, sender, message, options, children)
+            return False
+
+        scope = ExitStack()
+        for patcher in (
+                patch.object(self.runtime.commands, 'get_runtime_object_dictionary', return_value={}),
+                patch.object(self.runtime.commands, 'invoke_runtime_construct_response', side_effect=construct),
+                patch.object(self.runtime.task_client, 'defer_until_response', return_value=True),
+                patch('plugin.line.interface.time.sleep')):
+            scope.enter_context(patcher)
+        return scope
+
+    def run_action(self, side_effect, *, push=False, deadline=None):
+        from users import User
+        context = self.interface.create_context(User('line', 'user,U1'), '入力', {})
+        if not push:
+            context.event = {'type': 'message', 'replyToken': 'artificial'}
+        if deadline is not None:
+            context.action_deadline = deadline
+        api = self.interface.api.push if push else self.interface.api.reply
+        api.side_effect = side_effect
+        with self._runtime_scope(), patch.object(self.runtime.BotRuntime, '_log_failure') as failure:
+            result = self.bot.handle_action(context, selection=self.selection)
+        return result, failure
+
+    def test_期限のない返信とpushは既存どおり内側5回と外側4回を試す(self):
+        for push in (False, True):
+            with self.subTest(push=push):
+                self.trace.clear()
+                self.interface.api.reset_mock()
+                result, _failure = self.run_action(requests.ReadTimeout('lost'), push=push)
+                self.assertIsNone(result)
+                api = self.interface.api.push if push else self.interface.api.reply
+                self.assertEqual(20, api.call_count)
+                self.assertEqual(['load', 'plan', 'save', 'rollback'] * 4, self.trace)
+                self.assertEqual({'count': 0, 'action_token': 'old'}, self.persisted)
+                self.register_child.assert_not_called()
+
+    def test_pushの送信内再試行は宛先内容keyを固定する(self):
+        result, failure = self.run_action([requests.ReadTimeout('lost'), None], push=True)
+        self.assertEqual('OK', result)
+        calls = self.interface.api.push.call_args_list
+        self.assertEqual(2, len(calls))
+        self.assertEqual(calls[0].args, calls[1].args)
+        self.assertEqual(calls[0].kwargs['retry_key'], calls[1].kwargs['retry_key'])
+        self.assertEqual(['load', 'plan', 'save'], self.trace)
+        self.register_child.assert_called_once()
+        failure.assert_not_called()
+
+    def test_メニュー通信失敗は本文を送らず巻き戻す(self):
+        self.use_menu = True
+        self.interface.api.link_rich_menu.side_effect = LineApiError(400, 'missing')
+        with self.assertLogs(level='ERROR'):
+            result, _failure = self.run_action(None)
+        self.assertIsNone(result)
+        self.assertEqual(4, self.interface.api.link_rich_menu.call_count)
+        self.interface.api.reply.assert_not_called()
+        self.assertEqual({'count': 0, 'action_token': 'old'}, self.persisted)
+        self.register_child.assert_not_called()
+
+    def test_AWSで失敗中に期限切れなら次の計画と送信を始めない(self):
+        clock = [90]
+        def timeout(*args, **kwargs):
+            clock[0] = 101
+            raise requests.ReadTimeout('lost')
+        with patch.object(self.runtime.time, 'monotonic', side_effect=lambda: clock[0]):
+            result, _failure = self.run_action(timeout, deadline=100)
+        self.assertIsNone(result)
+        self.assertEqual(['load', 'plan', 'save', 'rollback'], self.trace)
+        self.interface.api.reply.assert_called_once()
+        self.assertEqual({'count': 0, 'action_token': 'old'}, self.persisted)
+
+    def test_返信成功後の期限切れだけでは状態を戻さず子を登録する(self):
+        clock = [90]
+        def accepted(*args, **kwargs):
+            clock[0] = 101
+        with patch.object(self.runtime.time, 'monotonic', side_effect=lambda: clock[0]):
+            result, failure = self.run_action(accepted, deadline=100)
+        self.assertEqual('OK', result)
+        self.assertEqual(['load', 'plan', 'save'], self.trace)
+        self.assertEqual({'count': 1, 'action_token': 'token-1'}, self.persisted)
+        self.register_child.assert_called_once()
+        failure.assert_not_called()
+
+
 class LineDefaultCommandsContractTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -626,13 +1019,13 @@ class LineDefaultCommandsContractTest(unittest.TestCase):
             [{'type': 'action', 'action': {'type': 'message', 'label': '選択肢', 'text': '返答'}}],
             message['quickReply']['items'])
 
-    def test_richmenuはinterfaceのapiで紐付ける(self):
+    def test_richmenuはinterfaceの紐付け処理へ委譲する(self):
         runtime = self.module.LineDefaultCommandsPlugin_Runtime({'alt_text': 'alt'})
-        interface = SimpleNamespace(api=Mock())
+        interface = SimpleNamespace(link_rich_menu=Mock())
         context = SimpleNamespace(
             response=[], source_id='U1', get_interface=lambda name: interface)
         runtime.construct_response(context, None, '@richmenu', ['richmenu-1'])
-        interface.api.link_rich_menu.assert_called_once_with('U1', 'richmenu-1')
+        interface.link_rich_menu.assert_called_once_with(context, 'richmenu-1')
         self.assertEqual([], context.response)
 
 
@@ -786,8 +1179,8 @@ class FirestoreAndImageTextContractTest(unittest.TestCase):
 
 class QuickReplyContractTest(unittest.TestCase):
     def _load(self, filename):
-        default_commands = _module(
-            'plugin.line.default_commands', REPLY_CMDS=('@reply',))
+        default_commands = _load_module(
+            '_line_contract_quick_reply_lint', 'plugin/line/default_commands.py', _base_stubs())
         replacements = {
             **_base_stubs(),
             **_plugin_packages(default_commands=default_commands),
@@ -798,7 +1191,7 @@ class QuickReplyContractTest(unittest.TestCase):
 
     def test_v3_builder_and_runtime_keep_guard_and_choice_mapping(self):
         module = self._load('quick_reply')
-        builder = Mock()
+        builder = Mock(assert_strlen=Mock())
         builder.make_control_flow_refernce_label.side_effect = ['##CF0', '##CF1']
         module.append_quick_reply(
             builder, '##Q_', ['選択1', '選択2=>表示2'], '話者', '##PLEASE')
@@ -829,7 +1222,7 @@ class QuickReplyContractTest(unittest.TestCase):
 
     def test_v2_builder_and_runtime_keep_retry_branch(self):
         module = self._load('quick_reply_v2')
-        builder = Mock()
+        builder = Mock(assert_strlen=Mock())
         module.append_quick_reply(
             builder, '##Q_', ['選択1', '選択2=>表示2'], '話者', '再選択')
         self.assertIn(

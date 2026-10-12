@@ -4,12 +4,17 @@ import importlib.util
 import json
 from pathlib import Path
 import sys
+import tempfile
 import types
 import unittest
 from unittest.mock import Mock, call, patch
 
 import cloud_backend
-from cloud_backend.contracts import ObjectNotFoundError, ObjectStoreError, StateStoreError
+from cloud_backend.contracts import (
+    ObjectNotFoundError, ObjectStoreError, RollbackConflictError, RollbackError,
+    SaveResultUnknownError, StateRecoveryError, StateStoreError)
+from cloud_backend.local.state_store import LocalStateStore
+from scenario_selection import ScenarioLoadError
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -22,6 +27,7 @@ def load_group_message_task_manager():
             'get_task', 'get_members_from_storage', 'update_task_status',
             'update_task', 'process_members_in_parallel', '_append_failed_member_list'):
         setattr(db_module.GroupMessageTaskDB, method, Mock())
+    db_module._test_state_store.get_group_message_task.return_value = {}
 
     users_module = types.ModuleType('users')
     users_module.get_group_members = Mock()
@@ -473,7 +479,8 @@ class GroupCheckpointTestBase(unittest.TestCase):
         self.task.update(update)
         return True
 
-    def send_members(self, _batch_task_id, member_ids, _task, _max_workers, _max_rate):
+    def send_members(self, _batch_task_id, member_ids, _task, _max_workers, _max_rate,
+                     stopped_members=None):
         self.sent.extend(member_ids)
         return len(member_ids), 0, member_ids, []
 
@@ -603,9 +610,9 @@ class GroupBatchCheckpointTest(GroupCheckpointTestBase):
                 self.task['error_messages'] = ['取消前の概要']
                 self.module.task_client.create_task.reset_mock()
 
-                def cancel_during_send(*args):
+                def cancel_during_send(*args, **kwargs):
                     self.task['status'] = self.db.STATUS_ABORTED
-                    return self.send_members(*args)
+                    return self.send_members(*args, **kwargs)
 
                 self.manager._process_batch_members.side_effect = cancel_during_send
                 response, status = self.invoke(batch_index)
@@ -617,7 +624,7 @@ class GroupBatchCheckpointTest(GroupCheckpointTestBase):
                 self.module.task_client.create_task.assert_not_called()
 
     def test_失敗記録時にも取消状態と概要を変更しない(self):
-        def cancel_and_fail(*_args):
+        def cancel_and_fail(*_args, **_kwargs):
             self.task.update(status=self.db.STATUS_ABORTED, error_messages=['利用者取消'])
             raise RuntimeError('処理失敗')
 
@@ -733,7 +740,7 @@ class GroupBatchCheckpointTest(GroupCheckpointTestBase):
     def test_失敗者一覧はcallbackの外で保存し概要を丸める(self):
         member_id = 'mock-line:user-0'
         self.manager._process_batch_members.side_effect = (
-            lambda *_args: (1, 1, ['mock-line:user-1'], [(member_id, '失敗' * 2000, 0)]))
+            lambda *_args, **_kwargs: (1, 1, ['mock-line:user-1'], [(member_id, '失敗' * 2000, 0)]))
         events = []
         original_update = self.update_task
 
@@ -843,9 +850,9 @@ class GcpGroupBatchCheckpointIntegrationTest(GroupCheckpointTestBase):
             lambda **kwargs: pending.append(kwargs['params']['batch_index']))
         overlapped = False
 
-        def send_overlapping_batch(*args):
+        def send_overlapping_batch(*args, **kwargs):
             nonlocal overlapped
-            result = self.send_members(*args)
+            result = self.send_members(*args, **kwargs)
             if not overlapped:
                 overlapped = True
                 self.assertEqual(self.invoke(0)[1], 200)
@@ -1475,6 +1482,323 @@ class GroupMessageTaskDBTest(unittest.TestCase):
         source = (PROJECT_ROOT / 'group_message_task_db.py').read_text()
         self.assertNotIn('from google.', source)
         self.assertNotIn('import google.', source)
+
+
+class GroupRollbackStopTest(unittest.TestCase):
+    """既存task保存と並列配信を通し、停止と取得失敗の回復を確認する。"""
+
+    def setUp(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.store = LocalStateStore(directory.name)
+        self.db_module = load_group_message_task_db()
+        self.db = self.db_module.GroupMessageTaskDB
+        self.db._state_store = self.store
+        self.objects = {}
+
+        def save(key, value):
+            self.objects[key] = value.encode('utf-8') if isinstance(value, str) else value
+            return 'opaque:' + key
+
+        def load(key):
+            if key not in self.objects:
+                raise ObjectNotFoundError('missing')
+            return self.objects[key]
+
+        self.db._object_store = Mock(store_private=Mock(side_effect=save),
+                                     load_private=Mock(side_effect=load))
+        self.module = load_group_message_task_manager()
+        self.module.GroupMessageTaskDB = self.db
+        from users import User
+        self.module.users.User = User
+        self.members = [User('line', 'user,' + name) for name in ('stop', 'failed', 'ok')]
+        self.module.users.get_group_members.return_value = self.members
+        interface = Mock(create_context=Mock(side_effect=lambda user, action, attrs: user.serialize()))
+        self.bot = Mock(get_interface=Mock(return_value=interface))
+
+        def action(member):
+            if member.endswith(',stop'):
+                raise RollbackConflictError('他の操作が状態を更新しました')
+            return None if member.endswith(',failed') else 'OK'
+
+        self.bot.handle_action.side_effect = action
+        self.manager = self.module.GroupMessageTaskManager('bot', bot_instance=self.bot)
+        self.store.create_group_message_task('root', {
+            'bot_name': 'bot', 'group_id': 'group-1', 'action': 'notice', 'attrs': {},
+            'status': self.db.STATUS_PENDING, 'total_members': 3, 'total_batches': 1,
+            'current_batch': 0, 'processed_members': 0, 'successful_members': 0,
+            'failed_members': 0, 'error_messages': [],
+        })
+
+    def test_停止者も失敗に数え他の利用者を処理し再送候補から外す(self):
+        result, status = self.manager.handle_batch_process_request(
+            'root', 0, batch_size=3, max_workers=1, max_rate=100)
+        self.assertEqual(200, status)
+        task = self.db.get_task('root')
+        self.assertEqual((1, 2), (task['successful_members'], task['failed_members']))
+        self.assertEqual(['line:user,stop'], task['stopped_member_ids'])
+        self.assertEqual(['line:user,failed'], self.db._get_failed_members_from_storage('root'))
+        self.assertEqual(3, self.bot.handle_action.call_count)
+        retry = self.db.retry_failed_members('root', 'tester')
+        self.assertEqual(['line:user,failed'], self.db.get_members_from_storage(retry))
+
+    def test_保存結果不明も失敗に数え他者を配信し再送から除外する(self):
+        saved_versions = []
+
+        def action(member):
+            if member.endswith(',stop'):
+                saved_versions.append(self.store.create_player_status(
+                    'bot:' + member, {'flags': {'progress': 1}}))
+                raise SaveResultUnknownError('保存後の応答を確認できません')
+            return None if member.endswith(',failed') else 'OK'
+
+        self.bot.handle_action.side_effect = action
+        result, status = self.manager.handle_batch_process_request(
+            'root', 0, batch_size=3, max_workers=3, max_rate=100)
+        self.assertEqual(200, status)
+        task = self.db.get_task('root')
+        self.assertEqual((3, 1, 2), (
+            task['processed_members'], task['successful_members'], task['failed_members']))
+        self.assertEqual(['line:user,stop'], task['stopped_member_ids'])
+        self.assertEqual(['line:user,failed'], self.db._get_failed_members_from_storage('root'))
+        self.assertEqual(3, self.bot.handle_action.call_count)
+        stored = self.store.load_player_status('bot:line:user,stop')
+        self.assertEqual(saved_versions[0], stored.version)
+        self.assertEqual({'progress': 1}, stored.data['flags'])
+
+        retry = self.db.retry_failed_members('root', 'tester')
+        self.assertEqual(['line:user,failed'], self.db.get_members_from_storage(retry))
+        self.bot.handle_action.reset_mock()
+        self.bot.handle_action.side_effect = None
+        self.bot.handle_action.return_value = 'OK'
+        self.assertEqual(200, self.manager.handle_batch_process_request(
+            retry, 0, batch_size=3, max_workers=3, max_rate=100)[1])
+        self.assertEqual(['line:user,failed'], [
+            call.args[0] for call in self.bot.handle_action.call_args_list])
+        self.assertEqual(stored, self.store.load_player_status('bot:line:user,stop'))
+
+    def test_再送の保存結果不明を祖先と既作成兄弟の再送から除外する(self):
+        self.store.update_group_message_task('root', lambda data: {
+            'status': self.db.STATUS_COMPLETED, 'failed_members': 2})
+        self.db._store_failed_member_list('root', ['line:user,stop', 'line:user,failed'])
+        first = self.db.retry_failed_members('root', 'tester')
+        sibling = self.db.retry_failed_members('root', 'tester')
+
+        def action(member):
+            if member.endswith(',stop'):
+                self.store.create_player_status(
+                    'bot:' + member, {'flags': {'progress': 1}})
+                raise SaveResultUnknownError('保存後の応答を確認できません')
+            return 'OK'
+
+        self.bot.handle_action.side_effect = action
+        result, status = self.manager.handle_batch_process_request(
+            first, 0, batch_size=3, max_workers=3, max_rate=100)
+        self.assertEqual(200, status)
+        for task_id in ('root', first):
+            self.assertEqual(['line:user,stop'], self.db.get_task(task_id)['stopped_member_ids'])
+        self.assertEqual((1, 1), (
+            self.db.get_task(first)['successful_members'], self.db.get_task(first)['failed_members']))
+        self.assertIsNone(self.db.retry_failed_members(first, 'tester'))
+        from_root = self.db.retry_failed_members('root', 'tester')
+        self.assertEqual(['line:user,failed'], self.db.get_members_from_storage(from_root))
+        stored = self.store.load_player_status('bot:line:user,stop')
+
+        self.bot.handle_action.reset_mock()
+        result, status = self.manager.handle_batch_process_request(
+            sibling, 0, batch_size=3, max_workers=3, max_rate=100)
+        self.assertEqual(200, status)
+        self.assertEqual(['line:user,failed'], [
+            call.args[0] for call in self.bot.handle_action.call_args_list])
+        self.assertEqual((1, 1), (
+            self.db.get_task(sibling)['successful_members'], self.db.get_task(sibling)['failed_members']))
+        self.assertEqual(stored, self.store.load_player_status('bot:line:user,stop'))
+
+    def test_全員のScenario取得失敗は500でcheckpointを進めず同じバッチで復旧する(self):
+        self.bot.handle_action.side_effect = ScenarioLoadError('シナリオを取得できません')
+        with self.assertLogs(level='ERROR'):
+            result, status = self.manager.handle_batch_process_request(
+                'root', 0, batch_size=3, max_workers=3, max_rate=100)
+        self.assertEqual(500, status)
+        task = self.db.get_task('root')
+        self.assertEqual(self.db.STATUS_FAILED, task['status'])
+        self.assertEqual((0, 0, 0, 0), (
+            task['current_batch'], task['processed_members'],
+            task['successful_members'], task['failed_members']))
+        self.assertEqual(3, self.bot.handle_action.call_count)
+        self.module.task_client.create_task.assert_not_called()
+
+        self.bot.handle_action.side_effect = None
+        self.bot.handle_action.return_value = 'OK'
+        result, status = self.manager.handle_batch_process_request(
+            'root', 0, batch_size=3, max_workers=3, max_rate=100)
+        self.assertEqual(200, status)
+        task = self.db.get_task('root')
+        self.assertEqual(self.db.STATUS_COMPLETED, task['status'])
+        self.assertEqual((1, 3, 3, 0), (
+            task['current_batch'], task['processed_members'],
+            task['successful_members'], task['failed_members']))
+        self.assertEqual(6, self.bot.handle_action.call_count)
+
+    def test_Scenario取得失敗と部分成功は200で成功者を失敗者再送に含めない(self):
+        def action(member):
+            if member.endswith(',stop'):
+                raise ScenarioLoadError('この状態に必要なシナリオを取得できません')
+            return None if member.endswith(',failed') else 'OK'
+        self.bot.handle_action.side_effect = action
+        result, status = self.manager.handle_batch_process_request(
+            'root', 0, batch_size=3, max_workers=3, max_rate=100)
+        self.assertEqual(200, status)
+        task = self.db.get_task('root')
+        self.assertEqual(self.db.STATUS_COMPLETED, task['status'])
+        self.assertEqual((1, 2), (task['successful_members'], task['failed_members']))
+        failed_members = {'line:user,stop', 'line:user,failed'}
+        self.assertEqual(failed_members, set(self.db._get_failed_members_from_storage('root')))
+        retry = self.db.retry_failed_members('root', 'tester')
+        self.assertEqual(failed_members, set(self.db.get_members_from_storage(retry)))
+
+        self.bot.handle_action.reset_mock()
+        self.bot.handle_action.side_effect = None
+        self.bot.handle_action.return_value = 'OK'
+        result, status = self.manager.handle_batch_process_request(
+            retry, 0, batch_size=3, max_workers=3, max_rate=100)
+        self.assertEqual(200, status)
+        self.assertEqual(failed_members, {
+            call.args[0] for call in self.bot.handle_action.call_args_list})
+        self.assertEqual(2, self.bot.handle_action.call_count)
+
+    def test_全員失敗でも通常失敗や巻戻し停止が混ざればバッチ全体を再試行しない(self):
+        for terminal_error in (None, RollbackConflictError('巻戻しできません')):
+            with self.subTest(terminal_error=terminal_error):
+                def action(member):
+                    if not member.endswith(',ok'):
+                        raise ScenarioLoadError('シナリオを取得できません')
+                    if terminal_error is not None:
+                        raise terminal_error
+                    return None
+                self.bot.handle_action.side_effect = action
+                stopped_members = []
+                result = self.manager._process_batch_members(
+                    'root_batch_0', [member.serialize() for member in self.members],
+                    self.db.get_task('root'), 3, 100, stopped_members=stopped_members)
+                self.assertEqual((0, 3), result[:2])
+                self.assertEqual(
+                    [] if terminal_error is None else ['line:user,ok'], stopped_members)
+
+    def test_再送の再送で停止しても祖先から再び候補に戻らない(self):
+        self.store.update_group_message_task('root', lambda data: {
+            'status': self.db.STATUS_COMPLETED, 'failed_members': 2})
+        failed = ['line:user,stop', 'line:user,failed']
+        self.db._store_failed_member_list('root', failed)
+        first = self.db.retry_failed_members('root', 'tester')
+        self.store.update_group_message_task(first, lambda data: {
+            'status': self.db.STATUS_COMPLETED, 'failed_members': 2})
+        self.db._store_failed_member_list(first, failed)
+        second = self.db.retry_failed_members(first, 'tester')
+        self.db.record_stopped_member_ids(second, ['line:user,stop'])
+        for task_id in ('root', first):
+            with self.subTest(task_id=task_id):
+                retry = self.db.retry_failed_members(task_id, 'tester')
+                self.assertEqual(['line:user,failed'], self.db.get_members_from_storage(retry))
+                self.assertEqual(['line:user,stop'], self.db.get_task(task_id)['stopped_member_ids'])
+
+    def test_既に作成された再送も親の停止者を実行前に除外する(self):
+        self.store.update_group_message_task('root', lambda data: {
+            'status': self.db.STATUS_COMPLETED, 'failed_members': 1})
+        self.db._store_failed_member_list('root', ['line:user,stop'])
+        retry = self.db.retry_failed_members('root', 'tester')
+        self.db.record_stopped_member_ids('root', ['line:user,stop'])
+        result, status = self.manager.handle_batch_process_request(
+            retry, 0, batch_size=3, max_workers=1, max_rate=100)
+        self.assertEqual(200, status)
+        self.bot.handle_action.assert_not_called()
+        task = self.db.get_task(retry)
+        self.assertEqual((0, 1), (task['successful_members'], task['failed_members']))
+        self.assertFalse(task['can_retry'])
+        self.assertIsNone(self.db.retry_failed_members('root', 'tester'))
+
+    def test_停止除外の保存失敗はバッチ終端とし通常の再試行へ戻さない(self):
+        update = self.store.update_group_message_task
+
+        def fail_stops(task_id, builder):
+            data = self.store.get_group_message_task(task_id)
+            if 'stopped_member_ids' in builder(data):
+                raise StateStoreError('停止記録の保存失敗')
+            return update(task_id, builder)
+
+        with patch.object(self.store, 'update_group_message_task', side_effect=fail_stops), \
+                self.assertLogs(level='ERROR'):
+            result, status = self.manager.handle_batch_process_request(
+                'root', 0, batch_size=3, max_workers=1, max_rate=100)
+        self.assertEqual((200, 'stopped'), (status, result['status']))
+        task = self.db.get_task('root')
+        self.assertTrue(task['rollback_stopped'])
+        self.assertFalse(task['can_retry'])
+        self.assertFalse(task['can_abort'])
+        count = self.bot.handle_action.call_count
+        self.assertEqual('stopped', self.manager.handle_batch_process_request('root', 0)[0]['status'])
+        self.assertEqual(count, self.bot.handle_action.call_count)
+
+    def test_停止記録失敗中の利用者取消はfailedへ戻さない(self):
+        update = self.store.update_group_message_task
+
+        def cancel_then_fail(task_id, builder):
+            data = self.store.get_group_message_task(task_id)
+            if 'stopped_member_ids' in builder(data):
+                update(task_id, lambda current: {'status': self.db.STATUS_ABORTED})
+                raise StateStoreError('停止記録の保存失敗')
+            return update(task_id, builder)
+
+        with patch.object(self.store, 'update_group_message_task', side_effect=cancel_then_fail), \
+                self.assertLogs(level='ERROR'):
+            result, status = self.manager.handle_batch_process_request(
+                'root', 0, batch_size=3, max_workers=1, max_rate=100)
+        self.assertEqual((200, 'stopped'), (status, result['status']))
+        self.assertEqual(self.db.STATUS_ABORTED, self.db.get_task('root')['status'])
+
+    def test_再送で停止者保存が失敗しても元配信と既作成兄弟再送を隔離する(self):
+        self.store.update_group_message_task('root', lambda data: {
+            'status': self.db.STATUS_COMPLETED, 'failed_members': 2})
+        self.db._store_failed_member_list('root', ['line:user,stop', 'line:user,failed'])
+        first = self.db.retry_failed_members('root', 'tester')
+        sibling = self.db.retry_failed_members('root', 'tester')
+        update = self.store.update_group_message_task
+
+        def fail_stops(task_id, builder):
+            data = self.store.get_group_message_task(task_id)
+            if 'stopped_member_ids' in builder(data):
+                raise StateStoreError('停止者の保存だけ失敗')
+            return update(task_id, builder)
+
+        with patch.object(self.store, 'update_group_message_task', side_effect=fail_stops), \
+                self.assertLogs(level='ERROR'):
+            result, status = self.manager.handle_batch_process_request(
+                first, 0, batch_size=3, max_workers=1, max_rate=100)
+        self.assertEqual((200, 'stopped'), (status, result['status']))
+        self.assertEqual(self.db.STATUS_COMPLETED, self.db.get_task('root')['status'])
+        for task_id in ('root', first):
+            self.assertTrue(self.db.get_task(task_id)['rollback_stopped'])
+            self.assertIsNone(self.db.retry_failed_members(task_id, 'tester'))
+        self.bot.handle_action.reset_mock()
+        with self.assertLogs(level='ERROR'):
+            result, status = self.manager.handle_batch_process_request(
+                sibling, 0, batch_size=3, max_workers=1, max_rate=100)
+        self.assertEqual((200, 'stopped'), (status, result['status']))
+        self.bot.handle_action.assert_not_called()
+        self.assertTrue(self.db.get_task(sibling)['rollback_stopped'])
+
+    def test_祖先の隔離flagは再送候補生成でも参照する(self):
+        self.store.update_group_message_task('root', lambda data: {
+            'status': self.db.STATUS_COMPLETED, 'failed_members': 1})
+        self.db._store_failed_member_list('root', ['line:user,failed'])
+        retry = self.db.retry_failed_members('root', 'tester')
+        self.store.update_group_message_task(retry, lambda data: {
+            'status': self.db.STATUS_COMPLETED, 'failed_members': 1})
+        self.db._store_failed_member_list(retry, ['line:user,failed'])
+        self.store.update_group_message_task('root', lambda data: {'rollback_stopped': True})
+        self.assertIsNone(self.db.retry_failed_members(retry, 'tester'))
+        with self.assertRaises(StateRecoveryError):
+            self.db.get_stopped_member_ids(retry)
 
 
 if __name__ == '__main__':

@@ -1,3 +1,4 @@
+import copy
 import json
 import sys
 import types
@@ -5,6 +6,9 @@ import unittest
 from unittest.mock import Mock, call, patch
 
 import async_task_processor
+from cloud_backend.contracts import (
+    RollbackConflictError, RollbackError, SaveResultUnknownError, StateRecoveryError)
+from scenario_selection import ScenarioSelection, ScenarioLoadError
 
 
 class FakeUser:
@@ -58,7 +62,7 @@ class AsyncActionProcessorTest(unittest.TestCase):
         )
 
         self.assertEqual(result, 'user-1\n')
-        self.bot.check_reload.assert_called_once_with()
+        self.bot.check_reload.assert_not_called()
         context = self.bot.handle_action.call_args.args[0]
         self.assertEqual(context[0].user_id, 'user-1')
         self.assertEqual(context[1], 'hello')
@@ -94,6 +98,60 @@ class AsyncActionProcessorTest(unittest.TestCase):
             self.get_group_members, {'group_interval': 0}, interface_name='plaintext')
         self.assertEqual('first\nsecond\n', result)
         self.assertEqual(members, [item.args[0][0] for item in self.bot.handle_action.call_args_list])
+
+    def test_groupの保存復元不能は他の利用者を処理してから呼出し元へ伝える(self):
+        self.get_group_members.return_value = [
+            FakeUser('plaintext', 'stopped'), FakeUser('plaintext', 'second')]
+        for error in (RollbackConflictError('競合'), RollbackError('復元未確認'),
+                      SaveResultUnknownError('保存未確認')):
+            with self.subTest(error=type(error).__name__):
+                self.bot.handle_action.reset_mock()
+                self.bot.handle_action.side_effect = [error, 'OK']
+                with self.assertRaises(StateRecoveryError) as caught:
+                    async_task_processor.process_action(
+                        self.bot, 'group:group-1', 'hello', FakeUser,
+                        self.get_group_members, {'group_interval': 0})
+                self.assertIs(error, caught.exception)
+                self.assertEqual(['stopped', 'second'], [
+                    item.args[0][0].user_id for item in self.bot.handle_action.call_args_list])
+
+    def test_group全員が計画前の取得障害なら配信側へ再試行を伝える(self):
+        self.get_group_members.return_value = [
+            FakeUser('plaintext', 'first'), FakeUser('plaintext', 'second')]
+        self.bot.handle_action.side_effect = ScenarioLoadError('読取障害')
+        with self.assertRaises(ScenarioLoadError):
+            async_task_processor.process_action(
+                self.bot, 'group:group-1', 'hello', FakeUser,
+                self.get_group_members, {'group_interval': 0})
+        self.assertEqual(2, self.bot.handle_action.call_count)
+
+    def test_group一部を処理済みなら後続の取得障害で全体を再試行しない(self):
+        self.get_group_members.return_value = [
+            FakeUser('plaintext', 'first'), FakeUser('plaintext', 'second'),
+            FakeUser('plaintext', 'third')]
+        for first in ('OK', None):
+            with self.subTest(first=first):
+                self.bot.handle_action.reset_mock()
+                self.bot.handle_action.side_effect = [first, ScenarioLoadError('読取障害'), 'later']
+                result = async_task_processor.process_action(
+                    self.bot, 'group:group-1', 'hello', FakeUser,
+                    self.get_group_members, {'group_interval': 0})
+                self.assertEqual(str(first) + 'later', result)
+                self.assertEqual(3, self.bot.handle_action.call_count)
+
+    def test_group保存復元不能は取得障害より優先して全体再試行を止める(self):
+        self.get_group_members.return_value = [
+            FakeUser('plaintext', 'first'), FakeUser('plaintext', 'second')]
+        for error in (RollbackError('停止'), SaveResultUnknownError('保存未確認')):
+            with self.subTest(error=type(error).__name__):
+                self.bot.handle_action.reset_mock()
+                self.bot.handle_action.side_effect = [error, ScenarioLoadError('読取障害')]
+                with self.assertRaises(StateRecoveryError) as caught:
+                    async_task_processor.process_action(
+                        self.bot, 'group:group-1', 'hello', FakeUser,
+                        self.get_group_members, {'group_interval': 0})
+                self.assertIs(error, caught.exception)
+                self.assertEqual(2, self.bot.handle_action.call_count)
 
     def test_不正userと未対応interfaceを状態付きerrorにする(self):
         with self.assertRaises(
@@ -198,17 +256,33 @@ class ForwardInterfaceTest(unittest.TestCase):
             ['', '保存しました'],
         ], version=3)
         self.bot.check_reload = Mock()
+        self.bot.select_scenario = Mock(side_effect=lambda **_kwargs: ScenarioSelection(
+            self.bot.scenario, 'fixture-uri', None))
+        execute = self.bot.handle_action
+
+        def handle_action(context, **kwargs):
+            kwargs.setdefault('selection', self.bot.select_scenario())
+            return execute(context, **kwargs)
+
+        self.bot.handle_action = handle_action
         self.saved = {}
         saved = self.saved
 
         class Status(TokenPlayerStatus):
             def __init__(self, namespace, user_id):
                 self.key = (namespace, user_id)
-                super().__init__(namespace, user_id, saved.get(self.key))
+                self.original = copy.deepcopy(saved.get(self.key))
+                super().__init__(namespace, user_id, self.original)
 
             def save(self):
                 saved[self.key] = self.export()
-                self.mark_saved()
+
+            def rollback(self):
+                super().rollback()
+                if self.original is None:
+                    saved.pop(self.key, None)
+                else:
+                    saved[self.key] = copy.deepcopy(self.original)
 
         main = types.ModuleType('main')
         main.get_bot = lambda name: self.bot if name == 'story' else None
@@ -237,10 +311,30 @@ class ForwardInterfaceTest(unittest.TestCase):
         self.bot.scenario.richmenu_ids = {'main': 'richmenu-artificial'}
         context = self.liff.create_context(self.user, '##liff.menu', {})
         self.assertEqual('[]', self.bot.handle_action(context))
-        self.line.api.link_rich_menu.assert_called_once_with('artificial-user', 'richmenu-artificial')
+        self.line.api.link_rich_menu.assert_called_once_with(
+            'artificial-user', 'richmenu-artificial')
         self.line.api.push.assert_not_called()
         self.line.api.reply.assert_not_called()
         self.assertEqual(1, self.saved[('shared-story', self.user.serialize())]['flags']['$opened'])
+
+    def test_LIFFのメニュー通信失敗は成功JSONにせず巻き戻す(self):
+        from plugin.liff.richmenu import register_runtime
+        from plugin.line.api import LineApiError
+        register_runtime({})
+        self.bot.scenario = self.fixture.scenario_module.ScenarioBuilder.build_from_table([
+            ['##liff.menu', '@richmenu', 'main'], ['', '@set', '$opened', '1'],
+            ['', 'opened'],
+        ], version=3)
+        self.bot.scenario.richmenu_ids = {'main': 'richmenu-artificial'}
+        self.line.api.link_rich_menu.side_effect = LineApiError(400, 'missing')
+        context = self.liff.create_context(self.user, '##liff.menu', {})
+        with self.assertLogs(level='ERROR'), patch.object(
+                context, 'rollback_status', wraps=context.rollback_status) as rollback:
+            self.assertIsNone(self.bot.handle_action(context))
+        self.assertEqual(4, self.line.api.link_rich_menu.call_count)
+        self.assertEqual(4, rollback.call_count)
+        self.line.api.push.assert_not_called()
+        self.assertEqual({}, self.saved)
 
     def test_LIFFからの転送と遅延は選択したinterfaceで実行しセーブを共有する(self):
         for action, selected, delay in (
@@ -307,7 +401,7 @@ class ForwardInterfaceTest(unittest.TestCase):
 
 
 class AsyncGroupProcessorTest(unittest.TestCase):
-    def test_成功時はreload後にmanagerの結果を返す(self):
+    def test_状態読込前にreloadせずmanagerの結果を返す(self):
         order = []
         bot = Mock()
         bot.check_reload.side_effect = lambda: order.append('reload')
@@ -322,7 +416,8 @@ class AsyncGroupProcessorTest(unittest.TestCase):
             'bot', bot, 'task-1', 2, manager_class)
 
         self.assertEqual(result, {'message': '処理完了'})
-        self.assertEqual(order, ['reload', ('task-1', 2)])
+        self.assertEqual(order, [('task-1', 2)])
+        bot.check_reload.assert_not_called()
         manager_class.assert_called_once_with('bot', bot_instance=bot)
 
     def test_既存の非200を状態付きerrorにする(self):

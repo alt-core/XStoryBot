@@ -21,6 +21,9 @@ from plugin.line.command_names import (
 )
 
 
+QUICK_REPLY_MAX_CHOICES = 13
+
+
 class LineDefaultCommandsPlugin_Builder(object):
     def __init__(self, params):
         self.params = params
@@ -28,8 +31,7 @@ class LineDefaultCommandsPlugin_Builder(object):
 
     def build_from_command(self, builder, sender, msg, options, children=[], grandchildren=[]):
         if msg in CONFIRM_CMDS or msg in BUTTON_CMDS or msg in IMAGEMAP_CMDS or msg in REPLY_CMDS:
-            for choice in children:
-                self.lint_choice(builder, msg, choice)
+            self.lint_choices(builder, msg, children)
 
         if msg in CONFIRM_CMDS:
             builder.add_command(sender, msg, options, children)
@@ -122,7 +124,15 @@ class LineDefaultCommandsPlugin_Builder(object):
         if (not self.disable_response_length_check) and builder.msg_count > 5:
             builder.raise_error('6つ以上のメッセージを同時に送ろうとしました')
 
-    def lint_choice(self, builder, msg, choice):
+    @staticmethod
+    def lint_choices(builder, msg, choices):
+        if msg in REPLY_CMDS and not 1 <= len(choices) <= QUICK_REPLY_MAX_CHOICES:
+            builder.raise_error(f'クイックリプライの選択肢は1〜{QUICK_REPLY_MAX_CHOICES}個にしてください')
+        for choice in choices:
+            LineDefaultCommandsPlugin_Builder.lint_choice(builder, msg, choice)
+
+    @staticmethod
+    def lint_choice(builder, msg, choice):
         action_label = choice[0]
         action_value = ''
         action_data = ''
@@ -320,7 +330,7 @@ class LineDefaultCommandsPlugin_Runtime(object):
             richmenu_id = resolve_line_id(options[0], getattr(context, 'richmenu_ids', {}))
             interface = context.get_interface('line')
             if interface:
-                interface.api.link_rich_menu(context.source_id, richmenu_id)
+                interface.link_rich_menu(context, richmenu_id)
             else:
                 logging.error("invalid interface: @menu")
         # 解釈はここで終了
@@ -382,7 +392,7 @@ def inner_load_plugin(params):
             builder=builder,
             runtime=runtime,
             service='line',
-            specs={'children_min': 1, 'children_max': 13}),
+            specs={'children_min': 1, 'children_max': QUICK_REPLY_MAX_CHOICES}),
         commands.CommandEntry(
             names=RICHMENU_CMDS,
             options='text',

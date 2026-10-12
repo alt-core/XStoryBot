@@ -6,6 +6,7 @@ import types
 import unittest
 from unittest.mock import Mock, patch
 
+from scenario_selection import ScenarioSelection
 from plugin.webchat.errors import (
     ActionNotActive,
     IncompatibleState,
@@ -111,6 +112,43 @@ class WebchatTokenCodecTest(unittest.TestCase):
 
 
 class TokenPlayerStatusTest(unittest.TestCase):
+    def test_新規と既存の世代metadataを区別しflagsへ混ぜない(self):
+        fresh = TokenPlayerStatus('bot', 'conversation')
+        self.assertEqual({}, fresh.scenario_generations)
+        self.assertEqual({}, fresh.export()['scenario_generations'])
+        for existing in ({}, {'scene': '*one', 'flags': {'$flag': 1}}):
+            with self.subTest(existing=existing):
+                restored = TokenPlayerStatus('bot', 'conversation', existing)
+                self.assertIsNone(restored.scenario_generations)
+                self.assertIsNone(restored.export()['scenario_generations'])
+                self.assertNotIn('scenario_generations', restored.export()['flags'])
+
+    def test_世代metadataは入力とexportから独立して保存と巻戻しを行う(self):
+        player = {'scene': '*one', 'scenario_generations': {'bot_a': 1, 'bot_b': 2}}
+        status = TokenPlayerStatus('shared', 'conversation', player)
+        player['scenario_generations']['bot_a'] = 99
+        self.assertEqual({'bot_a': 1, 'bot_b': 2}, status.scenario_generations)
+        next_generations = {'bot_a': 3, 'bot_b': 2, 'fixed': None}
+        status.scenario_generations = next_generations
+        next_generations['bot_a'] = 99
+        status.mark_saved()
+        exported = status.export()
+        exported['scenario_generations']['bot_a'] = 100
+        status.scenario_generations = {'bot_a': 4}
+        status.rollback()
+        self.assertEqual({'bot_a': 3, 'bot_b': 2, 'fixed': None}, status.scenario_generations)
+        status.reset()
+        self.assertEqual({}, status.scenario_generations)
+
+    def test_世代不明の保存も巻戻しでは不明を保ちresetで明示初期化する(self):
+        status = TokenPlayerStatus('bot', 'conversation', {'scene': '*one'})
+        status.mark_saved()
+        status.scenario_generations = {'bot': 1}
+        status.rollback()
+        self.assertIsNone(status.scenario_generations)
+        status.reset()
+        self.assertEqual({}, status.export()['scenario_generations'])
+
     def test_既存Player意味論と一時変数除外を維持する(self):
         status = TokenPlayerStatus('bot', 'conversation')
         self.assertEqual('*start', status.scene)
@@ -351,12 +389,12 @@ class _FakeWebchatInterface:
         self.deadlines.append(deadline_seconds)
         return self._context(action, request_id, echo_message)
 
-    def ensure_scenario(self, _bot):
-        return None
+    def ensure_scenario(self, _bot, player=None):
+        return ScenarioSelection(object(), 'scenario-revision', None)
 
     def _context(self, action, request_id, echo=None):
         self.actions.append(action)
-        return types.SimpleNamespace(
+        context = types.SimpleNamespace(
             action=action,
             request_id=request_id,
             echo_message=echo,
@@ -366,6 +404,10 @@ class _FakeWebchatInterface:
             saved_player={'scene': '*test'},
             state_payload={},
         )
+        context.set_scenario = lambda selection: context.__dict__.update(
+            scenario_selection=selection, scenario_uri=selection.uri,
+            scenario_revision=selection.uri, scenario_generation=selection.generation)
+        return context
 
 
 class _FakeWebchatBot:
@@ -375,7 +417,7 @@ class _FakeWebchatBot:
     def get_interface(self, name):
         return self.interface if name == 'webchat' else None
 
-    def handle_action(self, context):
+    def handle_action(self, context, selection=None):
         return {
             'schema_version': 1,
             'request_id': context.request_id,
@@ -665,12 +707,13 @@ class WebchatInterfaceConfigurationTest(unittest.TestCase):
 
     def test_固定Scenarioをprocess内で一度だけ読む(self):
         from plugin.webchat.interface import WebchatInterface
+        from tests.plugin.test_webchat_runtime_e2e import _load_runtime_module
         interface = WebchatInterface('bot', self._params())
         scenario = object()
         load = Mock(return_value=scenario)
         module = types.SimpleNamespace(
             Scenario=types.SimpleNamespace(load_from_uri=load))
-        bot = types.SimpleNamespace(scenario=None, scenario_uri=None)
+        bot = _load_runtime_module().BotRuntime('bot', {}, None)
         with patch.dict(sys.modules, {'scenario': module}):
             interface.ensure_scenario(bot)
             interface.ensure_scenario(bot)

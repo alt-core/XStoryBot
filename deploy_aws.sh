@@ -28,10 +28,15 @@ check_boolean XSBOT_AWS_ALARMS_ENABLED "${XSBOT_AWS_ALARMS_ENABLED-}"
 if [ "${XSBOT_WEBCHAT_ENABLED+x}" = x ]; then
     check_boolean XSBOT_WEBCHAT_ENABLED "$XSBOT_WEBCHAT_ENABLED"
 fi
+if [ "${XSBOT_WEBCHAT_FOLLOW_LATEST_SCENARIO+x}" = x ]; then
+    check_boolean XSBOT_WEBCHAT_FOLLOW_LATEST_SCENARIO "$XSBOT_WEBCHAT_FOLLOW_LATEST_SCENARIO"
+fi
 
 if [ "${XSBOT_WEBCHAT_ENABLED-}" = true ]; then
     : "${XSBOT_WEBCHAT_SIGNING_KEY:?XSBOT_WEBCHAT_SIGNING_KEYを設定してください}"
-    : "${XSBOT_WEBCHAT_SCENARIO_URI:?XSBOT_WEBCHAT_SCENARIO_URIを設定してください}"
+    if [ "${XSBOT_WEBCHAT_FOLLOW_LATEST_SCENARIO-}" != true ]; then
+        : "${XSBOT_WEBCHAT_SCENARIO_URI:?XSBOT_WEBCHAT_SCENARIO_URIを設定してください}"
+    fi
 fi
 
 # 未設定は前回値を維持する。空が無効な項目の明示空はbuild前に拒否する。
@@ -44,8 +49,10 @@ check_optional_value() {
 
 check_optional_value XSBOT_WEBCHAT_SIGNING_KEY \
     "${XSBOT_WEBCHAT_SIGNING_KEY+x}" "${XSBOT_WEBCHAT_SIGNING_KEY-}"
-check_optional_value XSBOT_WEBCHAT_SCENARIO_URI \
-    "${XSBOT_WEBCHAT_SCENARIO_URI+x}" "${XSBOT_WEBCHAT_SCENARIO_URI-}"
+if [ "${XSBOT_WEBCHAT_FOLLOW_LATEST_SCENARIO-}" != true ]; then
+    check_optional_value XSBOT_WEBCHAT_SCENARIO_URI \
+        "${XSBOT_WEBCHAT_SCENARIO_URI+x}" "${XSBOT_WEBCHAT_SCENARIO_URI-}"
+fi
 check_optional_value XSBOT_WEBCHAT_COMPATIBILITY_EPOCH \
     "${XSBOT_WEBCHAT_COMPATIBILITY_EPOCH+x}" "${XSBOT_WEBCHAT_COMPATIBILITY_EPOCH-}"
 check_optional_value XSBOT_WEBCHAT_THROTTLE_RATE \
@@ -159,6 +166,10 @@ fi
 if [ "${XSBOT_WEBCHAT_ENABLED+x}" = x ]; then
     set -- "$@" \
         "ParameterKey=WebchatEnabled,ParameterValue=$XSBOT_WEBCHAT_ENABLED"
+fi
+if [ "${XSBOT_WEBCHAT_FOLLOW_LATEST_SCENARIO+x}" = x ]; then
+    set -- "$@" \
+        "ParameterKey=WebchatFollowLatestScenario,ParameterValue=$XSBOT_WEBCHAT_FOLLOW_LATEST_SCENARIO"
 fi
 if [ "${XSBOT_WEBCHAT_SIGNING_KEY+x}" = x ]; then
     set -- "$@" \

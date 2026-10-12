@@ -5,6 +5,8 @@ import types
 import unittest
 from unittest.mock import Mock, patch
 
+from scenario_selection import ScenarioSelection
+
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
@@ -163,10 +165,16 @@ class FakeContext:
         self.user = Mock()
         self.user.serialize.return_value = 'mock_line:user-1'
         self.loaded_namespace = None
-        self.env = []
+        self.env_dicts = []
+        self.attrs = {}
+        self.status = types.SimpleNamespace(scene='scene', scenario_generations={})
+
+    @property
+    def env(self):
+        return self.env_dicts
 
     def add_env(self, value):
-        self.env.append(value)
+        self.env_dicts.append(value)
 
     def load_status(self):
         self.loaded_namespace = self.state_namespace
@@ -190,6 +198,8 @@ class StateNamespaceTest(unittest.TestCase):
             state_namespace=state_namespace,
         )
         runtime.scenario = types.SimpleNamespace(version=version, constants={})
+        runtime.select_scenario = Mock(return_value=ScenarioSelection(
+            runtime.scenario, 'fixture-uri', None))
         return runtime
 
     def test_omitted_namespace_uses_bot_name(self):

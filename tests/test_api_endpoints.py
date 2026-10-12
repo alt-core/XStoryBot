@@ -11,6 +11,7 @@ from unittest.mock import Mock, call, patch
 from wsgiref.util import setup_testing_defaults
 
 from bottle import Bottle
+from cloud_backend.contracts import RollbackConflictError, RollbackError, SaveResultUnknownError
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -233,6 +234,24 @@ class WebApiTest(unittest.TestCase):
         self.assert_success_response(post_response)
         self.assertEqual([context.action for context in self.bot.contexts],
                          ['hello', 'hello'])
+
+    def test_保存復元不能は配送終了の200と物語失敗のJSONを返す(self):
+        for error in (RollbackConflictError('競合'), RollbackError('復元未確認'),
+                      SaveResultUnknownError('保存未確認')):
+            with self.subTest(error=type(error).__name__), \
+                    patch.object(self.bot, 'handle_action', side_effect=error) as action:
+                response = self.client.post(
+                    '/api/v1/bots/bot/action', params=self.action_params())
+                self.assertEqual(200, response.status_int)
+                self.assertEqual('Failure', response.json['result'])
+                self.assertIn('状態を安全に確認できない', response.text)
+                action.assert_called_once()
+
+    def test_通常のプログラム例外は専用停止へ吸収せず500を維持する(self):
+        with patch.object(self.bot, 'handle_action', side_effect=RuntimeError('不具合')):
+            response = self.client.post('/api/v1/bots/bot/action',
+                                        params=self.action_params(), expect_errors=True)
+        self.assertEqual(500, response.status_int)
 
     def test_header_is_preferred_and_parameter_is_fallback(self):
         fallback_response = self.client.post(
@@ -624,7 +643,7 @@ class WebApiTest(unittest.TestCase):
         self.assertEqual(response.status_int, 200)
         manager_class.assert_called_once_with('bot', bot_instance=self.bot)
         manager.handle_batch_process_request.assert_called_once_with('task-1', 2)
-        self.bot.check_reload.assert_called_once_with()
+        self.bot.check_reload.assert_not_called()
 
     def test_AWSのHTTPバッチ入口は実行や入力解析の前に拒否する(self):
         self.settings.CLOUD_SETTINGS['provider'] = 'aws'

@@ -22,7 +22,7 @@ class RecordedLineApi(LineApiClient):
         super().__init__('local-unused')
         self.records = []
 
-    def _post(self, path, body=None, headers=None):
+    def _post(self, path, body=None, headers=None, timeout=None):
         self.records.append({'path': path, 'body': copy.deepcopy(body)})
 
 
@@ -156,7 +156,8 @@ def run_case(bot, interface, store, case, storage_root, input_hash):
             session = dict(binding)
             interface.api.records.clear()
             row['phase'] = 'runtime'
-            outcome = bot.handle_action(context)
+            # このcaseでビルド済みの版を固定し、共有rootの別runへ追従しない。
+            outcome = bot.handle_action(context, selection=bot.select_scenario(bot.scenario_uri))
             if outcome is None:
                 raise ValueError('Runtimeが成功結果を返しませんでした')
             version, player = player_snapshot(store, status_id)

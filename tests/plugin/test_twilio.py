@@ -283,7 +283,8 @@ class TwilioWebAPITest(unittest.TestCase):
             response = self.signed_post('/twilio/callback/testbot', params)
 
         self.assertEqual(response.status_int, 200)
-        self.assertEqual(order, ['log', 'reload', 'context', 'handle'])
+        self.assertEqual(order, ['log', 'context', 'handle'])
+        self.target.bot.check_reload.assert_not_called()
         log_info.assert_called_once()
         self.target.interface.create_context_from_twilio_event.assert_called_once_with(
             '+819000000000', '+815000000000', True, '音声入力')
@@ -307,7 +308,7 @@ class TwilioWebAPITest(unittest.TestCase):
             '/twilio/callback/testbot', missing_from, expect_errors=True)
         self.assertEqual(response.status_int, 500)
 
-    def test_anonymous_number_rejection_still_runs_after_reload(self):
+    def test_anonymous_number_rejection_does_not_need_scenario_reload(self):
         params = {
             'From': 'anonymous',
             'To': '+815000000000',
@@ -318,7 +319,7 @@ class TwilioWebAPITest(unittest.TestCase):
 
         self.assertEqual(response.status_int, 200)
         self.assertIn('<Reject reason="rejected"></Reject>', response.text)
-        self.target.bot.check_reload.assert_called_once_with()
+        self.target.bot.check_reload.assert_not_called()
         self.target.interface.create_context_from_twilio_event.assert_not_called()
 
     def test_dial_content_keeps_phone_reversal_and_decoded_message(self):

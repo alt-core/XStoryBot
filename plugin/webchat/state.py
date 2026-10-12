@@ -20,6 +20,8 @@ class TokenPlayerStatus:
         self.web_next_label = source.get('web_next_label')
         self.web_next_trigger = source.get('web_next_trigger')
         self.richmenu = source.get('richmenu')
+        self._scenario_generations = copy.deepcopy(
+            source.get('scenario_generations')) if player is not None else {}
         if not self._action_token:
             self.renew_action_token()
         self._rollback = self.export()
@@ -80,12 +82,21 @@ class TokenPlayerStatus:
         self._action_token = ''.join(
             secrets.choice(string.ascii_letters) for _ in range(8))
 
+    @property
+    def scenario_generations(self):
+        return self._scenario_generations
+
+    @scenario_generations.setter
+    def scenario_generations(self, value):
+        self._scenario_generations = copy.deepcopy(value)
+
     def reset(self):
         self.db = {}
         self._scene = None
         self._scene_history = []
         self.web_next_label = None
         self.web_next_trigger = None
+        self._scenario_generations = {}
         self.renew_action_token()
 
     def export(self):
@@ -94,6 +105,7 @@ class TokenPlayerStatus:
             'scene': self._scene,
             'scene_history': copy.deepcopy(self._scene_history),
             'action_generation': self._action_token,
+            'scenario_generations': copy.deepcopy(self._scenario_generations),
             'flags': {
                 key: copy.deepcopy(value)
                 for key, value in self.db.items()
@@ -116,6 +128,7 @@ class TokenPlayerStatus:
         self.web_next_label = restored.web_next_label
         self.web_next_trigger = restored.web_next_trigger
         self.richmenu = restored.richmenu
+        self._scenario_generations = restored._scenario_generations
 
 
 class TokenNextLabelStore:

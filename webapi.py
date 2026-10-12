@@ -5,6 +5,7 @@ from bottle import Bottle, HTTPResponse, request, response
 
 import auth
 import async_task_processor
+from cloud_backend.contracts import StateRecoveryError
 import main
 import settings
 import users
@@ -86,6 +87,9 @@ def do_action(bot_name):
             bot, user_str, action, attrs,
             interface_name=request.params.getunicode('interface'),
         )
+    except StateRecoveryError:
+        # 200はCloud Tasksへの終了通知。物語処理は失敗として救済対象にする。
+        return utility.make_ng_json('状態を安全に確認できないため停止しました。管理者による確認が必要です')
     except async_task_processor.TaskProcessingError as error:
         abort_json(error.status_code, error.public_message)
 

@@ -7,6 +7,10 @@ import copy
 import logging
 
 from cloud_backend import create_state_store
+from cloud_backend.contracts import (
+    RollbackConflictError, RollbackError, SaveResultUnknownError,
+    StateConflictError, StateRecoveryError,
+)
 from utility import deep_dump
 
 DEBUG = False
@@ -26,7 +30,7 @@ class GlobalBotVariablesDB:
 
     @staticmethod
     def save(bot_name, scenario_uri):
-        _state_store.save_global_bot_variables(bot_name, scenario_uri)
+        return _state_store.save_global_bot_variables(bot_name, scenario_uri)
 
 
 class PlayerStatusDB:
@@ -47,7 +51,8 @@ class PlayerStatusDB:
                 'scene': data.get('scene'),
                 'scene_history': data.get('scene_history', []),
                 'action_token': data.get('action_token'),
-                'value': data.get('value', '{}')
+                'value': data.get('value', '{}'),
+                'scenario_generations': copy.deepcopy(data.get('scenario_generations')),
             }
             self.rollback_entry = copy.deepcopy(self.entry)
             self.db = self._str_to_db(self.entry['value'])
@@ -57,12 +62,15 @@ class PlayerStatusDB:
                 'scene': '*start',
                 'scene_history': [],
                 'action_token': None,
-                'value': None
+                'value': None,
+                'scenario_generations': {},
             }
             self.rollback_entry = None
             self.db = {}
             self.last_update_time = None
         self.is_dirty = False # is_dirty は self.db 以外の値の更新確認
+        self._loaded_version = self.last_update_time
+        self._saved_version = None
         if self.action_token is None:
             self.renew_action_token()
 
@@ -92,8 +100,18 @@ class PlayerStatusDB:
         self.entry['scene'] = None
         self.entry['scene_history'] = []
         self.entry['action_token'] = None
+        self.entry['scenario_generations'] = {}
         self.is_dirty = True
         self.renew_action_token()
+
+    @property
+    def scenario_generations(self):
+        return self.entry['scenario_generations']
+
+    @scenario_generations.setter
+    def scenario_generations(self, value):
+        self.entry['scenario_generations'] = copy.deepcopy(value)
+        self.is_dirty = True
 
     @property
     def scene(self):
@@ -156,17 +174,23 @@ class PlayerStatusDB:
             if DEBUG:
                 print('== SAVED ==')
             self.entry['value'] = new_value
-            if force:
-                self.last_update_time = _state_store.force_put_player_status(
-                    self.id, self.entry)
-            elif self.last_update_time is not None:
-                # 更新の場合は前回の更新時間を指定することで並行実行を排除する
-                # 失敗したときは例外が上がるはず
-                self.last_update_time = _state_store.update_player_status(
-                    self.id, self.entry, self.last_update_time)
-            else:
-                self.last_update_time = _state_store.create_player_status(
-                    self.id, self.entry)
+            try:
+                if force:
+                    self.last_update_time = _state_store.force_put_player_status(
+                        self.id, self.entry)
+                elif self.last_update_time is not None:
+                    # 条件付き書込みの拒否だけを、未保存の競合として再試行する。
+                    self.last_update_time = _state_store.update_player_status(
+                        self.id, self.entry, self.last_update_time)
+                else:
+                    self.last_update_time = _state_store.create_player_status(
+                        self.id, self.entry)
+            except (StateRecoveryError, StateConflictError):
+                raise
+            except Exception as error:
+                # 書込みが届いている可能性があるため、再計画も無条件の復元もしない。
+                raise SaveResultUnknownError('状態の保存結果を確認できないため停止しました') from error
+            self._saved_version = self.last_update_time
             self.is_dirty = False
         else:
             if DEBUG:
@@ -177,11 +201,24 @@ class PlayerStatusDB:
         if self.rollback_entry is not None:
             self.entry = copy.deepcopy(self.rollback_entry)
             self.db = self._str_to_db(self.entry['value'])
-            self.save(force=True)
             self.is_dirty = False
         else:
-            _state_store.delete_player_status(self.id)
             self.reset()
+        if self._saved_version is None:
+            return
+        try:
+            if self.rollback_entry is not None:
+                self.last_update_time = _state_store.update_player_status(
+                    self.id, self.entry, self._saved_version)
+            else:
+                _state_store.delete_player_status(self.id, self._saved_version)
+                self.last_update_time = None
+        except StateConflictError as error:
+            raise RollbackConflictError(
+                '別の処理が保存した状態を保護するため巻き戻せません') from error
+        except Exception as error:
+            raise RollbackError('保存先の障害で巻き戻しを確認できません') from error
+        self._saved_version = None
 
 
 class GroupMembersDB:

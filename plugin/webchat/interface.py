@@ -5,19 +5,20 @@ import math
 import os
 import re
 import secrets
-import threading
 import time
 from urllib.parse import unquote, urljoin
 from urllib.parse import urlsplit, urlunsplit
 
 import requests
 import utility
+from scenario_selection import ScenarioStateError, read_scenario_generation
 
 from plugin.webchat.context import WebchatActionContext
 from plugin.webchat.errors import (
     BotNotWebCompatible,
     ExternalHttpError,
     ExternalHttpTimeout,
+    IncompatibleState,
     InvalidWebchatConfiguration,
 )
 from plugin.webchat.presenter import WebchatPresenter, register_runtime
@@ -202,8 +203,7 @@ class WebchatInterface:
                 or self.turn_deadline_seconds <= 0):
             raise InvalidWebchatConfiguration('turn deadlineが不正です')
         self._presenter = WebchatPresenter(self)
-        self._scenario_loaded = False
-        self._scenario_lock = threading.Lock()
+        self.follow_latest_scenario = _as_bool(params.get('follow_latest_scenario'))
         if not self.enabled:
             self.codec = None
             self.allowed_origins = ()
@@ -216,6 +216,12 @@ class WebchatInterface:
             self.media_origins = ()
             return
 
+        follow_value = params.get('follow_latest_scenario', False)
+        if (follow_value is not None and not isinstance(follow_value, bool)
+                and (not isinstance(follow_value, str)
+                     or follow_value.strip().lower() not in ('', 'true', 'false'))):
+            raise InvalidWebchatConfiguration('follow_latest_scenarioはtrueまたはfalseで指定してください')
+
         try:
             from richmenu_spec import parse_bot_settings
             self.constants_override = utility.normalize_constants(params.get('constants', {}), scalar_only=True)
@@ -227,9 +233,9 @@ class WebchatInterface:
         self.deployment = str(
             params.get('deployment') or os.getenv('XSBOT_DEPLOY_ENV') or 'prod')
         self.scenario_uri = str(params.get('scenario_uri') or '')
-        if not self.scenario_uri:
+        if not self.scenario_uri and not self.follow_latest_scenario:
             raise InvalidWebchatConfiguration('固定Scenario URIがありません')
-        self.scenario_revision = self._derive_revision(self.scenario_uri)
+        self.scenario_revision = self._derive_revision(self.scenario_uri) if self.scenario_uri else ''
         self.compatibility_epoch = str(
             params.get('scenario_compatibility_epoch') or '')
         if not self.compatibility_epoch:
@@ -426,36 +432,31 @@ class WebchatInterface:
             }, ensure_ascii=False, separators=(',', ':')))
             return response
 
-    def ensure_scenario(self, bot):
-        if (
-                self._scenario_loaded
-                and bot.scenario is not None
-                and bot.scenario_uri == self.scenario_uri):
-            return
-        with self._scenario_lock:
-            if (
-                    self._scenario_loaded
-                    and bot.scenario is not None
-                    and bot.scenario_uri == self.scenario_uri):
-                return
+    def ensure_scenario(self, bot, player=None):
+        minimum = 0
+        if self.follow_latest_scenario:
+            generations = {} if player is None else player.get('scenario_generations')
             try:
-                from scenario import Scenario
-                bot.scenario = Scenario.load_from_uri(self.scenario_uri)
-            except Exception as error:
-                raise InvalidWebchatConfiguration(
-                    '固定Scenarioを読み込めません') from error
-            bot.scenario_uri = self.scenario_uri
-            self._scenario_loaded = True
+                minimum = read_scenario_generation(generations, bot.name)
+            except ScenarioStateError as error:
+                raise IncompatibleState(str(error)) from error
+        try:
+            return bot.select_scenario(
+                None if self.follow_latest_scenario else self.scenario_uri,
+                min_generation=minimum)
+        except Exception as error:
+            raise InvalidWebchatConfiguration('Scenarioを読み込めません') from error
 
     def create_start_context(self, request_id, deadline_seconds=None):
         conversation_id = secrets.token_urlsafe(32)
+        player = {'scenario_generations': {}}
         context = WebchatActionContext(
-            self.bot_name, self, conversation_id, self.start_action, {},
+            self.bot_name, self, conversation_id, self.start_action, player,
             deadline_seconds=deadline_seconds)
         context.state_payload = {
             'conversation_id': conversation_id,
             'revision': -1,
-            'player': {},
+            'player': player,
         }
         context.echo_message = None
         context.request_id = request_id
@@ -518,7 +519,8 @@ class WebchatInterface:
             'deployment': self.deployment,
             'bot': self.bot_name,
             'scenario_compatibility_epoch': self.compatibility_epoch,
-            'scenario_revision': self.scenario_revision,
+            'scenario_revision': context.scenario_revision,
+            'scenario_generation': context.scenario_generation,
             'conversation_id': context.user.user_id,
             'action_generation': context.status.action_token,
             'resolved_action': resolved_action,
@@ -552,7 +554,7 @@ class WebchatInterface:
             'deployment': self.deployment,
             'bot': self.bot_name,
             'scenario_compatibility_epoch': self.compatibility_epoch,
-            'scenario_revision': self.scenario_revision,
+            'scenario_revision': context.scenario_revision,
             'conversation_id': context.user.user_id,
             'revision': next_revision,
             'player': context.saved_player,

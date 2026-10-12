@@ -1624,7 +1624,9 @@ class Director:
             action_token = self.context.attrs['action_token']
             del self.context.attrs['action_token']
             if action_token != self.context.status.action_token:
-                logging.info('action_token is not matched: {} != {}'.format(action_token, self.context.status.action_token))
+                logging.info('action_token is not matched: bot=%s user=%s scene=%s action=%s',
+                             self.context.bot_name, self.context.user,
+                             self.context.status.scene, action)
                 return
 
         # 実行行の取得

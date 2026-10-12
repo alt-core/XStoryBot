@@ -7,6 +7,7 @@ import json
 import logging
 import time
 import uuid
+from decimal import Decimal
 
 import boto3
 from boto3.dynamodb.types import TypeDeserializer, TypeSerializer
@@ -19,12 +20,14 @@ from cloud_backend.contracts import (
     StateStoreError,
     StateVersion,
     VersionedState,
+    checked_publication_generation,
 )
 
 
 TASK_EXECUTION_CLAIMED = 'claimed'
 TASK_EXECUTION_BUSY = 'busy'
 TASK_EXECUTION_COMPLETED = 'completed'
+TASK_EXECUTION_STOPPED = 'stopped'
 
 
 class AwsStateStore(StateStore):
@@ -138,6 +141,26 @@ class AwsStateStore(StateStore):
             except Exception as error:
                 self._raise_store_error(error)
         return self._client_instance
+
+    def _call_player_mutation(self, operation, status_id, written_version=None):
+        try:
+            return operation()
+        except Exception as error:
+            if self._is_conditional_error(error):
+                retries = error.response.get('ResponseMetadata', {}).get('RetryAttempts')
+                if type(retries) is int and retries == 0:
+                    self._raise_store_error(error, conflict=True)
+            try:
+                current = self._get_item(self._state_table, self._player_key(status_id))
+            except Exception as read_error:
+                raise StateStoreError('Player状態の変更結果を確認できません') from read_error
+            if written_version is None:
+                if current is None:
+                    return None
+            elif current is not None and current.get('version') == written_version:
+                return self._version_token(written_version)
+            # 他者の版・元の版・欠落から、自分が未保存だったとは推測しない。
+            raise StateStoreError('Player状態の変更結果を確認できません') from error
 
     @staticmethod
     def _hash(value):
@@ -323,22 +346,35 @@ class AwsStateStore(StateStore):
                 'pk': 'GLOBAL',
                 'sk': f'BOT#{self._hash(bot_name)}',
             })
-            return self._decode_payload(item['payload']) if item else None
+            return self._global_variables(item) if item else None
         return self._call(operation)
+
+    def _global_variables(self, item):
+        generation = item.get('generation')
+        if (isinstance(generation, Decimal) and generation.is_finite()
+                and generation == generation.to_integral_value()):
+            generation = int(generation)
+        return {**self._decode_payload(item['payload']),
+                'generation': checked_publication_generation(generation)}
 
     def save_global_bot_variables(self, bot_name, scenario_uri):
         def operation():
-            self._client().put_item(
+            response = self._client().update_item(
                 TableName=self._state_table,
-                Item=self._item({
+                Key=self._item({
                     'pk': 'GLOBAL',
                     'sk': f'BOT#{self._hash(bot_name)}',
-                    'bot_name': bot_name,
-                    'payload': self._encode_payload({
-                        'scenario_uri': scenario_uri,
-                    }),
                 }),
+                UpdateExpression='SET #payload = :payload, #bot = :bot ADD #generation :one',
+                ConditionExpression='attribute_not_exists(#generation) OR #generation >= :one',
+                ExpressionAttributeNames={
+                    '#payload': 'payload', '#bot': 'bot_name', '#generation': 'generation'},
+                ExpressionAttributeValues={
+                    ':payload': self._attribute(self._encode_payload({'scenario_uri': scenario_uri})),
+                    ':bot': self._attribute(bot_name), ':one': self._attribute(1)},
+                ReturnValues='ALL_NEW',
             )
+            return self._global_variables(self._decode_item(response['Attributes']))['generation']
         return self._call(operation)
 
     def load_player_status(self, status_id):
@@ -370,7 +406,7 @@ class AwsStateStore(StateStore):
                 ExpressionAttributeNames={'#pk': 'pk'},
             )
             return self._version_token(version)
-        return self._call(operation, conflict=True)
+        return self._call_player_mutation(operation, status_id, version)
 
     def update_player_status(self, status_id, data, version):
         expected_version = self._decode_version(version)
@@ -393,7 +429,7 @@ class AwsStateStore(StateStore):
                 },
             )
             return self._version_token(next_version)
-        return self._call(operation, conflict=True)
+        return self._call_player_mutation(operation, status_id, next_version)
 
     def force_put_player_status(self, status_id, data):
         payload = self._player_payload(data)
@@ -412,13 +448,24 @@ class AwsStateStore(StateStore):
             return self._version_token(version)
         return self._call(operation)
 
-    def delete_player_status(self, status_id):
+    def delete_player_status(self, status_id, version=None):
+        condition = {}
+        if version is not None:
+            condition = {
+                'ConditionExpression': '#version = :expected',
+                'ExpressionAttributeNames': {'#version': 'version'},
+                'ExpressionAttributeValues': {
+                    ':expected': self._attribute(self._decode_version(version)),
+                },
+            }
         def operation():
             self._client().delete_item(
                 TableName=self._state_table,
                 Key=self._item(self._player_key(status_id)),
+                **condition,
             )
-        return self._call(operation)
+        return (self._call_player_mutation(operation, status_id) if version is not None
+                else self._call(operation))
 
     @staticmethod
     def _group_catalog_key(group_id):
@@ -951,13 +998,15 @@ class AwsStateStore(StateStore):
             return TASK_EXECUTION_BUSY
         if current.get('status') == TASK_EXECUTION_COMPLETED:
             return TASK_EXECUTION_COMPLETED
+        if current.get('status') == TASK_EXECUTION_STOPPED:
+            return TASK_EXECUTION_STOPPED
         if current.get('status') == TASK_EXECUTION_CLAIMED:
             return TASK_EXECUTION_BUSY
         raise StateStoreError(
             'AWS非同期タスクの実行記録操作に失敗しました')
 
-    def complete_task_execution(self, execution_key, owner):
-        """同じownerが取得したAWS worker用taskだけを完了させる。"""
+    def complete_task_execution(self, execution_key, owner, *, stopped=False):
+        """同じownerの実行を確定し、巻戻し不能の停止は成功と区別する。"""
         self._validate_task_execution_text(execution_key, 'execution key')
         self._validate_task_execution_text(owner, 'owner')
 
@@ -967,7 +1016,7 @@ class AwsStateStore(StateStore):
             'TableName': self._cache_table,
             'Item': self._item({
                 **key,
-                'status': TASK_EXECUTION_COMPLETED,
+                'status': TASK_EXECUTION_STOPPED if stopped else TASK_EXECUTION_COMPLETED,
                 'owner': owner,
                 'completed_at': now,
                 'expire_at': now + self._TASK_EXECUTION_TTL_SECONDS,

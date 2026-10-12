@@ -16,6 +16,7 @@ from botocore.exceptions import ClientError
 import common_commands
 import context as action_context
 import task_client
+from scenario_selection import ScenarioSelection
 from cloud_backend.aws import task_handler
 from cloud_backend.aws.state_store import AwsStateStore
 from cloud_backend.aws.task_queue import AwsTaskQueue
@@ -68,6 +69,7 @@ class PostResponseTaskTest(unittest.TestCase):
     def setUp(self):
         self.events = []
         self.persisted = {}
+        self.generations = {}
         self.children = []
         self.fail_first_child = True
         self.failure_phase = None
@@ -89,6 +91,8 @@ class PostResponseTaskTest(unittest.TestCase):
             def __init__(self, namespace, user_id):
                 super().__init__(copy.deepcopy(test.persisted.get(user_id, {})))
                 self.user_id = user_id
+                self.scenario_generations = copy.deepcopy(test.generations.get(user_id, {}))
+                self.old_generations = copy.deepcopy(self.scenario_generations)
                 test.events.append(('load', self.get('counter', 0)))
 
             def save(self):
@@ -96,10 +100,12 @@ class PostResponseTaskTest(unittest.TestCase):
                 if test.failure_phase == 'save':
                     raise RuntimeError('save failed')
                 test.persisted[self.user_id] = copy.deepcopy(dict(self))
+                test.generations[self.user_id] = copy.deepcopy(self.scenario_generations)
 
             def rollback(self):
                 test.events.append(('rollback',))
                 test.persisted[self.user_id] = {'counter': self.get('counter', 0) - 1}
+                test.generations[self.user_id] = copy.deepcopy(self.old_generations)
 
         self.status_class = MemoryStatus
 
@@ -119,6 +125,8 @@ class PostResponseTaskTest(unittest.TestCase):
         self.interface = Interface()
         self.bot = self.runtime.BotRuntime('bot', {'line': self.interface}, None)
         self.bot.scenario = SimpleNamespace(version=3, constants={})
+        self.bot.select_scenario = Mock(return_value=ScenarioSelection(
+            self.bot.scenario, 'fixture-uri', None))
         self.bot.check_reload = Mock()
         self.main = ModuleType('main')
         self.main.get_bot = lambda _name: self.bot
@@ -210,15 +218,19 @@ class PostResponseTaskTest(unittest.TestCase):
                 self.assertEqual({}, self.execution_client.tables['test-cache'])
         self.failure_phase = None
 
-    def test_完了保存の例外は子登録成功後もworkerへ伝播する(self):
+    def test_完了保存の例外で子登録済みの業務を再実行へ戻さない(self):
         self.fail_first_child = False
         with patch.object(self.execution_store, 'complete_task_execution',
                           side_effect=StateStoreError('completion failed')), \
-                self.assertLogs(level='ERROR'), self.assertRaises(StateStoreError):
+                self.assertLogs(level='ERROR'):
+            self.assertEqual({'status': 'stopped'}, self.invoke_worker())
+        self.assertEqual([('reply', 1)], [event for event in self.events if event[0] == 'reply'])
+        self.assertEqual(2, len(self.children))
+        self.assertTrue(self.execution_client.tables['test-cache'])
+        with self.assertRaises(task_handler._TaskExecutionBusy):
             self.invoke_worker()
         self.assertEqual([('reply', 1)], [event for event in self.events if event[0] == 'reply'])
         self.assertEqual(2, len(self.children))
-        self.assertEqual({}, self.execution_client.tables['test-cache'])
 
     def test_子登録失敗でも返信済みgroupメンバーの失敗者再送を作らない(self):
         manager_module = load_group_message_task_manager()
@@ -248,7 +260,7 @@ class PostResponseTaskTest(unittest.TestCase):
         db._object_store = MemoryPrivateObjects()
         manager = manager_module.GroupMessageTaskManager('bot', bot_instance=self.bot)
 
-        def sequential_members(batch_id, member_ids, task, workers, rate):
+        def sequential_members(batch_id, member_ids, task, workers, rate, stopped_members=None):
             successful = []
             errors = []
             for member_id in member_ids:

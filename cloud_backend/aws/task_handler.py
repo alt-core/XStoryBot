@@ -1,15 +1,19 @@
 """Lambda非同期呼出しからaction・グループ配信・ビルド処理を呼ぶ入口。"""
 
 import logging
+import json
 import os
 import re
 import uuid
 
+import utility
 from async_task_processor import process_action, process_group_batch
+from cloud_backend.contracts import StateRecoveryError
 from cloud_backend.aws.state_store import (
     TASK_EXECUTION_BUSY,
     TASK_EXECUTION_CLAIMED,
     TASK_EXECUTION_COMPLETED,
+    TASK_EXECUTION_STOPPED,
 )
 
 
@@ -96,12 +100,42 @@ def _claim_or_skip(execution_store, execution_key, owner, lease_seconds):
     result = execution_store.try_claim_task_execution(
         execution_key, owner, lease_seconds)
     if result == TASK_EXECUTION_COMPLETED:
-        return False
+        return result
+    if result == TASK_EXECUTION_STOPPED:
+        return result
     if result == TASK_EXECUTION_BUSY:
         raise _TaskExecutionBusy()
     if result != TASK_EXECUTION_CLAIMED:
         raise ValueError('実行記録の取得結果が不正です')
-    return True
+    return result
+
+
+def _stop_execution(execution_store, execution_key, owner):
+    try:
+        execution_store.complete_task_execution(execution_key, owner, stopped=True)
+    except Exception as error:
+        # 停止記録の保存失敗でも通常のclaim解放は行わず、配送へ終端を返す。
+        logging.error(
+            'AWS stopped task record failed: execution_key=%s owner=%s error_type=%s',
+            execution_key, owner, type(error).__name__)
+    return TASK_EXECUTION_STOPPED
+
+
+def _log_task_failure(envelope, owner, phase, error, business_processed):
+    # 業務処理が戻ったかを記録する。groupの全員配信成功を表す値ではない。
+    params = envelope['params']
+    action = envelope['kind'] == 'action'
+    record = {
+        'type': 'XSBFail', 'phase': phase, 'kind': envelope['kind'],
+        'bot': envelope['bot_name'], 'task_id': envelope['task_id'], 'owner': owner,
+        'user': params.get('user', '') if action else None,
+        'action': utility.action_for_log(params.get('action', '')) if action else None,
+        'business_processed': business_processed, 'error_type': type(error).__name__,
+    }
+    if not action:
+        record.update(message_task_id=params['message_task_id'].strip(),
+                      batch_index=int(params.get('batch_index', 0)))
+    logging.error(json.dumps(record, ensure_ascii=False))
 
 
 def _group_parameters(params):
@@ -156,7 +190,7 @@ def _process_task(event, dependencies, owner):
             'AWS action task: task_id=%s, bot_name=%s, user=%s, '
             'action=%s, owner=%s',
             envelope['task_id'], envelope['bot_name'], serialized_user,
-            encoded_action, owner,
+            utility.action_for_log(encoded_action), owner,
         )
     else:
         message_task_id, batch_index = _group_parameters(params)
@@ -166,11 +200,12 @@ def _process_task(event, dependencies, owner):
 
     execution_store = dependencies['execution_store']
     try:
-        if not _claim_or_skip(execution_store, execution_key, owner, lease_seconds):
+        claim = _claim_or_skip(execution_store, execution_key, owner, lease_seconds)
+        if claim != TASK_EXECUTION_CLAIMED:
             logging.info(
-                'AWS task already completed: task_id=%s, owner=%s',
-                envelope['task_id'], owner)
-            return
+                'AWS task already %s: task_id=%s, owner=%s',
+                claim, envelope['task_id'], owner)
+            return TASK_EXECUTION_STOPPED if claim == TASK_EXECUTION_STOPPED else None
         bot = dependencies['get_bot'](envelope['bot_name'])
         if bot is None:
             raise ValueError('Botが見つかりません')
@@ -185,22 +220,33 @@ def _process_task(event, dependencies, owner):
             if failures:
                 raise ActionNotDelivered(', '.join(failures))
         else:
-            process_group_batch(
+            result = process_group_batch(
                 envelope['bot_name'], bot, message_task_id, batch_index,
                 dependencies['manager_class'],
             )
-        execution_store.complete_task_execution(execution_key, owner)
+            if result.get('status') == TASK_EXECUTION_STOPPED:
+                return _stop_execution(execution_store, execution_key, owner)
+    except StateRecoveryError as error:
+        _log_task_failure(envelope, owner, 'state-recovery', error, False)
+        return _stop_execution(execution_store, execution_key, owner)
     except _TaskExecutionBusy:
         raise
     except Exception:
         try:
             execution_store.release_task_execution(execution_key, owner)
         except Exception as error:
-            # 解放失敗で元の取得・業務処理・完了保存の例外を上書きしない。
+            # 解放失敗で元の取得・業務処理の例外を上書きしない。
             logging.error(
                 'AWS task lease release failed: owner=%s, error_type=%s',
                 owner, type(error).__name__)
         raise
+
+    try:
+        execution_store.complete_task_execution(execution_key, owner)
+    except Exception as error:
+        # 業務成功後の記録障害では、返信や子登録を最初からやり直さない。
+        _log_task_failure(envelope, owner, 'complete', error, True)
+        return _stop_execution(execution_store, execution_key, owner)
     if envelope['kind'] == 'action':
         logging.info(
             'AWS action task completed: task_id=%s, owner=%s',
@@ -212,7 +258,7 @@ def lambda_handler(event, context):
     dependencies = _load_dependencies()
     owner = str(uuid.uuid4())
     try:
-        _process_task(event, dependencies, owner)
+        outcome = _process_task(event, dependencies, owner)
     except _TaskExecutionBusy:
         logging.warning('AWS task is being processed elsewhere: owner=%s', owner)
         raise
@@ -222,4 +268,4 @@ def lambda_handler(event, context):
             owner, type(error).__name__, error,
         )
         raise
-    return {'status': 'ok'}
+    return {'status': 'stopped' if outcome == TASK_EXECUTION_STOPPED else 'ok'}

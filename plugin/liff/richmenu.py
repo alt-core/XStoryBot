@@ -28,7 +28,7 @@ class LiffRichmenuRuntime:
     def construct_response(self, context, sender, msg, options):
         interface, user_id = _line_target(context)
         menu_id = resolve_line_id(options[0], getattr(context, 'richmenu_ids', {}))
-        interface.api.link_rich_menu(user_id, menu_id)
+        interface.link_rich_menu(context, menu_id, user_id=user_id)
         return True
 
 

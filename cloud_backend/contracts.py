@@ -17,6 +17,31 @@ class StateConflictError(StateStoreError):
     """楽観ロックまたはトランザクション競合。"""
 
 
+class StateRecoveryError(StateStoreError):
+    """状態を安全に確認・復元できず、同じ操作の再実行を止める。"""
+
+
+class SaveResultUnknownError(StateRecoveryError):
+    """保存結果を確定できず、保存後の状態から再計画してはいけない。"""
+
+
+class RollbackError(StateRecoveryError):
+    """保存後の復元を確認できず、元の操作の再実行を止める。"""
+
+
+class RollbackConflictError(RollbackError, StateConflictError):
+    """後続の保存を保護するため、巻き戻しを中止した。"""
+
+
+def checked_publication_generation(value, *, allow_missing=True):
+    """未導入のpointerはNoneとし、不正な世代を正常値に置き換えない。"""
+    if value is None and allow_missing:
+        return None
+    if type(value) is not int or value < 1:
+        raise StateStoreError('Scenarioの公開世代は正の整数である必要があります')
+    return value
+
+
 class ObjectStoreError(CloudBackendError):
     """オブジェクト保存処理のエラー。"""
 
@@ -66,10 +91,12 @@ class StateStore(ABC):
 
     @abstractmethod
     def get_global_bot_variables(self, bot_name):
+        """URIと整数の公開世代を同じ記録から返す。未導入の世代はNone。"""
         raise NotImplementedError
 
     @abstractmethod
     def save_global_bot_variables(self, bot_name, scenario_uri):
+        """URIの公開と世代加算を原子的に行い、その公開世代を返す。"""
         raise NotImplementedError
 
     @abstractmethod
@@ -78,10 +105,12 @@ class StateStore(ABC):
 
     @abstractmethod
     def create_player_status(self, status_id, data):
+        """確実な未保存競合だけStateConflictErrorにし、結果不明を区別する。"""
         raise NotImplementedError
 
     @abstractmethod
     def update_player_status(self, status_id, data, version):
+        """条件付きで更新する。結果不明を未保存の競合へ変換しない。"""
         raise NotImplementedError
 
     @abstractmethod
@@ -89,7 +118,8 @@ class StateStore(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def delete_player_status(self, status_id):
+    def delete_player_status(self, status_id, version=None):
+        """version指定時は、その版の状態だけを削除する。"""
         raise NotImplementedError
 
     @abstractmethod

@@ -1,6 +1,6 @@
 # Webchatガイド
 
-Webchatは、Player状態を署名付きtokenとしてbrowserへ返す同期interfaceです。Webchat turnではPlayer、More、履歴をDynamoDBへ保存せず、固定したScenarioをS3から初回だけ読み、その後はprocess内で再利用します。
+Webchatは、Player状態を署名付きtokenとしてbrowserへ返す同期interfaceです。Webchat turnではPlayer、More、履歴をDynamoDBへ保存しません。Scenarioは固定URIを使う方式と、ビルド済みの最新版に追従する方式を選べます。どちらも読み込んだScenarioをprocess内で再利用します。
 
 Webchatは`app_webchat:app`を起動する専用processで提供します。Dockerでは`XSBOT_APP_MODULE=app_webchat:app`を指定します。通常APIの`app:app`にはWebchatのturn APIを登録しません。
 
@@ -18,27 +18,40 @@ Webchatは`app_webchat:app`を起動する専用processで提供します。Dock
 
 - `WebchatImageUri`: Webchatだけを個別更新するimage URI。空の場合は共通`ImageUri`を使用
 - `WebchatSigningKey`: Webchat専用の32 byte以上のbase64url鍵一件
-- `WebchatScenarioUri`: `s3://.../scenario/<content digest>`形式のimmutable Scenario参照
+- `WebchatScenarioUri`: 固定方式で使う`s3://.../scenario/<content digest>`形式のimmutable Scenario参照
+- `WebchatFollowLatestScenario`: 既定`false`。`true`なら対象Botの最新版に共通キャッシュで追従する。固定URIは不要
 - `WebchatCompatibilityEpoch`: Scenario運営側が管理する非秘密の互換性識別子
 - `WebchatAllowedOrigins`: 同一origin参照UI以外のclientを置くHTTPS origin。複数の場合はカンマ区切り。API自身のoriginはtemplateが固定設定するため列挙不要
 - `WebchatExternalHttpOrigins`: Scenarioから呼び出せる外部HTTPS origin。不要なら空
 - `WebchatMediaOrigins`: 実行時展開mediaを限定するHTTPS origin。不要なら空
 - `WebchatThrottleRate`／`WebchatThrottleBurst`: 無認証routeの運用上のthrottle
 
-新規stackでは、まずWebchat無効のままbucket／builderを作成し、Scenario artifactをbuildしてから、そのURIを指定する二回目のdeployでWebchatを有効にします。
+固定方式の新規stackでは、まずWebchat無効のままbucket／builderを作成し、Scenario artifactをbuildしてから、そのURIを指定する二回目のdeployでWebchatを有効にします。追従方式では固定URIを指定せず有効化できますが、初回ビルドが終わるまではturnがエラーになります。
 
-`deploy_aws.sh`を使う場合は、設定された`XSBOT_WEBCHAT_*`環境変数だけを上記parameterへ渡し、更新時の未設定項目は前回値を維持します。既に有効なstackの通常更新では`XSBOT_WEBCHAT_ENABLED`を未設定にします。明示的に`true`を指定するときは鍵とScenario URIも必要で、`false`を指定するとWebchatを無効化します。追加originと外部HTTP／media originは明示した空文字で消去できます。鍵・Scenario URI・epoch・throttleに空文字は指定できません。imageは有効状態の指定を省略しても更新されます。
+`deploy_aws.sh`を使う場合は、設定された`XSBOT_WEBCHAT_*`環境変数だけを上記parameterへ渡し、更新時の未設定項目は前回値を維持します。既に有効なstackの通常更新では`XSBOT_WEBCHAT_ENABLED`を未設定にします。明示的に`true`を指定するときは鍵が必要で、固定方式ならScenario URIも必要です。追従方式の有効化には`XSBOT_WEBCHAT_FOLLOW_LATEST_SCENARIO=true`を指定します。`XSBOT_WEBCHAT_ENABLED=false`を指定するとWebchatを無効化します。追加originと外部HTTP／media originは明示した空文字で消去できます。鍵・epoch・throttle、固定方式のScenario URIに空文字は指定できません。imageは有効状態の指定を省略しても更新されます。
 
-署名鍵は`deploy_aws.sh`の引数として渡すため、`sam deploy`の実行時に操作者の端末へ表示されます。個人の端末で実行する運用を前提にしています。署名鍵は通常のScenario更新やdeployでは維持します。鍵漏洩時は新しい鍵を注入したLambda versionへaliasを切り替え、旧token全体の失効を受け入れます。Webchat Lambdaは署名鍵を環境変数としてversionへ固定し、起動時やturnごとにParameter StoreまたはDynamoDBを読みません。
+署名鍵は`deploy_aws.sh`の引数として渡すため、`sam deploy`の実行時に操作者の端末へ表示されます。個人の端末で実行する運用を前提にしています。署名鍵は通常のScenario更新やdeployでは維持します。鍵漏洩時は新しい鍵を注入したLambda versionへaliasを切り替え、旧token全体の失効を受け入れます。Webchat Lambdaは署名鍵を環境変数としてversionへ固定し、Parameter Storeを読みません。追従方式だけ、最新URIをDynamoDBから読みます。IAMは`GLOBAL`項目への`GetItem`に限定し、Player状態の読取り・書込みは許しません。
+
+Botごとのinterface設定で方式を上書きする場合、追従するBotが一つでもあればAWSの`WebchatFollowLatestScenario`を`true`にして読取権限を付けます。固定方式のBotには、そのBotのScenario URIを指定します。
 
 ## Scenario更新
 
 1. 通常のbuilderでScenarioをimmutable artifactとしてS3へ保存します。
 2. 代表的な既存stateで新しいScenarioとの互換性を確認します。
 3. 互換更新では同じcompatibility epochを維持します。非互換更新だけepochを変更します。
-4. `update_webchat_scenario.sh`を実行します。変更内容を確認して同じ画面で承認すると、新しいLambda versionが発行され、`live` aliasが切り替わります。
+4. 固定方式では`update_webchat_scenario.sh`を実行します。変更内容を確認して同じ画面で承認すると、新しいLambda versionが発行され、`live` aliasが切り替わります。追従方式ではビルドが最新URIと公開世代を公開し、通常は共通キャッシュの確認間隔後の要求で反映されます。通常の更新にstack更新は不要です。
 
-Webchat processは固定URIのdigestを検証してScenarioを読みます。DynamoDB上の最新Scenario pointerは参照しません。
+`webchat.params.follow_latest_scenario`は既定`false`です。GCP等でも、この設定を`true`にすると既存StateStoreにある実行対象Bot自身の最新URIと公開世代を、LINE等と同じ処理で確認します。`options.scenario_check_interval`は共通で、既定`10`秒、`0`なら毎回確認します。URIが変わったときだけ本体を読み直し、同じURIの再公開は本体を再利用します。固定方式はlatest pointerの確認もDB初期化も行いません。どちらもScenarioのdigestを検証します。
+
+セーブには実行したBotごとの公開世代を署名して記録します。セーブがキャッシュ以下の世代なら再確認せず、キャッシュより新しい場合だけ期限を待たず再確認します。内容hashの大小で新旧を判断しません。公開世代のない既存セーブや、固定方式で進んだセーブを追従方式で使う場合は、409を返して「最初から」を求めます。
+
+追従方式から固定方式へ切り替える場合は、使用するScenario URIも指定してください。AWSテンプレートは前回値を含む実際のparameterで、固定方式のURIが空でないことを検査します。
+
+要求内ではScenario・URI・revision・公開世代を保持し、同じBotへの同期forwardも同じ版を使います。連携Botは最初に実行する時に選んだ版をその要求内で再利用します。全Botの更新を一度に切り替える保証ではありません。再確認や本体取得に失敗した場合はエラーを返し、未確認の旧版へのfallbackやclientのセーブ更新は行いません。互換epochの管理は運営側の責任のままです。非互換の変更やエンジンのコード・設定変更では、通常のデプロイを行ってください。
+
+取得失敗も共通の確認間隔だけキャッシュします。同じ世代以下のセーブは、読取りが復旧しても既定では最大10秒エラーを返します。失敗時に確認した世代より新しいセーブだけ期限前に再確認します。
+
+公開世代の導入時はreaderとbuilder・CLIを一緒に更新し、旧writerを混在させずに再ビルドしてください。公開世代は互換性の自動判定ではありません。保存先の作り直しで世代を失った場合や、公開先を旧URIへ戻す場合も、運営側で互換epochとセーブの扱いを確認してください。
 
 `update_webchat_scenario.sh`はデプロイ済みstackの`Original`テンプレートとparameter名を取得し、`WebchatScenarioUri`だけを変更します。SAMが付けるMetadataを保ち、他のparameterは`UsePreviousValue`で維持するため、署名鍵などの値を表示する必要はありません。YAMLとJSONのテンプレートに対応します。操作者には既存の更新権限に加えて`cloudformation:GetTemplate`の読取権限が必要です。
 

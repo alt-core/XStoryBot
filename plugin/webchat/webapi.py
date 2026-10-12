@@ -6,6 +6,7 @@ import uuid
 
 from bottle import Bottle, HTTPResponse, request, response
 
+from aws_request_context import lambda_context
 import utility
 from plugin.webchat.errors import (
     BotResponseTooLarge,
@@ -44,18 +45,7 @@ def _request_id():
 
 
 def _lambda_context():
-    cached = request.environ.get('webchat.lambda_context')
-    if isinstance(cached, dict):
-        return cached
-    raw = request.headers.get('X-Amzn-Lambda-Context')
-    try:
-        value = json.loads(raw) if raw else {}
-    except (TypeError, ValueError):
-        value = {}
-    if not isinstance(value, dict):
-        value = {}
-    request.environ['webchat.lambda_context'] = value
-    return value
+    return lambda_context()
 
 
 def _deadline_seconds(interface):
@@ -266,6 +256,7 @@ def turn(bot_name):
                 except ValueError as error:
                     raise _invalid_request(str(error)) from error
                 if selected is None:
+                    interface.ensure_scenario(bot, state_payload['player'])
                     # 古い画面の操作は実行せず、セーブを維持して表示だけ更新する。
                     _log_event('menu-refreshed', request_id=request_id,
                                menu=input_data['menu'], area=input_data['area'])
@@ -287,6 +278,7 @@ def turn(bot_name):
                 state_payload, action, request_id, echo_message,
                 deadline_seconds=deadline_seconds)
 
+        context.set_scenario(interface.ensure_scenario(bot, context.original_player))
         _log_event(
             'turn-accepted',
             request_id=request_id,
@@ -296,7 +288,8 @@ def turn(bot_name):
             received_state_id=received_state_id,
             received_revision=received_revision,
             received_scenario_revision=received_scenario_revision,
-            current_scenario_revision=interface.scenario_revision,
+            current_scenario_revision=context.scenario_revision,
+            scenario_generation=context.scenario_generation,
             compatibility_epoch=interface.compatibility_epoch,
             action=context.action,
             menu=input_data.get('menu'), area=input_data.get('area'),
@@ -315,11 +308,10 @@ def turn(bot_name):
             from plugin.webchat.session import run_session
             result = run_session(bot, _get_bot, context, liff_app)
         else:
-            interface.ensure_scenario(bot)
             if context.deadline - time.monotonic() <= 0.5:
                 raise TurnDeadlineExceeded(
                     'Webchat turn deadlineを超えました')
-            result = bot.handle_action(context)
+            result = bot.handle_action(context, selection=context.scenario_selection)
         if not isinstance(result, dict):
             raise WebchatError('Webchat responseを生成できませんでした')
         original_player = context.original_player
@@ -365,7 +357,8 @@ def turn(bot_name):
             received_revision=received_revision,
             next_state_id=result['state']['id'],
             next_revision=result['state']['revision'],
-            scenario_revision=interface.scenario_revision,
+            scenario_revision=context.scenario_revision,
+            scenario_generation=context.scenario_generation,
             compatibility_epoch=interface.compatibility_epoch,
             scene=saved_player.get('scene'),
             scene_history=saved_player.get('scene_history', []),

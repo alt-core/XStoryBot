@@ -10,6 +10,7 @@ from unittest.mock import Mock, patch
 
 import common_commands
 import task_client
+from scenario_selection import ScenarioSelection
 
 
 class DeferredTaskTest(unittest.TestCase):
@@ -32,7 +33,8 @@ class DeferredTaskTest(unittest.TestCase):
         self.context = SimpleNamespace(
             service_name='line', bot_name='bot', action='start',
             user=SimpleNamespace(service_name='line', serialize=lambda: 'line:user,U1'),
-            status=SimpleNamespace(scene='scene'), env={},
+            status=SimpleNamespace(scene='scene', scenario_generations={}), env={},
+            env_dicts=[], attrs={},
             add_env=Mock(),
             load_status=Mock(side_effect=lambda: self.events.append('load')),
             save_status=Mock(side_effect=lambda: self.events.append('save')),
@@ -44,6 +46,7 @@ class DeferredTaskTest(unittest.TestCase):
         )
         self.bot = self.runtime.BotRuntime('bot', {'line': self.interface}, None)
         self.bot.scenario = SimpleNamespace(version=3, constants={})
+        self.selection = ScenarioSelection(self.bot.scenario, 'fixture-uri', None)
         self.common = common_commands.CommonCommands_Runtime({'reset_keyword': '!reset'})
         self.main = ModuleType('main')
         self.main.get_bot = Mock(return_value=SimpleNamespace(get_interface=lambda _name: self.interface))
@@ -56,7 +59,7 @@ class DeferredTaskTest(unittest.TestCase):
 
     def _run(self):
         with patch.dict(sys.modules, {'main': self.main}):
-            return self.bot.handle_action(self.context)
+            return self.bot.handle_action(self.context, selection=self.selection)
 
     def test_AWSでは保存と返信の後にforwardを登録する(self):
         self.assertEqual('OK', self._run())

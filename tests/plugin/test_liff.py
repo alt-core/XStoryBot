@@ -190,7 +190,8 @@ class LiffWebAPITest(unittest.TestCase):
         self.assertEqual((user.service, user.user_id), ('line', 'user,U1234567890'))
         self.assertEqual(action, '##liff.選択/1')
         self.assertEqual(attrs, {})
-        self.assertEqual(self.bot.reload_calls, 1)
+        self.assertEqual(self.bot.reload_calls, 0)
+        self.assertIsNone(self.bot.context.action_deadline)
         self.assertEqual(
             self.response.headers['Access-Control-Allow-Origin'],
             'https://liff.example.invalid',

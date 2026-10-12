@@ -10,6 +10,7 @@ import auth
 import utility
 import main
 import users
+from aws_request_context import get_lambda_deadline
 
 app = Bottle()
 
@@ -116,7 +117,7 @@ def send_message(bot_name):
     if not isinstance(user_id, str) or not user_id:
         abort_json(502, 'Invalid LINE profile response')
 
-    bot.check_reload()
+    deadline = get_lambda_deadline()
 
     attrs = {}
     action = interface.action_prefix + data['action']
@@ -127,6 +128,7 @@ def send_message(bot_name):
 
     context = interface.create_context(user, action, attrs)
     if context is not None:
+        context.action_deadline = deadline
         result = bot.handle_action(context)
         logging.info(f'LIFF result: {result}')
         if result is not None:

@@ -10,10 +10,11 @@ from unittest.mock import Mock, call, patch
 
 from cloud_backend.contracts import (
     StateConflictError,
+    StateStoreError,
     StateVersion,
     VersionedState,
 )
-from cloud_backend.gcp.state_store import GcpStateStore
+from cloud_backend.gcp.state_store import GcpStateStore, _PLAYER_WRITE_ID, _PlayerWriteRetry
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -121,8 +122,12 @@ class GcpStateStorePlayerTest(unittest.TestCase):
             'last_update_time']
         self.assertEqual(restored.seconds, 1_700_000_000)
         self.assertEqual(restored.nanos, 123_456_789)
-        self.document.update.assert_called_once_with(
-            {'scene': 'scene-2'}, option=write_option)
+        self.document.update.assert_called_once()
+        payload = self.document.update.call_args.args[0]
+        self.assertEqual('scene-2', payload['scene'])
+        self.assertEqual(32, len(payload[_PLAYER_WRITE_ID]))
+        self.assertIs(write_option, self.document.update.call_args.kwargs['option'])
+        self.assertIsInstance(self.document.update.call_args.kwargs['retry'], _PlayerWriteRetry)
 
     def test_missingとcreateとforce_putの戻り値を維持する(self):
         self.document.get.return_value = SimpleNamespace(exists=False)
@@ -139,20 +144,37 @@ class GcpStateStorePlayerTest(unittest.TestCase):
         self.assertEqual(created, StateVersion('firestore:v1:10:20'))
         self.assertEqual(forced, StateVersion('firestore:v1:30:40'))
 
-    def test_Googleの競合例外だけを共通例外へ変換する(self):
+    def test_条件付き削除にも更新時と同じpreconditionを渡す(self):
+        self.store.delete_player_status(
+            'bot:line:user-1', StateVersion('firestore:v1:1700000000:123456789'))
+        restored = self.client.write_option.call_args.kwargs['last_update_time']
+        self.assertEqual((restored.seconds, restored.nanos), (1_700_000_000, 123_456_789))
+        self.document.delete.assert_called_once()
+        self.assertIs(self.client.write_option.return_value, self.document.delete.call_args.kwargs['option'])
+        self.assertIsInstance(self.document.delete.call_args.kwargs['retry'], _PlayerWriteRetry)
+
+    def test_初回Google条件拒否だけ既知競合とし他の例外は結果不明にする(self):
         failed_precondition = type(
             'FailedPrecondition',
             (Exception,),
             {'__module__': 'google.api_core.exceptions'},
         )
-        self.document.create.side_effect = failed_precondition('conflict')
+        def fail(error):
+            def create(data, *, retry):
+                def rpc():
+                    raise error
+                return retry(rpc)()
+            return create
+        self.document.create.side_effect = fail(failed_precondition('conflict'))
 
         with self.assertRaises(StateConflictError):
             self.store.create_player_status('new', {'value': '{}'})
 
-        self.document.create.side_effect = RuntimeError('application error')
-        with self.assertRaisesRegex(RuntimeError, 'application error'):
+        application_error = RuntimeError('application error')
+        self.document.create.side_effect = fail(application_error)
+        with self.assertRaises(StateStoreError) as raised:
             self.store.create_player_status('new', {'value': '{}'})
+        self.assertIs(application_error, raised.exception.__cause__)
 
         application_conflict = type(
             'Conflict',
@@ -160,11 +182,11 @@ class GcpStateStorePlayerTest(unittest.TestCase):
             {'__module__': 'application.domain'},
         )
         error = application_conflict('application conflict')
-        self.document.create.side_effect = error
-        with self.assertRaises(application_conflict) as raised:
+        self.document.create.side_effect = fail(error)
+        with self.assertRaises(StateStoreError) as raised:
             self.store.create_player_status('new', {'value': '{}'})
 
-        self.assertIs(raised.exception, error)
+        self.assertIs(raised.exception.__cause__, error)
 
 
 class GcpStateStoreAtomicOperationTest(unittest.TestCase):
@@ -326,7 +348,6 @@ class GcpStateStoreAtomicOperationTest(unittest.TestCase):
         batch.commit.return_value = [provider_result]
 
         results = (
-            self.store.save_global_bot_variables('bot', 'scenario-uri'),
             self.store.delete_player_status('bot:line:user-1'),
             self.store.clear_group_members('group-1'),
             self.store.put_image_file_stat('image-key', {'value': '1'}),

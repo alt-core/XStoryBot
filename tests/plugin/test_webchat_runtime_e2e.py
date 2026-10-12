@@ -218,7 +218,6 @@ class WebchatRuntimeE2ETest(unittest.TestCase):
             'bot', {'webchat': cls.interface}, scenario_loader=None)
         cls.bot.scenario = cls.scenario
         cls.bot.scenario_uri = cls.interface.scenario_uri
-        cls.interface._scenario_loaded = True
         cls.runtime._director_class = cls.scenario_module.Director
         webapi.configure(lambda name: cls.bot if name == 'bot' else None)
         cls.app = TestApp(webapi.app)
@@ -290,6 +289,27 @@ class WebchatRuntimeE2ETest(unittest.TestCase):
             {'type': 'text', 'text': '#next'},
             started.json['state_token'])
         self.assertEqual([], spoofed.json['messages'])
+
+    def test_外部APIの失敗を作者の分岐として処理し応答とセーブを返す(self):
+        for command in ('@getjson', '@postjson'):
+            scenario = self.scenario_module.ScenarioBuilder.build_from_table([
+                ['##line.follow', command, 'https://hooks.example.test/result', '{{}}'],
+                ['', '/if', '!$_result'],
+                ['', '今は利用できません'],
+                ['', '/else'],
+                ['', '取得しました'],
+                ['', '/end'],
+            ], version=3)
+            for failure in (Mock(status_code=503), requests.ReadTimeout('外部APIの一時障害')):
+                with self.subTest(command=command, failure=type(failure).__name__), \
+                        patch.object(self.bot, 'scenario', scenario), \
+                        patch.object(self.interface, 'request_external', side_effect=(
+                            failure if isinstance(failure, Exception) else None),
+                            return_value=failure), self.assertLogs(level='ERROR'):
+                    result = self._start()
+                self.assertEqual(200, result.status_int)
+                self.assertEqual('今は利用できません', result.json['messages'][0]['text'])
+                self.assertEqual(0, self.interface.load_state(result.json['state_token'])['revision'])
 
     def test_flag_audio_imagemapを実DirectorからMessageSpecへ変換する(self):
         started = self._start()

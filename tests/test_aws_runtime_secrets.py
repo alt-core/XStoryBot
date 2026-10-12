@@ -389,6 +389,7 @@ dev:
             'options:\n    signing_key: !env PROTECTED',
             'plugins:\n    webchat:\n      signing_key: !env PROTECTED',
             'plugins:\n    webchat:\n      scenario_uri: !env PROTECTED',
+            'plugins:\n    webchat:\n      follow_latest_scenario: !env PROTECTED',
             'plugins:\n    webchat:\n      scenario_compatibility_epoch: !format ["{}", !env PROTECTED]',
             'bots:\n    example:\n      interfaces:\n        - type: webchat\n          params:\n            allowed_origins: !env PROTECTED',
             'bots:\n    example:\n      interfaces:\n        - type: webchat\n          params:\n            signing_key: !env PROTECTED\n        - type: webchat\n          params:\n            signing_key: fixed',

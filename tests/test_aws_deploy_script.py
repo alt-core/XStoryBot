@@ -46,6 +46,7 @@ class AwsDeployScriptTest(unittest.TestCase):
                 'WebchatImageUri',
                 'WebchatSigningKey',
                 'WebchatScenarioUri',
+                'WebchatFollowLatestScenario',
                 'WebchatCompatibilityEpoch',
                 'AlarmsEnabled'):
             self.assertIn(f'ParameterKey={name},ParameterValue=', self.source)
@@ -199,6 +200,25 @@ sam() {
         self.assertNotIn('WebchatSigningKey', parameters)
         self.assertNotIn('WebchatScenarioUri', parameters)
         self.assertEqual(parameters['ImageUri'], parameters['WebchatImageUri'])
+
+    def test_追従を有効にする場合は固定URIなしでdeployできる(self):
+        parameters = self._parameters(self._run_deploy({
+            'XSBOT_WEBCHAT_ENABLED': 'true',
+            'XSBOT_WEBCHAT_FOLLOW_LATEST_SCENARIO': 'true',
+            'XSBOT_WEBCHAT_SIGNING_KEY': 'artificial-signing-key',
+        }))
+        self.assertEqual('true', parameters['WebchatFollowLatestScenario'])
+        self.assertNotIn('WebchatScenarioUri', parameters)
+        parameters = self._parameters(self._run_deploy({
+            'XSBOT_WEBCHAT_FOLLOW_LATEST_SCENARIO': 'true',
+            'XSBOT_WEBCHAT_SCENARIO_URI': '',
+        }))
+        self.assertEqual('', parameters['WebchatScenarioUri'])
+
+    def test_追従設定の不正な値はbuild前に止める(self):
+        result = self._run_deploy({'XSBOT_WEBCHAT_FOLLOW_LATEST_SCENARIO': 'invalid'})
+        self.assertNotEqual(0, result.returncode)
+        self.assertNotIn('call:', result.stderr)
 
     def test_メールなしでもalarmを明示的に有効にできる(self):
         result = self._run_deploy({

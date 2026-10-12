@@ -62,8 +62,6 @@ def twilio_callback_sub(bot, interface, from_tel, to_tel, is_voicecall,
     body = request.body.read().decode('utf-8')
     logging.info(f'Twilio callback: {body}')
 
-    bot.check_reload()
-
     response.content_type = 'text/xml; charset=UTF-8'
 
     if not from_tel.startswith('+81'):

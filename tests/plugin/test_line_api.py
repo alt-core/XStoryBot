@@ -107,6 +107,15 @@ class LineApiClientTest(unittest.TestCase):
         self.assertEqual('http://127.0.0.1:8080/v2/bot/message/reply', self.posts[0]['url'])
         self.assertEqual((5, 10), self.posts[0]['timeout'])
 
+    def test_送信ごとのtimeoutは他の呼出しへ残らない(self):
+        self.responses = [_response(200, {}) for _ in range(4)]
+        self.client.reply('reply-token', [], timeout=(0.3, 0.5))
+        self.client.push('U1', [], timeout=(0.6, 1))
+        self.client.link_rich_menu('U1', 'richmenu-1', timeout=(0.9, 1.5))
+        self.client.reply('reply-token', [])
+        self.assertEqual([(0.3, 0.5), (0.6, 1), (0.9, 1.5), (30, 30)],
+                         [post['timeout'] for post in self.posts])
+
 
 if __name__ == '__main__':
     unittest.main()

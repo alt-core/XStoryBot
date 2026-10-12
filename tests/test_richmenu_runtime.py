@@ -7,6 +7,7 @@ import types
 import unittest
 from unittest.mock import Mock, patch
 
+from scenario_selection import ScenarioSelection
 from plugin.webchat.interface import WebchatInterface, WebchatInterfaceFactory
 from plugin.webchat.state import TokenPlayerStatus
 from tests.plugin import test_webchat_liff as fixtures
@@ -119,6 +120,7 @@ class RichmenuRuntimeTest(unittest.TestCase):
         ])], {})
         scenario = self.fixture.scenario_module
         models = types.SimpleNamespace(GlobalBotVariablesDB=Mock())
+        models.GlobalBotVariablesDB.save.return_value = 1
         cache = types.SimpleNamespace(set_cache=Mock())
         self.assertIsNone(bot.get_interface('line'))
         with patch.dict(sys.modules, {'models': models, 'build_cache': cache, 'scenario': scenario}), \
@@ -154,7 +156,8 @@ class RichmenuRuntimeTest(unittest.TestCase):
         context.save_status = Mock()
         with patch('context._get_player_status_class', return_value=TokenPlayerStatus), \
                 self.assertLogs(level='ERROR') as logged:
-            self.assertIsNone(self.case.root.handle_action(context))
+            self.assertIsNone(self.case.root.handle_action(context, selection=ScenarioSelection(
+                self.case.root.scenario, self.case.root.scenario_uri, None)))
         self.assertIn('リッチメニュー missing', '\n'.join(logged.output))
         context.save_status.assert_not_called()
         self.assertEqual([], interface.api.mock_calls)
@@ -189,7 +192,8 @@ class RichmenuRuntimeTest(unittest.TestCase):
         original = self.case.root.interfaces.copy()
         context = self.interface.create_start_context('artificial')
         with patch.object(self.fixture.runtime.settings, 'CONSTANTS', {'url': 'settings', 'fallback': 'base'}):
-            result = self.case.root.handle_action(context, interface=Responder())
+            result = self.case.root.handle_action(context, interface=Responder(), selection=ScenarioSelection(
+                self.case.root.scenario, self.case.root.scenario_uri, None))
         self.assertEqual(('sheet', 'base'), result)
         self.assertEqual(original, self.case.root.interfaces)
 

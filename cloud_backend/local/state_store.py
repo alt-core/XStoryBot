@@ -9,6 +9,7 @@ import uuid
 
 from cloud_backend.contracts import (
     StateConflictError, StateStore, StateStoreError, StateVersion, VersionedState,
+    checked_publication_generation,
 )
 from cloud_backend.local.storage import checked_path, prepare_root
 
@@ -74,10 +75,21 @@ class LocalStateStore(StateStore):
             connection.execute('DELETE FROM records WHERE kind=? AND key=?', (kind, key))
 
     def get_global_bot_variables(self, bot_name):
-        return self._get('global', bot_name)
+        data = self._get('global', bot_name)
+        if data is None:
+            return None
+        return {**data, 'generation': checked_publication_generation(data.get('generation'))}
 
     def save_global_bot_variables(self, bot_name, scenario_uri):
-        self._put('global', bot_name, {'scenario_uri': scenario_uri})
+        with self._connection(write=True) as connection:
+            current = self._read(connection, 'global', bot_name)
+            data = current[0] if current else {}
+            generation = checked_publication_generation(
+                data['generation'], allow_missing=False) if 'generation' in data else 0
+            generation += 1
+            self._write(connection, 'global', bot_name, {
+                'scenario_uri': scenario_uri, 'generation': generation})
+        return generation
 
     def load_player_status(self, status_id):
         with self._connection() as connection:
@@ -110,8 +122,18 @@ class LocalStateStore(StateStore):
             self._write(connection, 'player', status_id, dict(data), version)
         return StateVersion(version)
 
-    def delete_player_status(self, status_id):
-        self._delete('player', status_id)
+    def delete_player_status(self, status_id, version=None):
+        if version is None:
+            self._delete('player', status_id)
+            return
+        if not isinstance(version, StateVersion):
+            raise TypeError('versionにはStateVersionを指定してください')
+        with self._connection(write=True) as connection:
+            deleted = connection.execute('''DELETE FROM records
+                WHERE kind='player' AND key=? AND version=?''',
+                (status_id, version.value))
+            if deleted.rowcount != 1:
+                raise StateConflictError('Player状態が別の書込みで変更されています')
 
     def get_group_members(self, group_id):
         shards = self._get('group', group_id) or {}

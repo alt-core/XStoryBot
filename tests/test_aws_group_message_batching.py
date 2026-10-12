@@ -103,24 +103,28 @@ class AwsGroupWorkerIntegrationTest(GroupCheckpointTestBase):
         self.assertEqual(self.task['successful_members'], 4)
         self.assertEqual(len(self.sent), 4)
 
-    def test_実行完了記録の失敗後もcheckpointから登録だけを再開する(self):
+    def test_完了記録失敗で返信済みbatchと登録済みchildを繰り返さない(self):
         complete = self.execution_store.complete_task_execution
         attempts = [0]
 
-        def fail_first_complete(*args):
+        def fail_first_complete(*args, **kwargs):
             attempts[0] += 1
             if attempts[0] == 1:
                 raise StateStoreError('実行完了記録失敗')
-            return complete(*args)
+            return complete(*args, **kwargs)
 
         self.execution_store.complete_task_execution = fail_first_complete
         parent = self.envelope(0)
-        with self.assertRaises(StateStoreError):
-            self.invoke_worker(parent)
-        self.assertEqual(self.invoke_worker(parent), {'status': 'ok'})
+        with self.assertLogs(level='ERROR'):
+            self.assertEqual(self.invoke_worker(parent), {'status': 'stopped'})
+        self.assertEqual(self.invoke_worker(parent), {'status': 'stopped'})
+        self.assertEqual(self.invoke_worker(self.envelope(0)), {'status': 'stopped'})
         self.assertEqual(len(self.sent), 2)
         self.assertEqual(self.task['successful_members'], 2)
-        self.assertEqual(self.module.task_client.create_task.call_count, 2)
+        self.assertEqual(self.module.task_client.create_task.call_count, 1)
+        self.assertEqual(self.invoke_worker(self.envelope(1)), {'status': 'ok'})
+        self.assertEqual(len(self.sent), 4)
+        self.assertEqual(self.task['status'], self.db.STATUS_COMPLETED)
 
     def test_17batchの連鎖も最終batchで有限に完了する(self):
         self.task.update(total_members=34, total_batches=17)

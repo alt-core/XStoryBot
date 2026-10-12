@@ -4,6 +4,8 @@ import logging
 import time
 
 import utility
+from cloud_backend.contracts import StateRecoveryError
+from scenario_selection import ScenarioLoadError
 
 
 class TaskProcessingError(Exception):
@@ -34,15 +36,29 @@ def _do_action_iter(result, bot, user, action, attrs, get_group_members,
         raise TaskProcessingError(400, 'infinite loop is detected')
 
     if user.service_name == 'group':
+        stopped = None
+        scenario_error = None
+        initial_results = len(result)
         for member in get_group_members(user.user_id):
-            _do_action_iter(
-                result, bot, member, action, attrs,
-                get_group_members, options, sleep_func, level + 1,
-                log_values, failures, interface_name,
-            )
+            try:
+                _do_action_iter(
+                    result, bot, member, action, attrs,
+                    get_group_members, options, sleep_func, level + 1,
+                    log_values, failures, interface_name,
+                )
+            except StateRecoveryError as error:
+                # 停止した利用者以外へは配信を続け、最後に配送側へ停止を伝える。
+                stopped = error
+            except ScenarioLoadError as error:
+                scenario_error = error
             interval = options.get('group_interval', 100)
             if interval > 0:
                 sleep_func(interval / 1000)
+        if stopped is not None:
+            raise stopped
+        if scenario_error is not None and len(result) == initial_results:
+            # 全員が計画前に止まった場合だけ、配信全体を安全に再試行できる。
+            raise scenario_error
         return
 
     service = user.service_name if interface_name is None else interface_name
@@ -79,7 +95,6 @@ def process_decoded_action(bot, serialized_user, action, attrs, user_class,
             not isinstance(interface_name, str) or not interface_name):
         raise TaskProcessingError(400, 'invalid interface')
 
-    bot.check_reload()
     result = []
     _do_action_iter(
         result, bot, user, action, attrs,
@@ -106,7 +121,6 @@ def process_group_batch(bot_name, bot, task_id, batch_index, manager_class):
     if not task_id:
         raise TaskProcessingError(400, 'missing task_id parameter')
 
-    bot.check_reload()
     processor = manager_class(bot_name, bot_instance=bot)
     result, status_code = processor.handle_batch_process_request(
         task_id, batch_index)

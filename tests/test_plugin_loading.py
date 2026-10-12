@@ -84,6 +84,10 @@ class MorePluginLoadingTest(unittest.TestCase):
         def raise_error(message):
             raise ValueError(message)
 
+        def assert_strlen(value, maximum):
+            if len(value) > maximum:
+                raise_error(f'文字数制限（{maximum}文字）')
+
         builder = SimpleNamespace(
             version=3, option_force=True, node=None,
             scene=SimpleNamespace(get_relative_position_desc=lambda _node: 'test'),
@@ -93,6 +97,7 @@ class MorePluginLoadingTest(unittest.TestCase):
             build_image_for_imagemap_command_with_rawdata=Mock(return_value=(
                 'https://example.invalid/page', (1040, 1040))),
             raise_error=raise_error,
+            assert_strlen=assert_strlen,
         )
         self.renderer.render_text_to_png.reset_mock()
         self.renderer.render_text_to_png.side_effect = [

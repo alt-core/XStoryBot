@@ -75,6 +75,32 @@ def decode_action_string(data):
     return action, attrs
 
 
+def action_for_log(data):
+    """encoded actionの操作名を残し、選択肢tokenをログへ出さない。"""
+    return decode_action_string(data)[0]
+
+
+def redact_line_payload(value):
+    """LINEの既知token項目を伏せ、本文・利用者・操作の診断を残す。"""
+    def visit(item, parent=None):
+        if isinstance(item, list):
+            return [visit(child) for child in item]
+        if not isinstance(item, dict):
+            return item
+        result = {}
+        for key, child in item.items():
+            if key in ('replyToken', 'trackingId', 'state_token', 'postback_token'):
+                result[key] = '[redacted]'
+            elif (key == 'data' and isinstance(child, str)
+                    and (parent == 'postback' or item.get('type') == 'postback')):
+                action, attrs = decode_action_string(child)
+                result[key] = action + '@@[redacted]' if attrs else child
+            else:
+                result[key] = visit(child, key)
+        return result
+    return visit(value)
+
+
 LINE_VIDEO_TRACKING_ID_MAX_LENGTH = 100
 _LINE_VIDEO_TRACKING_ID_PATTERN = re.compile(
     r'^[a-zA-Z0-9\-.=,+*()%$&;:@{}!?<>\[\]]+$')

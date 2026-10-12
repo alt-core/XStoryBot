@@ -25,18 +25,27 @@ class StateStoreContractMixin:
 
         result = self.contract_store.save_global_bot_variables(
             'bot-a', 'opaque://scenario/1')
-        self.assertIsNone(result)
+        self.assertEqual(1, result)
         self.assertEqual(
-            {'scenario_uri': 'opaque://scenario/1'},
+            {'scenario_uri': 'opaque://scenario/1', 'generation': 1},
             self.contract_store.get_global_bot_variables('bot-a'),
         )
 
-        self.contract_store.save_global_bot_variables(
-            'bot-a', 'opaque://scenario/2')
+        self.assertEqual(2, self.contract_store.save_global_bot_variables(
+            'bot-a', 'opaque://scenario/2'))
         self.assertEqual(
-            {'scenario_uri': 'opaque://scenario/2'},
+            {'scenario_uri': 'opaque://scenario/2', 'generation': 2},
             self.contract_store.get_global_bot_variables('bot-a'),
         )
+
+    def test_同URI再公開と旧URIへの公開戻しもBot別の世代を進める(self):
+        store = self.contract_store
+        for generation, uri in enumerate(('first', 'first', 'newer', 'first'), 1):
+            self.assertEqual(generation, store.save_global_bot_variables('bot-a', uri))
+            self.assertEqual({'scenario_uri': uri, 'generation': generation},
+                             store.get_global_bot_variables('bot-a'))
+        self.assertEqual(1, store.save_global_bot_variables('bot-b', 'other'))
+        self.assertEqual(4, store.get_global_bot_variables('bot-a')['generation'])
 
     def test_Player状態は楽観ロックと強制更新を共通化する(self):
         status_id = 'bot-a:line:user-1'
@@ -126,6 +135,24 @@ class StateStoreContractMixin:
             ['line:user-4'],
             self.contract_store.get_group_members('group-a'),
         )
+
+    def test_Playerの条件付き削除は後続の保存と再作成を消さない(self):
+        store = self.contract_store
+        status_id = 'bot-a:line:user-1'
+        first = store.create_player_status(status_id, {'scene': 'first'})
+        second = store.update_player_status(status_id, {'scene': 'second'}, first)
+        with self.assertRaises(StateConflictError):
+            store.delete_player_status(status_id, first)
+        self.assertEqual({'scene': 'second'}, store.load_player_status(status_id).data)
+        self.assertIsNone(store.delete_player_status(status_id, second))
+        with self.assertRaises(StateConflictError):
+            store.delete_player_status(status_id, second)
+        recreated = store.create_player_status(status_id, {'scene': 'recreated'})
+        with self.assertRaises(StateConflictError):
+            store.delete_player_status(status_id, second)
+        self.assertEqual(recreated, store.load_player_status(status_id).version)
+        store.delete_player_status(status_id)
+        self.assertIsNone(store.load_player_status(status_id))
 
     def test_三種類の統計を独立して保存する(self):
         operations = (

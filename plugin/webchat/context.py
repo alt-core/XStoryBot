@@ -45,8 +45,10 @@ class WebchatActionContext(ActionContext):
         user = User('webchat', conversation_id)
         super().__init__(
             bot_name, 'webchat', interface, user, action, attrs or {})
-        self._player_snapshot = copy.deepcopy(player_snapshot or {})
+        self._player_snapshot = copy.deepcopy(
+            {'scenario_generations': {}} if player_snapshot is None else player_snapshot)
         self._saved_player = None
+        self.scenario_selection = None
         self.constants_override = getattr(interface, 'constants_override', {})
         self.next_label_store = TokenNextLabelStore()
         self.allowed_commands = set(DEFAULT_ALLOWED_COMMANDS)
@@ -54,6 +56,24 @@ class WebchatActionContext(ActionContext):
         if deadline_seconds is None:
             deadline_seconds = interface.turn_deadline_seconds
         self.deadline = time.monotonic() + max(0.0, deadline_seconds)
+
+    def set_scenario(self, selection):
+        self.scenario_selection = selection
+
+    @property
+    def scenario_uri(self):
+        if self.scenario_selection is not None:
+            return self.scenario_selection.uri
+        return getattr(self.get_interface('webchat'), 'scenario_uri', '')
+
+    @property
+    def scenario_revision(self):
+        uri = self.scenario_uri
+        return self.get_interface('webchat')._derive_revision(uri) if uri else ''
+
+    @property
+    def scenario_generation(self):
+        return self.scenario_selection.generation if self.scenario_selection is not None else None
 
     def load_status(self):
         self.status = TokenPlayerStatus(

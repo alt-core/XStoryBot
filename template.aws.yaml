@@ -50,6 +50,11 @@ Parameters:
     Type: String
     Default: ''
     Description: Webchat Lambda versionへ固定するimmutable Scenario URI
+  WebchatFollowLatestScenario:
+    Type: String
+    Default: 'false'
+    AllowedValues: ['true', 'false']
+    Description: 共通の確認間隔でBotの最新Scenario URIへ追従する。falseなら固定URIを使用
   WebchatCompatibilityEpoch:
     Type: String
     Default: webchat-v1
@@ -77,9 +82,18 @@ Parameters:
     Type: String
     Default: ''
     Description: SNSのメール購読先。空ならメール購読を作らない。alarm作成はAlarmsEnabledで選ぶ
+Rules:
+  FixedWebchatScenarioRequired:
+    RuleCondition: !And
+      - !Equals [!Ref WebchatEnabled, 'true']
+      - !Equals [!Ref WebchatFollowLatestScenario, 'false']
+    Assertions:
+      - Assert: !Not [!Equals [!Ref WebchatScenarioUri, '']]
+        AssertDescription: 固定方式のWebchatにはWebchatScenarioUriを指定してください
 Conditions:
   AlarmsEnabledCondition: !Equals [!Ref AlarmsEnabled, 'true']
   WebchatEnabledCondition: !Equals [!Ref WebchatEnabled, 'true']
+  WebchatFollowLatestCondition: !Equals [!Ref WebchatFollowLatestScenario, 'true']
   WebchatAlarmCondition: !And [!Condition AlarmsEnabledCondition, !Condition WebchatEnabledCondition]
   AlarmEmailCondition: !Not [!Equals [!Ref AlarmEmail, '']]
   WebchatImageSpecifiedCondition: !Not [!Equals [!Ref WebchatImageUri, '']]
@@ -397,6 +411,15 @@ Resources:
               - Effect: Allow
                 Action: s3:GetObject
                 Resource: !Sub '${PrivateBucket.Arn}/scenario/*'
+              - !If
+                - WebchatFollowLatestCondition
+                - Effect: Allow
+                  Action: dynamodb:GetItem
+                  Resource: !GetAtt StateTable.Arn
+                  Condition:
+                    ForAllValues:StringEquals:
+                      dynamodb:LeadingKeys: ['GLOBAL']
+                - !Ref AWS::NoValue
 
   WorkerRole:
     Type: AWS::IAM::Role
@@ -591,6 +614,7 @@ Resources:
           XSBOT_WEBCHAT_ENABLED: 'true'
           XSBOT_WEBCHAT_SIGNING_KEY: !Ref WebchatSigningKey
           XSBOT_WEBCHAT_SCENARIO_URI: !Ref WebchatScenarioUri
+          XSBOT_WEBCHAT_FOLLOW_LATEST_SCENARIO: !Ref WebchatFollowLatestScenario
           XSBOT_WEBCHAT_COMPATIBILITY_EPOCH: !Ref WebchatCompatibilityEpoch
           XSBOT_WEBCHAT_ALLOWED_ORIGINS: !Ref WebchatAllowedOrigins
           XSBOT_WEBCHAT_EXTERNAL_HTTP_ORIGINS: !Ref WebchatExternalHttpOrigins
@@ -698,6 +722,12 @@ Resources:
                 Resource:
                   - !GetAtt StateTable.Arn
                   - !GetAtt CacheTable.Arn
+              - Effect: Allow
+                Action: dynamodb:UpdateItem
+                Resource: !GetAtt StateTable.Arn
+                Condition:
+                  ForAllValues:StringEquals:
+                    dynamodb:LeadingKeys: ['GLOBAL']
               - Effect: Allow
                 Action:
                   - s3:GetObject

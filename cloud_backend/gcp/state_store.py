@@ -4,13 +4,37 @@ import datetime
 import importlib
 import uuid
 
+from google.api_core import exceptions
+from google.api_core.retry import Retry, if_exception_type
+
 from cloud_backend.contracts import (
     StateConflictError,
     StateStore,
     StateStoreError,
     StateVersion,
     VersionedState,
+    checked_publication_generation,
 )
+
+
+_PLAYER_WRITE_ID = '_xstorybot_write_id'
+
+
+class _PlayerWriteRetry(Retry):
+    """条件拒否が最初のRPCか、結果不明な再送後かを区別する。"""
+
+    def __init__(self):
+        # 使用中のFirestore commitの既定policyを維持する。
+        super().__init__(
+            predicate=if_exception_type(exceptions.ResourceExhausted, exceptions.ServiceUnavailable),
+            initial=0.1, maximum=60.0, multiplier=1.3, timeout=60.0)
+        self.attempts = 0
+
+    def __call__(self, func, on_error=None):
+        def counted(*args, **kwargs):
+            self.attempts += 1
+            return func(*args, **kwargs)
+        return super().__call__(counted, on_error)
 
 
 class GcpStateStore(StateStore):
@@ -129,16 +153,30 @@ class GcpStateStore(StateStore):
         def operation():
             document = self.client.collection(
                 'global_bot_variables').document(bot_name).get()
-            return document.to_dict() if document.exists else None
+            if not document.exists:
+                return None
+            data = document.to_dict()
+            return {**data, 'generation': checked_publication_generation(data.get('generation'))}
         return self._call(operation)
 
     def save_global_bot_variables(self, bot_name, scenario_uri):
         def operation():
-            self.client.collection(
-                'global_bot_variables').document(bot_name).set({
-                'scenario_uri': scenario_uri,
-            })
-        return self._call(operation)
+            document = self.client.collection('global_bot_variables').document(bot_name)
+            transaction = self.client.transaction()
+
+            @self._firestore.transactional
+            def publish(current_transaction):
+                snapshot = document.get(transaction=current_transaction)
+                data = snapshot.to_dict() if snapshot.exists else {}
+                generation = checked_publication_generation(
+                    data['generation'], allow_missing=False) if 'generation' in data else 0
+                generation += 1
+                current_transaction.set(document, {
+                    'scenario_uri': scenario_uri, 'generation': generation})
+                return generation
+
+            return publish(transaction)
+        return self._call(operation, conflict=True)
 
     def load_player_status(self, status_id):
         def operation():
@@ -146,40 +184,70 @@ class GcpStateStore(StateStore):
                 'player_status').document(status_id).get()
             if not document.exists:
                 return None
+            data = document.to_dict()
+            data.pop(_PLAYER_WRITE_ID, None)
             return VersionedState(
-                data=document.to_dict(),
+                data=data,
                 version=self._encode_version(document.update_time),
             )
         return self._call(operation)
 
-    def create_player_status(self, status_id, data):
-        def operation():
-            result = self.client.collection(
-                'player_status').document(status_id).create(dict(data))
+    def _write_player(self, document, data, operation):
+        payload = dict(data)
+        if _PLAYER_WRITE_ID in payload:
+            raise ValueError('Player状態には保存先の予約fieldを指定できません')
+        write_id = uuid.uuid4().hex
+        payload[_PLAYER_WRITE_ID] = write_id
+        retry = _PlayerWriteRetry()
+        try:
+            result = operation(payload, retry)
             return self._version_from_write_result(result)
-        return self._call(operation, conflict=True)
+        except Exception as error:
+            if retry.attempts == 1 and self._is_conflict_error(error):
+                self._raise_store_error(error, conflict=True)
+            try:
+                snapshot = document.get()
+                if snapshot.exists and snapshot.to_dict().get(_PLAYER_WRITE_ID) == write_id:
+                    return self._encode_version(snapshot.update_time)
+            except Exception:
+                pass
+            # 内容一致や現在の欠落では、自分の書込みが無かったと判断できない。
+            raise StateStoreError('Player状態の保存結果を確認できません') from error
+
+    def create_player_status(self, status_id, data):
+        document = self.client.collection('player_status').document(status_id)
+        return self._write_player(document, data, lambda payload, retry: document.create(payload, retry=retry))
 
     def update_player_status(self, status_id, data, version):
-        def operation():
-            option = self.client.write_option(
-                last_update_time=self._decode_version(version))
-            result = self.client.collection(
-                'player_status').document(status_id).update(
-                    dict(data), option=option)
-            return self._version_from_write_result(result)
-        return self._call(operation, conflict=True)
+        option = self.client.write_option(last_update_time=self._decode_version(version))
+        document = self.client.collection('player_status').document(status_id)
+        return self._write_player(
+            document, data, lambda payload, retry: document.update(payload, option=option, retry=retry))
 
     def force_put_player_status(self, status_id, data):
-        def operation():
-            result = self.client.collection(
-                'player_status').document(status_id).set(dict(data))
-            return self._version_from_write_result(result)
-        return self._call(operation)
+        document = self.client.collection('player_status').document(status_id)
+        return self._write_player(document, data, lambda payload, retry: document.set(payload, retry=retry))
 
-    def delete_player_status(self, status_id):
+    def delete_player_status(self, status_id, version=None):
         def operation():
-            self.client.collection(
-                'player_status').document(status_id).delete()
+            document = self.client.collection('player_status').document(status_id)
+            if version is None:
+                document.delete()
+            else:
+                option = self.client.write_option(
+                    last_update_time=self._decode_version(version))
+                retry = _PlayerWriteRetry()
+                try:
+                    document.delete(option=option, retry=retry)
+                except Exception as error:
+                    if retry.attempts == 1 and self._is_conflict_error(error):
+                        self._raise_store_error(error, conflict=True)
+                    try:
+                        if not document.get().exists:
+                            return
+                    except Exception:
+                        pass
+                    raise StateStoreError('Player状態の削除結果を確認できません') from error
         return self._call(operation)
 
     def _group_shards(self, group_id):

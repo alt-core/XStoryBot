@@ -15,7 +15,7 @@ import commands
 import utility
 from plugin.line import messages as line_messages
 from plugin.line import webhook
-from plugin.line.api import LineApiClient, LineApiError
+from plugin.line.api import DEFAULT_TIMEOUT, LineApiClient, LineApiError
 
 
 LINE_API_RETRY_COUNT = 5 # LINE のサーバへの送信時のエラー再送回数のデフォルト値
@@ -44,6 +44,10 @@ class LinePlugin_Interface(object):
     def __init__(self, bot_name, params):
         self.bot_name = bot_name
         self.params = params
+        for key in ('line_access_token', 'line_channel_secret'):
+            value = params.get(key)
+            if not isinstance(value, str) or not value.strip():
+                raise ValueError(f'LINE Bot {bot_name} の {key} に空でない文字列を設定してください')
         self.line_access_token = params['line_access_token']
         self.line_channel_secret = params['line_channel_secret']
         self.api = LineApiClient(self.line_access_token)
@@ -73,6 +77,8 @@ class LinePlugin_Interface(object):
 
     def create_context_from_line_event(self, event):
         source = event.get('source') or {}
+        if not isinstance(source, dict):
+            source = {}
         source_type = source.get('type')
         if source_type == 'user':
             sender_id = source.get('userId')
@@ -81,7 +87,12 @@ class LinePlugin_Interface(object):
         elif source_type == 'room':
             sender_id = source.get('roomId')
         else:
-            raise NotImplementedError
+            logging.warning(
+                '[LINE] event sourceを無視します: bot=%s event_type=%s source_type=%s',
+                self.bot_name, event.get('type'), source_type)
+            return None
+        if not isinstance(sender_id, str) or not sender_id:
+            raise ValueError('LINE event sourceのIDは空でない文字列で指定してください')
         user = User("line", f"{source_type},{sender_id}")
         action, attrs = self._construct_action(event)
         if action is not None:
@@ -158,7 +169,7 @@ class LinePlugin_Interface(object):
                 return 'OK' # LINE では respond_reaction の返値は見ていない
             except (RequestException, LineApiError) as e:
                 status = _error_status_code(e)
-                if status == 409:
+                if context.event is None and status == 409:
                     logging.warning('[LINE] Server already processed the request')
                     return 'OK'
                 if status is not None and 400 <= status < 500 and status != 429:
@@ -167,20 +178,47 @@ class LinePlugin_Interface(object):
                     raise
                 logging.error(f'[LINE] Failed to reply: {str(e)}')
                 last_e = e
+                deadline = getattr(context, 'action_deadline', None)
+                if deadline is not None and time.monotonic() + retry_sleep >= deadline:
+                    break
                 time.sleep(retry_sleep)
                 retry_sleep = retry_sleep * 2.0 # 指数バックオフ
         raise last_e
 
+    def _api_timeout(self, context):
+        deadline = getattr(context, 'action_deadline', None)
+        if deadline is None:
+            return None
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError('LINE APIの送信期限を過ぎました')
+        scale = min(1, remaining / sum(DEFAULT_TIMEOUT))
+        return tuple(value * scale for value in DEFAULT_TIMEOUT)
+
+    def link_rich_menu(self, context, rich_menu_id, user_id=None):
+        timeout = self._api_timeout(context)
+        target = context.source_id if user_id is None else user_id
+        self.api.link_rich_menu(
+            target, rich_menu_id, **({'timeout': timeout} if timeout is not None else {}))
+
     def _reply_message(self, context, messages, retry_key=None):
         if context.event is not None:
             if 'replyToken' in context.event:
-                self.api.reply(context.event['replyToken'], messages)
+                timeout = self._api_timeout(context)
+                self.api.reply(
+                    context.event['replyToken'], messages,
+                    **({'timeout': timeout} if timeout is not None else {}))
             else:
                 # unfollow／leave や standby mode の event には replyToken が無い
-                logging.info(f"event {context.event.get('type')} doesnt have reply_token: {messages}")
+                logging.info(
+                    "event %s doesnt have reply_token: %s",
+                    context.event.get('type'), utility.redact_line_payload(messages))
         else:
             # API 経由で起動された場合は reply_token がない
-            self.api.push(context.source_id, messages, retry_key=retry_key)
+            timeout = self._api_timeout(context)
+            self.api.push(
+                context.source_id, messages, retry_key=retry_key,
+                **({'timeout': timeout} if timeout is not None else {}))
 
     def _make_sender(self, sender):
         if sender is None:

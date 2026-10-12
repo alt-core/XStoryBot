@@ -1,4 +1,5 @@
 import datetime
+from decimal import Decimal
 import hashlib
 import re
 import sys
@@ -9,7 +10,7 @@ from unittest.mock import Mock, patch
 
 import boto3
 from boto3.dynamodb.types import TypeDeserializer, TypeSerializer
-from botocore.exceptions import ClientError, NoCredentialsError
+from botocore.exceptions import ClientError, NoCredentialsError, ReadTimeoutError
 from botocore.stub import Stubber
 
 from cloud_backend import aws as aws_backend
@@ -405,6 +406,7 @@ class _MemoryDynamoClient:
                     'Code': 'ConditionalCheckFailedException',
                     'Message': 'condition failed',
                 },
+                'ResponseMetadata': {'RetryAttempts': 0},
             },
             operation,
         )
@@ -453,6 +455,262 @@ class AwsStateStoreTest(unittest.TestCase):
         self.assertIsNone(store.get_global_bot_variables('missing'))
         factory.assert_called_once_with(
             'dynamodb', region_name='test-region-1')
+
+    def test_Player条件付き変更も標準SDKclientを使い成功時に確認読取しない(self):
+        from cloud_backend.aws.state_store import AwsStateStore
+        standard = _MemoryDynamoClient()
+        factory = Mock(return_value=standard)
+        store = AwsStateStore(
+            AWS_SETTINGS, client_factory=factory, object_store=_MemoryObjectStore())
+        factory.assert_not_called()
+        version = store.create_player_status('status', {'scene': 'one'})
+        version = store.update_player_status('status', {'scene': 'two'}, version)
+        store.delete_player_status('status', version)
+        self.assertEqual(['put_item', 'put_item', 'delete_item'],
+                         [operation for operation, _request in standard.calls])
+        store.force_put_player_status('forced', {'scene': 'forced'})
+        store.delete_player_status('forced')
+        store.save_global_bot_variables('bot', 'scenario')
+        store.append_group_member('group', 'shard', 'line:user,one')
+
+        factory.assert_called_once_with('dynamodb', region_name='test-region-1')
+        self.assertIn('update_item', [operation for operation, _request in standard.calls])
+        self.assertIn('transact_write_items', [operation for operation, _request in standard.calls])
+
+    def test_Playerの保存ACK喪失は自分のUUIDを1回強整合で確認して成功にする(self):
+        for operation in ('create', 'update'):
+            with self.subTest(operation=operation):
+                client = _MemoryDynamoClient()
+                store = self.create_store(client=client)
+                version = None if operation == 'create' else store.create_player_status(
+                    'status', {'scene': 'old'})
+                client.calls.clear()
+                put = client.put_item
+
+                def committed_without_ack(**request):
+                    put(**request)
+                    raise ReadTimeoutError(endpoint_url='https://test.invalid')
+
+                with patch.object(client, 'put_item', side_effect=committed_without_ack):
+                    if operation == 'create':
+                        saved = store.create_player_status('status', {'scene': 'one'})
+                    else:
+                        saved = store.update_player_status('status', {'scene': 'one'}, version)
+                self.assertEqual(['put_item', 'get_item'],
+                                 [name for name, _request in client.calls])
+                self.assertTrue(client.calls[-1][1]['ConsistentRead'])
+                state = store.load_player_status('status')
+                self.assertEqual(saved, state.version)
+                self.assertEqual({'scene': 'one'}, state.data)
+
+    def test_PlayerのSDK再送後の条件拒否でも自己UUIDや削除完了を確認する(self):
+        for operation in ('create', 'update', 'delete'):
+            with self.subTest(operation=operation):
+                client = _MemoryDynamoClient()
+                store = self.create_store(client=client)
+                version = None if operation == 'create' else store.create_player_status(
+                    'status', {'scene': 'old'})
+                client.calls.clear()
+                method = 'delete_item' if operation == 'delete' else 'put_item'
+                write = getattr(client, method)
+
+                def committed_then_retried(**request):
+                    write(**request)
+                    try:
+                        return write(**request)
+                    except ClientError as error:
+                        error.response['ResponseMetadata'] = {'RetryAttempts': 1}
+                        raise
+
+                with patch.object(client, method, side_effect=committed_then_retried):
+                    if operation == 'create':
+                        saved = store.create_player_status('status', {'scene': 'new'})
+                    elif operation == 'update':
+                        saved = store.update_player_status('status', {'scene': 'new'}, version)
+                    else:
+                        saved = store.delete_player_status('status', version)
+                self.assertEqual([method, method, 'get_item'],
+                                 [name for name, _request in client.calls])
+                self.assertTrue(client.calls[-1][1]['ConsistentRead'])
+                state = store.load_player_status('status')
+                if operation == 'delete':
+                    self.assertIsNone(saved)
+                    self.assertIsNone(state)
+                else:
+                    self.assertEqual(saved, state.version)
+                    self.assertEqual({'scene': 'new'}, state.data)
+
+    def test_自己保存の後に他者が更新した場合は未保存競合へ戻さない(self):
+        client = _MemoryDynamoClient()
+        store = self.create_store(client=client)
+        put = client.put_item
+
+        def committed_then_overwritten(**request):
+            put(**request)
+            item = store._decode_item(request['Item'])
+            other = {**item, 'version': 'b' * 32,
+                     'payload': store._encode_payload({'scene': 'other'})}
+            put(TableName=request['TableName'], Item=store._item(other),
+                ConditionExpression='#version = :expected',
+                ExpressionAttributeNames={'#version': 'version'},
+                ExpressionAttributeValues={':expected': store._attribute(item['version'])})
+            raise ReadTimeoutError(endpoint_url='https://test.invalid')
+
+        with patch.object(client, 'put_item', side_effect=committed_then_overwritten), \
+                self.assertRaises(StateStoreError) as raised:
+            store.create_player_status('status', {'scene': 'mine'})
+        self.assertIs(type(raised.exception), StateStoreError)
+        self.assertEqual(['put_item', 'put_item', 'get_item'],
+                         [name for name, _request in client.calls])
+        state = store.load_player_status('status')
+        self.assertEqual({'scene': 'other'}, state.data)
+        self.assertEqual(StateVersion('dynamodb:v1:' + 'b' * 32), state.version)
+
+    def test_読めた元の版や欠落は未保存の証拠として再計画へ戻さない(self):
+        for existing in (False, True):
+            with self.subTest(existing=existing):
+                client = _MemoryDynamoClient()
+                store = self.create_store(client=client)
+                version = store.create_player_status('status', {'scene': 'old'}) if existing else None
+                client.calls.clear()
+                with patch.object(client, 'put_item', side_effect=ReadTimeoutError(
+                        endpoint_url='https://test.invalid')) as put, \
+                        self.assertRaises(StateStoreError) as raised:
+                    if existing:
+                        store.update_player_status('status', {'scene': 'new'}, version)
+                    else:
+                        store.create_player_status('status', {'scene': 'new'})
+                self.assertIs(type(raised.exception), StateStoreError)
+                put.assert_called_once()
+                self.assertEqual(['get_item'], [name for name, _request in client.calls])
+
+    def test_最初の条件拒否だけ競合として返し履歴欠落や再送済みを0とみなさない(self):
+        for retries in (0, None, 1):
+            with self.subTest(retries=retries):
+                client = _MemoryDynamoClient()
+                store = self.create_store(client=client)
+                version = store.create_player_status('status', {'scene': 'old'})
+                client.calls.clear()
+                error = client._conditional_error('PutItem')
+                if retries is None:
+                    error.response.pop('ResponseMetadata')
+                else:
+                    error.response['ResponseMetadata']['RetryAttempts'] = retries
+                expected = StateConflictError if retries == 0 else StateStoreError
+                with patch.object(client, 'put_item', side_effect=error), \
+                        self.assertRaises(expected) as raised:
+                    store.update_player_status('status', {'scene': 'new'}, version)
+                self.assertIs(type(raised.exception), expected)
+                self.assertEqual([] if retries == 0 else ['get_item'],
+                                 [name for name, _request in client.calls])
+
+    def test_確認読取も失敗した場合は保存を再実行せず結果不明で止める(self):
+        client = _MemoryDynamoClient()
+        store = self.create_store(client=client)
+        put = client.put_item
+
+        def committed_without_ack(**request):
+            put(**request)
+            raise ReadTimeoutError(endpoint_url='https://test.invalid')
+
+        with patch.object(client, 'put_item', side_effect=committed_without_ack) as written, \
+                patch.object(client, 'get_item', side_effect=ReadTimeoutError(
+                    endpoint_url='https://test.invalid')) as read, \
+                self.assertRaises(StateStoreError) as raised:
+            store.create_player_status('status', {'scene': 'mine'})
+        self.assertIs(type(raised.exception), StateStoreError)
+        written.assert_called_once()
+        read.assert_called_once()
+        self.assertTrue(read.call_args.kwargs['ConsistentRead'])
+
+    def test_削除ACK喪失後に他者の状態があれば削除も成功推定もしない(self):
+        client = _MemoryDynamoClient()
+        store = self.create_store(client=client)
+        version = store.create_player_status('status', {'scene': 'mine'})
+        delete = client.delete_item
+
+        def deleted_then_recreated(**request):
+            delete(**request)
+            client.put_item(TableName='test-state', Item=store._item({
+                **store._player_key('status'), 'status_id': 'status', 'version': 'b' * 32,
+                'payload': store._encode_payload({'scene': 'other'})}))
+            raise ReadTimeoutError(endpoint_url='https://test.invalid')
+
+        client.calls.clear()
+        with patch.object(client, 'delete_item', side_effect=deleted_then_recreated) as deleted, \
+                self.assertRaises(StateStoreError) as raised:
+            store.delete_player_status('status', version)
+        self.assertIs(type(raised.exception), StateStoreError)
+        deleted.assert_called_once()
+        self.assertEqual(['delete_item', 'put_item', 'get_item'],
+                         [name for name, _request in client.calls])
+        self.assertEqual({'scene': 'other'}, store.load_player_status('status').data)
+
+    def test_巻戻し更新は元のUUIDを再利用せず自己確認した版で他者を保護する(self):
+        client = _MemoryDynamoClient()
+        store = self.create_store(client=client)
+        original_version = store.create_player_status('status', {'scene': 'old'})
+        saved_version = store.update_player_status('status', {'scene': 'new'}, original_version)
+        put = client.put_item
+
+        def committed_then_retried(**request):
+            put(**request)
+            try:
+                return put(**request)
+            except ClientError as error:
+                error.response['ResponseMetadata']['RetryAttempts'] = 1
+                raise
+
+        with patch.object(client, 'put_item', side_effect=committed_then_retried), \
+                patch.object(store, '_version_value', wraps=store._version_value) as generate:
+            restored_version = store.update_player_status('status', {'scene': 'old'}, saved_version)
+        generate.assert_called_once()
+        self.assertNotIn(restored_version, (original_version, saved_version))
+        later_version = store.update_player_status('status', {'scene': 'later'}, restored_version)
+        with self.assertRaises(StateConflictError):
+            store.update_player_status('status', {'scene': 'old'}, restored_version)
+        self.assertEqual(later_version, store.load_player_status('status').version)
+
+    def test_公開後に別writerが更新しても自分の原子的な世代を返す(self):
+        client = _MemoryDynamoClient()
+        store = self.create_store(client=client)
+        update = client.update_item
+
+        def publish_other(**request):
+            response = update(**request)
+            other = dict(request)
+            other['ExpressionAttributeValues'] = dict(request['ExpressionAttributeValues'])
+            other['ExpressionAttributeValues'][':payload'] = store._attribute(
+                store._encode_payload({'scenario_uri': 'other'}))
+            update(**other)
+            return response
+
+        with patch.object(client, 'update_item', side_effect=publish_other):
+            self.assertEqual(1, store.save_global_bot_variables('bot', 'mine'))
+        self.assertEqual(['update_item', 'update_item'], [operation for operation, request in client.calls])
+        self.assertEqual({'scenario_uri': 'other', 'generation': 2}, store.get_global_bot_variables('bot'))
+
+    def test_世代欠損pointerはNoneを返し初回公開だけ1から始める(self):
+        client = _MemoryDynamoClient()
+        store = self.create_store(client=client)
+        client.put_item(TableName='test-state', Item=store._item({
+            'pk': 'GLOBAL', 'sk': f'BOT#{store._hash("bot")}',
+            'payload': store._encode_payload({'scenario_uri': 'old'}),
+        }))
+        self.assertEqual({'scenario_uri': 'old', 'generation': None}, store.get_global_bot_variables('bot'))
+        self.assertEqual(1, store.save_global_bot_variables('bot', 'new'))
+
+    def test_不正な公開世代を整数へ切り捨てて読まない(self):
+        client = _MemoryDynamoClient()
+        store = self.create_store(client=client)
+        for value in (0, -1, True, Decimal('1.5'), '2'):
+            with self.subTest(value=value):
+                client.put_item(TableName='test-state', Item=store._item({
+                    'pk': 'GLOBAL', 'sk': f'BOT#{store._hash("bot")}',
+                    'payload': store._encode_payload({'scenario_uri': 'old'}), 'generation': value,
+                }))
+                with self.assertRaises(StateStoreError):
+                    store.get_global_bot_variables('bot')
 
     def test_provider内ではStateStoreを共有する(self):
         state_store = Mock()
@@ -817,15 +1075,24 @@ class AwsStateStoreTest(unittest.TestCase):
         group_hash = store._hash(group_id)
 
         with Stubber(client) as stubber:
-            stubber.add_response('put_item', {}, {
+            stubber.add_response('update_item', {'Attributes': {
+                'pk': attribute('GLOBAL'), 'sk': attribute(f'BOT#{store._hash(bot_name)}'),
+                'bot_name': attribute(bot_name), 'generation': attribute(1),
+                'payload': attribute('{"scenario_uri":"opaque://scenario/1"}'),
+            }}, {
                 'TableName': 'test-state',
-                'Item': {
+                'Key': {
                     'pk': attribute('GLOBAL'),
                     'sk': attribute(f'BOT#{store._hash(bot_name)}'),
-                    'bot_name': attribute(bot_name),
-                    'payload': attribute(
-                        '{"scenario_uri":"opaque://scenario/1"}'),
                 },
+                'UpdateExpression': 'SET #payload = :payload, #bot = :bot ADD #generation :one',
+                'ConditionExpression': 'attribute_not_exists(#generation) OR #generation >= :one',
+                'ExpressionAttributeNames': {
+                    '#payload': 'payload', '#bot': 'bot_name', '#generation': 'generation'},
+                'ExpressionAttributeValues': {
+                    ':payload': attribute('{"scenario_uri":"opaque://scenario/1"}'),
+                    ':bot': attribute(bot_name), ':one': attribute(1)},
+                'ReturnValues': 'ALL_NEW',
             })
             stubber.add_response('get_item', {
                 'Item': {
@@ -833,6 +1100,7 @@ class AwsStateStoreTest(unittest.TestCase):
                     'sk': attribute(f'BOT#{store._hash(bot_name)}'),
                     'payload': attribute(
                         '{"scenario_uri":"opaque://scenario/1"}'),
+                    'generation': attribute(1),
                 },
             }, {
                 'TableName': 'test-state',
@@ -913,10 +1181,10 @@ class AwsStateStoreTest(unittest.TestCase):
                 'Limit': 1,
             })
 
-            store.save_global_bot_variables(
-                bot_name, 'opaque://scenario/1')
+            self.assertEqual(1, store.save_global_bot_variables(
+                bot_name, 'opaque://scenario/1'))
             self.assertEqual(
-                {'scenario_uri': 'opaque://scenario/1'},
+                {'scenario_uri': 'opaque://scenario/1', 'generation': 1},
                 store.get_global_bot_variables(bot_name),
             )
             with patch(
@@ -989,6 +1257,7 @@ class AwsStateStoreTest(unittest.TestCase):
                     'Code': 'ConditionalCheckFailedException',
                     'Message': 'condition failed',
                 },
+                'ResponseMetadata': {'RetryAttempts': 0},
             },
             'PutItem',
         )

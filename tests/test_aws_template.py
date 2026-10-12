@@ -253,7 +253,7 @@ class AwsTemplateTest(unittest.TestCase):
             'GoogleSheetsCredentialParameterName',
             'AdminAuthParameterName', 'RuntimeSecretsParameterName',
             'WebchatEnabled', 'WebchatSigningKey',
-            'WebchatScenarioUri', 'WebchatCompatibilityEpoch',
+            'WebchatScenarioUri', 'WebchatFollowLatestScenario', 'WebchatCompatibilityEpoch',
             'WebchatAllowedOrigins', 'WebchatExternalHttpOrigins',
             'WebchatMediaOrigins',
             'WebchatThrottleRate', 'WebchatThrottleBurst',
@@ -261,6 +261,7 @@ class AwsTemplateTest(unittest.TestCase):
             'AlarmsEnabled',
         }
         self.assertEqual(expected, set(parameters))
+
         self.assertTrue(parameters['WebchatSigningKey']['NoEcho'])
         self.assertEqual('', parameters['WebchatSigningKey']['Default'])
         self.assertNotIn('Default', parameters['SheetId'])
@@ -281,6 +282,16 @@ class AwsTemplateTest(unittest.TestCase):
             )
             self.assertIn(
                 f'parameter${{{name}}}', self.source)
+
+    def test_公開世代の加算権限はbuilderのGLOBAL項目だけへ限定する(self):
+        statements = self.resources['BuildRole']['Properties']['Policies'][0]['PolicyDocument']['Statement']
+        updates = [statement for statement in statements
+                   if statement.get('Action') == 'dynamodb:UpdateItem']
+        self.assertEqual([{
+            'Effect': 'Allow', 'Action': 'dynamodb:UpdateItem',
+            'Resource': {'GetAtt': 'StateTable.Arn'},
+            'Condition': {'ForAllValues:StringEquals': {'dynamodb:LeadingKeys': ['GLOBAL']}},
+        }], updates)
 
     def test_Webchat専用Lambdaはalias固定Scenarioと最小権限を使う(self):
         self.assertEqual(
@@ -309,6 +320,8 @@ class AwsTemplateTest(unittest.TestCase):
                          environment['XSBOT_WEBCHAT_SIGNING_KEY'])
         self.assertEqual({'Ref': 'WebchatScenarioUri'},
                          environment['XSBOT_WEBCHAT_SCENARIO_URI'])
+        self.assertEqual({'Ref': 'WebchatFollowLatestScenario'},
+                         environment['XSBOT_WEBCHAT_FOLLOW_LATEST_SCENARIO'])
         self.assertEqual({'Ref': 'WebchatMediaOrigins'},
                          environment['XSBOT_WEBCHAT_MEDIA_ORIGINS'])
 
@@ -317,6 +330,7 @@ class AwsTemplateTest(unittest.TestCase):
         actions = {
             action
             for statement in statements
+            if 'Action' in statement
             for action in (statement['Action']
                            if isinstance(statement['Action'], list)
                            else [statement['Action']])
@@ -324,6 +338,14 @@ class AwsTemplateTest(unittest.TestCase):
         self.assertEqual({'s3:GetObject'}, actions)
         self.assertFalse(any(action.startswith('dynamodb:') for action in actions))
         self.assertNotIn('ssm:GetParameter', actions)
+        conditional = next(statement['If'] for statement in statements if 'If' in statement)
+        self.assertEqual('WebchatFollowLatestCondition', conditional[0])
+        self.assertEqual({'Ref': 'AWS::NoValue'}, conditional[2])
+        self.assertEqual({
+            'Effect': 'Allow', 'Action': 'dynamodb:GetItem',
+            'Resource': {'GetAtt': 'StateTable.Arn'},
+            'Condition': {'ForAllValues:StringEquals': {'dynamodb:LeadingKeys': ['GLOBAL']}},
+        }, conditional[1])
 
         integration = self.resources['WebchatHttpApiIntegration']['Properties']
         _uri, substitutions = integration['IntegrationUri']['Sub']
@@ -335,6 +357,15 @@ class AwsTemplateTest(unittest.TestCase):
         self.assertEqual(
             'ANY /api/webchat/v1/bots/{bot_name}/turn',
             self.resources['WebchatTurnRoute']['Properties']['RouteKey'])
+
+    def test_固定方式への切替も実際のparameterでURI必須を検査する(self):
+        rule = self.template['Rules']['FixedWebchatScenarioRequired']
+        self.assertEqual({'And': [
+            {'Equals': [{'Ref': 'WebchatEnabled'}, 'true']},
+            {'Equals': [{'Ref': 'WebchatFollowLatestScenario'}, 'false']},
+        ]}, rule['RuleCondition'])
+        self.assertEqual({'Not': [{'Equals': [{'Ref': 'WebchatScenarioUri'}, '']}]},
+                         rule['Assertions'][0]['Assert'])
 
     def test_API_access_logへ入力値を含めない(self):
         access_log = self.resources['HttpApiStage']['Properties'][

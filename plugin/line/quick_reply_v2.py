@@ -6,6 +6,7 @@ import hub
 import commands
 import utility
 from plugin.line.command_names import REPLY_CMDS
+from plugin.line.default_commands import LineDefaultCommandsPlugin_Builder
 from utility import safe_list_get
 
 
@@ -39,6 +40,7 @@ def append_quick_reply(builder, quick_reply_guard, replies, sender, retry_messag
         reply_children.append(choice)
         reply_labels.append(label)
 
+    LineDefaultCommandsPlugin_Builder.lint_choices(builder, REPLY_CMDS[0], reply_children)
     builder.add_command(sender, REPLY_CMDS[0], reply_options, reply_children)
     builder.add_command(sender, SET_QUICK_REPLY_GUARD_CMDS[0], [quick_reply_guard], None)
 

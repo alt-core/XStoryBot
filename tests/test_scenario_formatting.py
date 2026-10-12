@@ -12,7 +12,7 @@ import common_commands
 import expression
 import hub
 from expression import Expression
-from plugin.line import default_commands, quick_reply
+from plugin.line import default_commands, quick_reply, quick_reply_v2
 from plugin.render_text import renderer
 
 
@@ -161,6 +161,69 @@ class ScenarioFormattingTest(unittest.TestCase):
                     for command in self._commands(built)]
 
         self.assertEqual(command_values(plain), command_values(located))
+
+    def test_記号と明示QuickReplyでラベルと選択肢の数を同じように検査する(self):
+        params = {
+            'command': ['▽'], 'default_reply': '次へ',
+            'please_select_quick_reply_label': '##please', 'retry_message': '選んでください',
+        }
+        for plugin in (quick_reply, quick_reply_v2):
+            for version in (1, 2, 3):
+                with self.subTest(plugin=plugin.__name__, version=version), \
+                        patch.multiple(hub, builder_list=[], runtime_list=[], method_cache={}), \
+                        patch.multiple(commands, catalog=[], catalog_map={}):
+                    common_commands.setup({'reset_keyword': '!reset', 'timezone': 'Asia/Tokyo'})
+                    default_commands.inner_load_plugin({'alt_text': 'alt'})
+                    plugin.load_plugin(params)
+                    for label in ('あ' * 20, 'あ' * 21):
+                        for rows in (
+                                [['開始', '本文'], ['', '▽', label]],
+                                [['開始', '本文'], ['', '@reply'], ['', '', label]]):
+                            if len(label) == 20:
+                                self._build(rows, version=version)
+                            else:
+                                with self.assertRaisesRegex(self.scenario.ScenarioSyntaxError, '文字数制限（20文字）'):
+                                    self._build(rows, version=version)
+                    for rows in (
+                            [['開始', '本文'], ['', '▽'] + ['選択' + str(i) for i in range(14)]],
+                            [['開始', '本文'], ['', '@reply']] + [['', '', '選択' + str(i)] for i in range(14)]):
+                        with self.assertRaises(self.scenario.ScenarioSyntaxError):
+                            self._build(rows, version=version)
+
+    def test_13個の記号QuickReplyはビルドできる(self):
+        quick_reply.load_plugin({
+            'command': ['▽'], 'default_reply': '次へ', 'please_select_quick_reply_label': '##please',
+        })
+        rows = [['開始', '本文'], ['', '▽'] + ['選択' + str(i) for i in range(13)]]
+        for i in range(13):
+            if i:
+                rows.append(['', '/else'])
+            rows.append(['', '分岐' + str(i)])
+        rows.append(['', '/end'])
+        built = self._build(rows)
+        reply = next(command for command in self._commands(built) if command.msg == '@reply')
+        self.assertEqual(13, len(reply.children))
+
+    def test_画像テキストが生成するQuickReplyにもラベル検査を適用する(self):
+        with patch.object(cloud_backend, 'create_state_store', return_value=Mock()):
+            from plugin.line import image_text
+        for version in (1, 2, 3):
+            for length in (20, 21):
+                with self.subTest(version=version, length=length), \
+                        patch.multiple(commands, catalog=list(commands.catalog), catalog_map=dict(commands.catalog_map)):
+                    image_text.load_plugin({'frames': {'frame': {
+                        'more_mode': 'quick_always', 'reply_message': 'あ' * length,
+                    }}})
+                    with patch.object(renderer, 'render_text_to_png', return_value=(b'page', '')), \
+                            patch.object(image_text.ImageTextStatDB, 'put_cached_image_text_stat'), \
+                            patch.object(self.scenario.ScenarioBuilder, 'build_image_for_imagemap_command_with_rawdata',
+                                         return_value=('https://example.invalid/page', (1040, 1040))):
+                        rows = [['開始', '@画像テキスト', '本文', 'frame']]
+                        if length == 20:
+                            self._build(rows, version=version)
+                        else:
+                            with self.assertRaisesRegex(self.scenario.ScenarioSyntaxError, '文字数制限（20文字）'):
+                                self._build(rows, version=version)
 
     def test_未定義変数の後の過剰なformat_specの入れ子を拒否する(self):
         text = '{$unknown} {$n:{$width:{$precision}}}'
