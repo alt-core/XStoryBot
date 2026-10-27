@@ -358,6 +358,25 @@ class AwsTemplateTest(unittest.TestCase):
             'ANY /api/webchat/v1/bots/{bot_name}/turn',
             self.resources['WebchatTurnRoute']['Properties']['RouteKey'])
 
+    def test_Webchatルートの作成を待ってStageを更新する(self):
+        stage = self.resources['HttpApiStage']
+        self.assertEqual('HttpApiDefaultRoute', stage['DependsOn'])
+        properties = stage['Properties']
+        condition, enabled, disabled = properties['Description']['If']
+        self.assertEqual(
+            self.resources['WebchatTurnRoute']['Condition'], condition)
+        self.assertIn('${WebchatTurnRoute}', enabled['Sub'])
+        self.assertEqual({'Ref': 'AWS::NoValue'}, disabled)
+
+        settings_condition, settings, no_settings = properties['RouteSettings']['If']
+        self.assertEqual(condition, settings_condition)
+        self.assertEqual(disabled, no_settings)
+        route_key = self.resources['WebchatTurnRoute']['Properties']['RouteKey']
+        self.assertEqual({route_key: {
+            'ThrottlingBurstLimit': {'Ref': 'WebchatThrottleBurst'},
+            'ThrottlingRateLimit': {'Ref': 'WebchatThrottleRate'},
+        }}, settings)
+
     def test_固定方式への切替も実際のparameterでURI必須を検査する(self):
         rule = self.template['Rules']['FixedWebchatScenarioRequired']
         self.assertEqual({'And': [

@@ -567,6 +567,11 @@ Resources:
       ApiId: !Ref HttpApi
       StageName: '$default'
       AutoDeploy: true
+      # ルート参照により、RouteSettingsの更新をルート作成後にする。
+      Description: !If
+        - WebchatEnabledCondition
+        - !Sub 'Webchatのturnルート: ${WebchatTurnRoute}'
+        - !Ref AWS::NoValue
       RouteSettings: !If
         - WebchatEnabledCondition
         - 'ANY /api/webchat/v1/bots/{bot_name}/turn':
