@@ -124,6 +124,10 @@ components:
       properties:
         type:
           const: start
+        entry:
+          type: string
+          minLength: 1
+          description: start_entriesに登録された入口名。省略時はstart_actionで開始する。
       additionalProperties: false
     TextInput:
       type: object
@@ -269,6 +273,10 @@ components:
                 enum: [exact, prefix]
               liff_id:
                 type: string
+              allow_top_navigation:
+                type: boolean
+                default: false
+                description: 利用者の操作に伴うiframeから親画面全体への遷移を許可する。
             additionalProperties: false
       additionalProperties: false
     Problem:
@@ -296,6 +304,7 @@ components:
             - external-http-timeout
             - invalid-origin
             - invalid-request
+            - invalid-entry
             - unsupported-media-type
             - unsupported-input
         request_id:

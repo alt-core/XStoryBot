@@ -17,6 +17,7 @@ __pycache__/
 .gcloudignore
 .vscode/
 .idea/
+.claude/
 *.iml
 test.sh
 tests/

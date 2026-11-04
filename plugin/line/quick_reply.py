@@ -125,11 +125,20 @@ class LineQuickReplyPlugin_Runtime(object):
                 # 同じ base_label で複数回来たら、カウンタを引き継ぐ
                 retry_count = quick_reply_guard["retry_count"]
             guard = options[3] == "True" if len(options) > 3 else True
+            choices_json = options[2]
+            reactions = getattr(context, 'reactions', None)
+            if reactions:
+                reaction, children = reactions[-1]
+                if (reaction[1] in REPLY_CMDS and children
+                        and all(choice[-1].startswith(options[0]) for choice in children)):
+                    # 表示用に展開済みの候補を保存し、変数内の引用符や改行もJSONへ正しく戻す。
+                    choices_json = json.dumps(children)
 
             context.status[QUICK_REPLY_GUARD_VARIABLE] = {
                 "label": options[0],
                 "please_label": options[1],
-                "choices": options[2],
+                "choices": choices_json,
+                "labels": [choice[0] for choice in json.loads(choices_json)],
                 "guard": guard,
                 "retry_count": retry_count,
                 "action": "",
@@ -174,6 +183,9 @@ class LineQuickReplyPlugin_Runtime(object):
             please_label = quick_reply_guard["please_label"]
             guard_flag = quick_reply_guard.get("guard", True)
             choices = json.loads(quick_reply_guard["choices"])
+            if "labels" not in quick_reply_guard:
+                quick_reply_guard = dict(quick_reply_guard, labels=[choice[0] for choice in choices])
+                context.status[QUICK_REPLY_GUARD_VARIABLE] = quick_reply_guard
             if action in ['##line.follow', '##line.join']:
                 # 変な状態でハマった時の復旧用に ##follow と ##join で状態リセット
                 logging.info('LineQuickReplyPlugin_Runtime: reset next_label: {} {}'.format(quick_reply_guard, action))
@@ -203,6 +215,7 @@ class LineQuickReplyPlugin_Runtime(object):
                         "label": quick_reply_guard["label"],
                         "please_label": quick_reply_guard["please_label"],
                         "choices": quick_reply_guard["choices"],
+                        "labels": quick_reply_guard["labels"],
                         "guard": quick_reply_guard["guard"],
                         "retry_count": quick_reply_guard["retry_count"] + 1,
                         "action": action,

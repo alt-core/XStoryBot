@@ -116,6 +116,8 @@ LINE／WebchatでURL構成を変えたい場合は、[定数上書き](./scenari
 
 `openExternalBrowser=1`は登録済みでも外部タブを優先し、読替え前のURLを開きます。この場合、Webchatの接続やセーブを渡しません。通常の登録ページではiframeを使います。参照UIの登録済みiframeはpopupを許可し、外部タブへsandbox制限を継承しません。ページ側では外部リンクに`rel="noopener noreferrer"`等を指定してください。
 
+登録アプリごとの`allow_top_navigation: true`で、iframeのsandboxへ`allow-top-navigation-by-user-activation`を追加できます。省略時はfalseです。チャットを離れる必要があるアプリだけに指定してください。利用者の操作に伴う`target="_top"`のリンクなどが親画面全体を移動できます。操作直後のスクリプトによる遷移も許され、行き先を特定のURLやボタンに制限する設定ではありません。iframe内で別のページへ移った後もsandboxの許可は引き継がれます。登録していない通常リンクのiframeにはこの許可を付けません。同じ設定を体験版にも引き継ぎます。
+
 ## 4. WebchatのpostMessage protocol
 
 親は表示URLへ`xsb_client=webchat`を付けます。これは接続方法の指定で、認証情報ではありません。ページ側はLINE SDKを初期化せず、設定済みの親originへ接続します。接続に失敗してもLINEへ自動切替しません。

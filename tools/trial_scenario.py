@@ -18,6 +18,7 @@ from plugin.line.quick_reply import (
 )
 from plugin.webchat.presenter import WebchatPresenter, register_runtime
 from plugin.webchat.errors import BotNotWebCompatible
+from plugin.webchat.interface import normalize_start_entries
 
 
 class TrialBuildError(ValueError):
@@ -233,7 +234,9 @@ def compile_scenario(scenario, *, bot, params, constants, quick_reply, media_url
     epoch, start = params.get('scenario_compatibility_epoch'), params.get('start_action')
     if not isinstance(epoch, str) or not epoch or not isinstance(start, str) or not start:
         raise TrialBuildError('scenario_compatibility_epochとstart_actionを指定してください')
+    entries = normalize_start_entries(params.get('start_entries'))
     result = {'schema_version': 1, 'bot': bot, 'epoch': epoch, 'start_action': start,
+              **({'start_entries': entries} if entries else {}),
               'startup': scenario.startup_scene_title, 'scenes': scenes, 'blocks': blocks,
               'reset_keyword': quick_reply.get('reset_keyword', ''),
               'ignore_pattern': quick_reply.get('ignore_pattern') or None,
@@ -275,6 +278,8 @@ def validate_references(program):
                 actions(child, source)
 
     check(program['start_action'])
+    for entry in program.get('start_entries', {}).values():
+        check(entry['action'])
     for block in program['blocks'].values():
         for op in block['ops']:
             source = op['source']

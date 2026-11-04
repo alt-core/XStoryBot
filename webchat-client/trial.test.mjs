@@ -11,6 +11,21 @@ const page = base.liff_apps.menu.url;
 const liff = action => ({ type: 'liff', app: 'menu', app_url: page, action });
 const text = reply => reply.messages.filter(message => message.type === 'text').map(message => message.text);
 
+test('名前付き入口は自前の登録名だけを使い、echo省略と旧形式programも扱う', () => {
+  const program = copy();
+  program.start_entries = { help: { action: '#help' } };
+  const runtime = createTrialRuntime(program);
+  const reply = runtime.execute({ input: { type: 'start', entry: 'help' } });
+  assert.deepEqual(text(reply), ['説明です']);
+  assert.equal(reply.echo_message, null);
+  for (const entry of ['', null, {}, '__proto__', 'toString']) {
+    assert.throws(() => runtime.execute({ input: { type: 'start', entry } }), { code: 'invalid-entry' });
+  }
+  const old = createTrialRuntime(copy());
+  assert.deepEqual(text(old.execute({ input: { type: 'start' } })), ['入口です']);
+  assert.throws(() => old.execute({ input: { type: 'start', entry: 'help' } }), { code: 'invalid-entry' });
+});
+
 for (const script of fixture('story').cases) {
   test(`Pythonと共通の台本: ${script.name}`, () => {
     const runtime = createTrialRuntime(copy());

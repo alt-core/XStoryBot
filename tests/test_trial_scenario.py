@@ -62,6 +62,13 @@ class TrialScenarioTest(unittest.TestCase):
     def test_書出し結果が共有fixtureと一致する(self):
         self.assertEqual(json.loads((FIXTURES / 'program.json').read_text()), self.compile())
 
+    def test_名前付き入口を書き出し固定actionの参照も検査する(self):
+        entries = {'help': {'action': '#help', 'echo': '説明を読む'}}
+        program = self.compile(params={**self.params, 'start_entries': entries})
+        self.assertEqual(entries, program['start_entries'])
+        with self.assertRaises(trial_scenario.TrialBuildError):
+            self.compile(params={**self.params, 'start_entries': {'missing': {'action': '#missing'}}})
+
     def test_共有fixtureの期待値を実Python版で再確認する(self):
         # CommonCommandsのresetは既存fixtureの設定値を使う。
         for case in self.data['cases']:

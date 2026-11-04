@@ -35,12 +35,12 @@ pageを破棄する時は`unsubscribe()`と`client.destroy()`を呼びます。
 ## 公開API
 
 - `initialize()`: 選択した保存方式を初期化します。indexeddbではtab間通知と保存済み状態の読込も行います。
-- `start()`: stateがなければ新しい会話を開始します。既存stateがあればrequestを送りません。
+- `start({ entry }?)`: stateがなければ新しい会話を開始します。`entry`は設定済みの入口名で、省略時は`start_action`を使います。既存stateがあれば入口指定を無視し、requestを送りません。未知の入口では`invalid-entry`になり、自動で別の入口から開始しません。
 - `sendText(text)`: 通常textを1 turn送ります。
 - `requestLiff(app, action)`: snapshotの`liffApps`から選んだページのBotを実行し、保存後にイベント配列を返します。
 - `sendPostback(token)`: APIから受け取ったopaque postback tokenを送ります。
 - `sendMenu(menu, area, revision)`: 表示中のリッチメニューの領域を操作します。
-- `reset()`: 選択した保存先の進行と履歴を消し、新しい会話を開始します。
+- `reset()`: 選択した保存先の進行と履歴を消し、既定の`start_action`で新しい会話を開始します。
 - `clearHistory()`: 最新stateを残し、表示履歴だけを消します。
 - `subscribe(listener)`: immutable snapshotを購読します。
 - `getSnapshot()`／`getServerSnapshot()`: client／SSR用snapshotを返します。

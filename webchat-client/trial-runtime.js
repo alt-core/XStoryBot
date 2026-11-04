@@ -72,6 +72,14 @@ export function createTrialRuntime(program) {
     const input = body?.input;
     if (!input || !['start', 'text', 'postback', 'menu', 'liff'].includes(input.type)) throw error('入力形式が不正です。', 'invalid-input');
     const starting = input.type === 'start';
+    let entry = null;
+    if (starting && own(input, 'entry')) {
+      const entries = program.start_entries || {};
+      if (typeof input.entry !== 'string' || !own(entries, input.entry)) {
+        throw error('指定された入口は利用できません。URLを確認するか「最初から」で開始してください。', 'invalid-entry');
+      }
+      entry = entries[input.entry];
+    }
     if (!starting && typeof body.state_token !== 'string') throw error('先に体験版を開始してください。');
     const state = starting ? {
       kind: 'xstorybot-trial-v1', bot: program.bot, epoch: program.epoch,
@@ -80,7 +88,7 @@ export function createTrialRuntime(program) {
     const originalGeneration = state.generation;
     const mode = input.type === 'liff' ? 'liff' : 'webchat';
     let action, echo = null;
-    if (starting) action = program.start_action;
+    if (starting) { action = entry ? entry.action : program.start_action; echo = entry?.echo ?? null; }
     else if (input.type === 'text') {
       if (typeof input.text !== 'string') throw error('入力は文字列にしてください。', 'invalid-input');
       action = sanitize(input.text); echo = input.text;

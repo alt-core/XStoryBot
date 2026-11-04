@@ -79,6 +79,16 @@ class TrialExportTest(unittest.TestCase):
         self.assertIn('createTrialClient({ bot, programUrl:', app)
         self.assertIn('xstorybot-webchat-richmenu:trial:', app)
 
+    def test_名前付き入口と全画面遷移許可を配布物へ引き継ぐ(self):
+        params = self.case.config['*']['bots']['bot']['interfaces'][0]['params']
+        params['start_entries'] = {'return': {'action': '##line.follow', 'echo': '戻りました'}}
+        params['liff_apps']['menu']['allow_top_navigation'] = True
+        self.case._write_settings()
+        result = self.run_export()
+        program = json.loads((self.output / f"assets/{result['revision']}/scenario.json").read_text())
+        self.assertEqual(params['start_entries'], program['start_entries'])
+        self.assertIs(True, program['liff_apps']['menu']['allow_top_navigation'])
+
     def test_体験版も題名とメモリー保存とテーマを同じ指定で配布する(self):
         theme = self.case.root / 'theme'
         theme.mkdir()

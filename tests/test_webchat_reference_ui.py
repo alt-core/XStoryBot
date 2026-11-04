@@ -171,6 +171,10 @@ class WebchatReferenceUiContractTest(unittest.TestCase):
         self.assertEqual('about:blank', problem['properties']['type']['const'])
         self.assertIn(
             'action-not-active', problem['properties']['code']['enum'])
+        self.assertIn('invalid-entry', problem['properties']['code']['enum'])
+        self.assertEqual('string', schemas['StartInput']['properties']['entry']['type'])
+        self.assertEqual('boolean', schemas['TurnResponse']['properties']['liff_apps'][
+            'items']['properties']['allow_top_navigation']['type'])
 
     def test_MessageSpecとTypeScriptのrequired契約を揃える(self):
         self.assertFalse(self.schema['additionalProperties'])

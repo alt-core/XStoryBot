@@ -321,6 +321,7 @@ class ScenarioBuilder:
         self.parent_node = None
         self.scene = None
         self.lines = None
+        self.written_block_condition = None
 
         self.filters = []
 
@@ -699,6 +700,7 @@ class ScenarioBuilder:
     def _process_block_body(self, cond=None):
         # cond が None の場合は直前のブロックの処理を継続する
         if cond is not None:
+            self.written_block_condition = cond
             self.lines = []
             block = (cond, self.lines)
             self.region.blocks.append(block)

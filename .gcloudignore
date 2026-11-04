@@ -18,6 +18,7 @@ __pycache__/
 .dockerignore
 .vscode/
 .idea/
+.claude/
 *.iml
 test.sh
 tests/

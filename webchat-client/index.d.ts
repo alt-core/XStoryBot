@@ -81,7 +81,7 @@ export class WebchatClientError extends Error {
 
 export type WebchatClient = {
   initialize(): Promise<WebchatSnapshot>;
-  start(): Promise<WebchatSnapshot>;
+  start(options?: { entry?: string }): Promise<WebchatSnapshot>;
   sendText(text: string): Promise<WebchatSnapshot>;
   sendMenu(menu: string, area: number, revision: string): Promise<WebchatSnapshot>;
   requestLiff(app: { id: string; url: string }, action: string): Promise<unknown[]>;

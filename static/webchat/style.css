@@ -65,6 +65,7 @@ button, textarea { font: inherit; color: inherit; }
 button { cursor: pointer; }
 button:disabled { cursor: default; }
 button, a { -webkit-tap-highlight-color: transparent; }
+button, a, .composer { touch-action: manipulation; }
 
 :focus-visible {
   outline: 2px solid var(--focus);
@@ -674,7 +675,7 @@ button, a { -webkit-tap-highlight-color: transparent; }
   background: var(--surface-2);
   resize: none;
   overflow-y: hidden; /* 最大高さ到達時だけJSがautoへ切り替える */
-  font-size: 0.9375rem;
+  font-size: 1rem;
   line-height: 1.5;
 }
 

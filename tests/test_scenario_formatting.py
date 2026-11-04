@@ -63,6 +63,88 @@ class ScenarioFormattingTest(unittest.TestCase):
         return [command for _condition, lines in built.scenes['default/'].base_region.blocks
                 for command in lines]
 
+    def _configure_response_checks(self, **params):
+        hub.clear()
+        commands.clear()
+        common_commands.setup({'reset_keyword': '!reset', 'timezone': 'Asia/Tokyo'})
+        default_commands.inner_load_plugin({'alt_text': 'alt', **params})
+
+    def test_LINE応答検査の免除設定は空でない文字列のリストだけを受け付ける(self):
+        for value in (None, False, '##liff.', ('##liff.',), {}, [''], [1], [None]):
+            with self.subTest(value=value):
+                with self.assertRaisesRegex(ValueError, 'response_check_exempt_labels'):
+                    default_commands.LineDefaultCommandsPlugin_Builder({
+                        'response_check_exempt_labels': value})
+        for value in ([], ['##liff.', '##web.']):
+            default_commands.LineDefaultCommandsPlugin_Builder({
+                'response_check_exempt_labels': value})
+
+    def test_LINE応答検査は指定ラベルだけ免除し設定なしでは従来どおり検査する(self):
+        for version in (1, 2, 3):
+            for rows in (
+                    [['##liff.open', 'あ' * 301]],
+                    [['##liff.open', '本文']] + [['', '本文']] * 5):
+                for params in ({}, {'response_check_exempt_labels': []}):
+                    with self.subTest(version=version, params=params, rows=rows):
+                        self._configure_response_checks(**params)
+                        expected = '文字数制限（300文字）' if len(rows) == 1 else '6つ以上'
+                        with self.assertRaisesRegex(self.scenario.ScenarioSyntaxError, expected):
+                            self._build(rows, version)
+                self._configure_response_checks(response_check_exempt_labels=['##liff.'])
+                self._build(rows, version)
+
+    def test_LINE応答検査の免除は分岐とQuickReplyの続きを通じて継承する(self):
+        self._configure_response_checks(response_check_exempt_labels=['##liff.'])
+        quick_reply.load_plugin({
+            'command': ['＞'], 'default_reply': '次へ',
+            'please_select_quick_reply_label': '##please',
+        })
+        rows = [['##liff.open', '@if', 'true'], ['', 'あ' * 301]]
+        rows += [['', '本文']] * 5
+        rows += [['', '@else'], ['', 'あ' * 301], ['', '@end'], ['', '＞', '次へ']]
+        rows += [['', 'あ' * 301]] + [['', '本文']] * 5
+        rows += [['', '@call', '#shared'], ['', 'あ' * 301], ['#shared', '共通本文']]
+        built = self._build(rows)
+        self.assertEqual(4, sum(command.msg == 'あ' * 301 for command in self._commands(built)))
+
+    def test_LINE応答検査の免除は全バージョンのQuickReplyの続きへ継承する(self):
+        self._configure_response_checks(response_check_exempt_labels=['##liff.'])
+        quick_reply.load_plugin({
+            'command': ['＞'], 'default_reply': '次へ',
+            'please_select_quick_reply_label': '##please',
+        })
+        for version in (1, 2, 3):
+            with self.subTest(version=version):
+                self._build([
+                    ['##liff.open', '本文'], ['', '＞'], ['', 'あ' * 301],
+                ] + [['', '本文']] * 5, version)
+
+    def test_LINE応答検査の免除は次の見出しと移動先とsceneへ漏れない(self):
+        self._configure_response_checks(response_check_exempt_labels=['##liff.'])
+        for version in (1, 2, 3):
+            for kind in (('jump', 'call') if version == 3 else ('jump',)):
+                for target in ('#shared', '*sub'):
+                    start = [['##liff.open', '@call', target]] if kind == 'call' else [['##liff.open', target]]
+                    for body in (['あ' * 301], ['本文'] * 6):
+                        rows = start + [[target, body[0]]] + [['', text] for text in body[1:]]
+                        with self.subTest(version=version, kind=kind, target=target, body=body):
+                            expected = '文字数制限（300文字）' if len(body) == 1 else '6つ以上'
+                            with self.assertRaisesRegex(self.scenario.ScenarioSyntaxError, expected):
+                                self._build(rows, version)
+
+    def test_LINE応答検査の免除でも他の文字数と書式検査は維持する(self):
+        self._configure_response_checks(response_check_exempt_labels=['##liff.'])
+        quick_reply.load_plugin({
+            'command': ['＞'], 'default_reply': '次へ',
+            'please_select_quick_reply_label': '##please',
+        })
+        for rows in (
+                [['##liff.open', '本文'], ['', '＞', 'あ' * 21]],
+                [['##liff.open', 'あ' * 301 + '}']]):
+            with self.subTest(rows=rows):
+                with self.assertRaises(self.scenario.ScenarioSyntaxError):
+                    self._build(rows)
+
     def test_同じ台本の再ビルドでもsceneごとの命令IDを変えない(self):
         rows = [
             ['開始', '本文'], ['次へ', '@set', '$count', '1'],

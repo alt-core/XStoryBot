@@ -503,6 +503,7 @@ export function _createWebchatSession(options, local = null) {
       }
     }
     const messages = {
+      'invalid-entry': '指定された入口は利用できません。URLを確認するか「最初から」で開始してください。',
       'action-not-active': 'この選択肢は古くなりました。最新の会話を確認してください。',
       'incompatible-state': 'シナリオが更新されました。「最初から」で再開してください。',
       'invalid-state': '保存した進行を確認できません。「最初から」で再開してください。',
@@ -706,10 +707,10 @@ export function _createWebchatSession(options, local = null) {
 
   return {
     initialize,
-    async start() {
+    async start({ entry } = {}) {
       await initialize();
       if (snapshot.stateId) return snapshot;
-      return transact({ type: 'start' });
+      return transact(entry === undefined ? { type: 'start' } : { type: 'start', entry });
     },
     async sendText(text) {
       if (typeof text !== 'string') throw new TypeError('textは文字列です');

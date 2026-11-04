@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { readFileSync } from 'node:fs';
-import { findLiffApp } from '../webchat-client/liff-host.js';
+import { findLiffApp, resolveLiffLink } from '../webchat-client/liff-host.js';
 
 import {
   classifyUriTarget,
@@ -11,6 +11,60 @@ import {
   createVideoPlaybackController,
   createVideoCompletionQueue,
 } from '../static/webchat/ui_logic.mjs';
+
+test('参照UIはURLの入口名だけを初回startへ渡す', async () => {
+  const source = readFileSync(new URL('../static/webchat/app.js', import.meta.url), 'utf8');
+  const start = source.indexOf('const startChat =');
+  const end = source.indexOf('const scroller =');
+  for (const [query, expected] of [['', undefined], ['?entry=return', { entry: 'return' }], ['?entry=', { entry: '' }]]) {
+    const calls = [];
+    const startChat = new Function('client', 'location', `${source.slice(start, end)}\nreturn startChat;`)(
+      { start: async options => { calls.push(options); } }, { href: `https://chat.example.test/${query}` });
+    await startChat();
+    assert.deepEqual(calls, [expected]);
+  }
+});
+
+test('未知の入口では自動で開始せず通常入口から始める操作を表示する', async () => {
+  const source = readFileSync(new URL('../static/webchat/app.js', import.meta.url), 'utf8');
+  const start = source.indexOf('const syncBanner =');
+  const end = source.indexOf('// ---- スクロール制御 ----', start);
+  let action, resets = 0;
+  const errorElement = { append(button) { action = button; } };
+  const syncBanner = new Function('client', 'setPill', 'noticeElement', 'errorElement', 'bannerElement',
+    'pillAction', `${source.slice(start, end)}\nreturn syncBanner;`)(
+    { reset: async () => { resets++; } }, () => {}, { hidden: true }, errorElement, {},
+    (label, handler) => ({ label, handler }));
+  syncBanner({ error: { code: 'invalid-entry', message: '入口がありません' }, turns: [] });
+  assert.equal(resets, 0);
+  assert.equal(action.label, '最初から');
+  await action.handler();
+  assert.equal(resets, 1);
+});
+
+test('全画面遷移は明示的に許可した登録アプリのiframeだけに付ける', () => {
+  const source = readFileSync(new URL('../static/webchat/app.js', import.meta.url), 'utf8');
+  const start = source.indexOf('const openLinkViewer =');
+  const end = source.indexOf('mediaViewerClose.addEventListener', start);
+  const apps = [
+    { id: 'default', url: 'https://pages.example.test/default' },
+    { id: 'disabled', url: 'https://pages.example.test/disabled', allow_top_navigation: false },
+    { id: 'enabled', url: 'https://pages.example.test/enabled', allow_top_navigation: true },
+  ];
+  let shown;
+  const document = { createElement: () => ({ setAttribute(name, value) { this[name] = value; } }) };
+  const open = new Function('document', 'client', 'resolveLiffLink', 'attachLiffFrame', 'mediaViewer',
+    'showMediaViewer', 'closeMediaViewer', `let actionLock = false, liffConnection;\n${source.slice(start, end)}\nreturn openLinkViewer;`)(
+    document, { getSnapshot: () => ({ liffApps: apps, status: 'ready' }) }, resolveLiffLink,
+    () => ({}), { hasAttribute: () => false }, frame => { shown = frame; }, () => {});
+  for (const app of [...apps, { id: 'unregistered', url: 'https://other.example.test/page' }]) {
+    open(app.url, '開く', null, false);
+    const tokens = shown.sandbox.split(' ');
+    assert.equal(tokens.includes('allow-top-navigation-by-user-activation'), app.id === 'enabled');
+    assert.equal(tokens.includes('allow-popups'), app.id !== 'unregistered');
+    assert.equal(tokens.includes('allow-top-navigation'), false);
+  }
+});
 
 test('URIは通常HTTPSを埋込み外部指定を新規tabへ分類する', () => {
   assert.equal(classifyUriTarget('https://example.test/path'), 'embedded');

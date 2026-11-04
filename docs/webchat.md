@@ -71,6 +71,17 @@ POST /api/webchat/v1/bots/{bot}/turn
 
 完全なrequest／response契約は[OpenAPI文書](./webchat.openapi.yaml)を参照してください。state tokenとpostback tokenはopaque stringとして扱い、URL、cookie、logへ出さないでください。
 
+Botの`webchat.params.start_entries`へ、名前付きの開始入口を登録できます。
+
+```yaml
+start_entries:
+  return:
+    action: '##webchat.return'
+    echo: '戻ってきました'
+```
+
+`action`は必須の文字列、利用者の発言として表示する`echo`は任意の文字列です。参照UIは`?entry=return`、clientは`start({ entry: 'return' })`で指定します。URLから任意のactionや発言は渡せません。進行が保存されている場合はその進行を優先し、入口指定を無視します。未知の入口は台本を実行せず`invalid-entry`を返し、自動で通常入口へ切り替えません。「最初から」は既定の`start_action`で開始します。[API不要の体験版](./webchat-trial.md)も同じ入口設定を使います。
+
 `webchat-client/`にはruntime dependencyを持たないheadless ESM clientとTypeScript declarationがあります。framework固有の通信・保存処理は作らず、SvelteとReactから同じcoreを使います。公開APIとsnapshotは[client README](../webchat-client/README.md)を参照してください。
 
 ```js

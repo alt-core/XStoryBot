@@ -8,6 +8,53 @@ const program = JSON.parse(readFileSync(new URL('../tests/fixtures/trial/program
 const app = { id: 'menu', url: program.liff_apps.menu.url };
 
 for (const mode of ['api', 'trial']) {
+  test(`${mode}: 名前付き入口は初回だけ使い、未知入口・履歴削除・resetを区別する`, async () => {
+    const data = structuredClone(program);
+    data.start_entries = { help: { action: '#help', echo: '説明を読む' } };
+    const calls = [];
+    const options = { bot: data.bot, storage: 'memory' };
+    const client = mode === 'trial'
+      ? createTrialClient({ ...options, programUrl: 'https://static.example.test/scenario.json',
+        fetch: async () => new Response(JSON.stringify(data)) })
+      : createWebchatClient({ ...options, apiBaseUrl: 'https://api.example.test',
+        fetch: async (_url, request) => {
+          const body = JSON.parse(request.body);
+          calls.push(body);
+          const named = Object.hasOwn(body.input, 'entry');
+          if (named && body.input.entry !== 'help') return new Response(JSON.stringify({
+            code: 'invalid-entry', title: 'invalid-entry',
+          }), { status: 400, headers: { 'Content-Type': 'application/problem+json' } });
+          const id = String(calls.length);
+          return new Response(JSON.stringify({ schema_version: 1, request_id: id,
+            state: { id, revision: 0 }, state_token: id,
+            echo_message: named ? '説明を読む' : null,
+            messages: [{ id, type: 'text', text: named ? '説明です' : '入口です' }],
+          }), { headers: { 'Content-Type': 'application/json' } });
+        } });
+    try {
+      await assert.rejects(client.start({ entry: 'missing' }), { code: 'invalid-entry' });
+      assert.equal(client.getSnapshot().stateId, null);
+      assert.deepEqual(client.getSnapshot().turns, []);
+      if (mode === 'api') assert.equal(calls.length, 1);
+      await client.start({ entry: 'help' });
+      assert.equal(client.getSnapshot().turns[0].echoMessage, '説明を読む');
+      assert.equal(client.getSnapshot().messages[0].text, '説明です');
+      const state = client.getSnapshot().stateId;
+      const before = calls.length;
+      await client.start({ entry: 'missing' });
+      assert.equal(client.getSnapshot().stateId, state);
+      await client.clearHistory();
+      await client.start({ entry: 'help' });
+      assert.equal(client.getSnapshot().stateId, state);
+      assert.deepEqual(client.getSnapshot().turns, []);
+      assert.equal(calls.length, before);
+      await client.reset();
+      assert.equal(client.getSnapshot().messages[0].text, '入口です');
+      assert.equal(client.getSnapshot().turns[0].echoMessage, null);
+      if (mode === 'api') assert.deepEqual(calls.at(-1), { input: { type: 'start' } });
+    } finally { client.destroy(); }
+  });
+
   test(`${mode}: memoryは共有領域に触れず、各clientの進行とLIFFを独立させる`, async () => {
     const names = ['indexedDB', 'localStorage', 'BroadcastChannel', 'navigator'];
     const original = new Map(names.map(name => [name, Object.getOwnPropertyDescriptor(globalThis, name)]));

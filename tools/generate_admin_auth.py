@@ -5,6 +5,7 @@ import argparse
 import getpass
 import json
 import secrets
+import sys
 
 from argon2 import PasswordHasher
 from argon2.low_level import Type
@@ -25,8 +26,8 @@ def generate(username, password, confirmation, secret_factory=None):
     if not isinstance(username, str) or not username.strip():
         raise ValueError('ユーザー名を入力してください')
     username = username.strip()
-    if not isinstance(password, str) or len(password) < 15:
-        raise ValueError('パスワードは15文字以上で入力してください')
+    if not isinstance(password, str) or len(password) < 8:
+        raise ValueError('パスワードは8文字以上で入力してください')
     if password != confirmation:
         raise ValueError('確認用パスワードが一致しません')
     if secret_factory is None:
@@ -45,7 +46,8 @@ def main(argv=None):
     parser = argparse.ArgumentParser(
         description='管理画面認証JSONを対話的に生成します。')
     parser.parse_args(argv)
-    username = input('管理者ユーザー名: ')
+    print('管理者ユーザー名: ', end='', file=sys.stderr, flush=True)
+    username = input()
     password = getpass.getpass('パスワード: ')
     confirmation = getpass.getpass('パスワード（確認）: ')
     try:

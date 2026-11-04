@@ -366,7 +366,7 @@ class _FakeWebchatInterface:
     def origin_allowed(self, origin):
         return origin == 'https://app.example.test'
 
-    def create_start_context(self, request_id, deadline_seconds=None):
+    def create_start_context(self, request_id, deadline_seconds=None, entry=None):
         self.deadlines.append(deadline_seconds)
         return self._context('##start', request_id)
 
@@ -455,15 +455,19 @@ class WebchatWebApiTest(unittest.TestCase):
         self.assertEqual('##start', self.interface.actions[-1])
 
     def test_allowlist外Originを403にする(self):
-        result = self.app.request(
-            'POST', '/api/webchat/v1/bots/bot/turn',
-            headers={'Origin': 'https://evil.example.test'},
-            json_body={'input': {'type': 'start'}},
-            expect_errors=True,
-        )
-        self.assertEqual(403, result.status_int)
-        self.assertEqual('invalid-origin', result.json['code'])
-        self.assertNotIn('Access-Control-Allow-Origin', result.headers)
+        for method in ('OPTIONS', 'POST'):
+            with self.subTest(method=method):
+                result = self.app.request(
+                    method, '/api/webchat/v1/bots/bot/turn',
+                    headers={'Origin': 'https://evil.example.test'},
+                    json_body={'input': {'type': 'start'}},
+                    expect_errors=True,
+                )
+                self.assertEqual(403, result.status_int)
+                self.assertEqual('invalid-origin', result.json['code'])
+                self.assertNotIn('Access-Control-Allow-Origin', result.headers)
+                self.assertNotIn('Access-Control-Max-Age', result.headers)
+                self.assertEqual([], self.interface.actions)
 
     def test_textをsanitizeしてstate付きで処理する(self):
         result = self.app.request(
@@ -502,6 +506,10 @@ class WebchatWebApiTest(unittest.TestCase):
         self.assertEqual(204, result.status_int)
         self.assertEqual('POST, OPTIONS',
                          result.headers['Access-Control-Allow-Methods'])
+        self.assertEqual('https://app.example.test',
+                         result.headers['Access-Control-Allow-Origin'])
+        self.assertEqual('3600', result.headers['Access-Control-Max-Age'])
+        self.assertEqual('no-store', result.headers['Cache-Control'])
 
     def test_JSON不正と余分なfieldを400にする(self):
         invalid_json = self.app.request(
@@ -604,6 +612,29 @@ class WebchatInterfaceConfigurationTest(unittest.TestCase):
         }
         params.update(overrides)
         return params
+
+    def test_開始入口の設定を起動時に検査する(self):
+        from plugin.webchat.interface import WebchatInterface
+        for entries in ([], {'': {'action': '#next'}}, {'named': {}},
+                        {'named': {'action': ''}}, {'named': {'action': 1}},
+                        {'named': {'action': '#next', 'echo': None}},
+                        {'named': {'action': '#next', 'text': '任意'}}):
+            with self.subTest(entries=entries), self.assertRaises(InvalidWebchatConfiguration):
+                WebchatInterface('bot', self._params(start_entries=entries))
+
+    def test_LIFFの全画面遷移許可は明示booleanだけを受け付ける(self):
+        from plugin.webchat.interface import WebchatInterface
+        app = {'bot': 'bot', 'url': 'https://pages.example.test/menu'}
+        for allowed in (False, True):
+            interface = WebchatInterface('bot', self._params(liff_apps={
+                'menu': {**app, 'allow_top_navigation': allowed}}))
+            self.assertIs(allowed, interface.public_liff_apps()[0]['allow_top_navigation'])
+        interface = WebchatInterface('bot', self._params(liff_apps={'menu': app}))
+        self.assertNotIn('allow_top_navigation', interface.public_liff_apps()[0])
+        for allowed in (None, 'true', 'false', 0, 1):
+            with self.subTest(allowed=allowed), self.assertRaises(InvalidWebchatConfiguration):
+                WebchatInterface('bot', self._params(liff_apps={
+                    'menu': {**app, 'allow_top_navigation': allowed}}))
 
     def test_originを正規化し空の外部allowlistを許可する(self):
         from plugin.webchat.interface import WebchatInterface

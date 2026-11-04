@@ -1088,7 +1088,9 @@ class FirestoreAndImageTextContractTest(unittest.TestCase):
                 '_line_contract_more', 'plugin/line/more.py', common)
 
             renderer = _module(
-                'plugin.render_text.renderer', render_text_to_png=Mock())
+                'plugin.render_text.renderer', render_text_to_png=Mock(),
+                get_text_rendering_asset_paths=lambda **options: [
+                    str(PROJECT_ROOT / 'plugin/render_text/font/ipaexg.ttf')])
             render_text = _module('plugin.render_text', renderer=renderer)
             packages = _plugin_packages(
                 default_commands=default_commands, more=more_module,
@@ -1157,6 +1159,7 @@ class FirestoreAndImageTextContractTest(unittest.TestCase):
         renderer.render_text_to_png.return_value = (b'png-data', None)
         builder = Mock()
         builder.option_force = True
+        builder._image_text_cache = {'frames': {}, 'files': {}}
         builder.scene.get_relative_position_desc.return_value = 'scene:1'
         builder.build_image_for_imagemap_command_with_rawdata.return_value = (
             'https://built', (100, 100))
@@ -1219,6 +1222,47 @@ class QuickReplyContractTest(unittest.TestCase):
         self.assertEqual('##Q_2', runtime.modify_incoming_action(context, '選択2'))
         self.assertEqual('##PLEASE', runtime.modify_incoming_action(context, '想定外'))
         self.assertEqual(1, status[module.QUICK_REPLY_GUARD_VARIABLE]['retry_count'])
+        self.assertEqual(['選択1', '選択2'], status[module.QUICK_REPLY_GUARD_VARIABLE]['labels'])
+
+    def test_日本語候補を台本から読み既存の待ちでも復元できる(self):
+        from expression import Expression
+
+        module = self._load('quick_reply')
+        runtime = module.LineQuickReplyPlugin_Runtime({
+            'default_reply': '既定', 'please_select_quick_reply_label': '##PLEASE'})
+        choices = json.dumps([['続きを読む', '##Q_1']])
+        status = {module.QUICK_REPLY_GUARD_VARIABLE: {
+            'label': '##Q_', 'please_label': '##PLEASE', 'choices': choices,
+            'guard': True, 'retry_count': 0, 'action': '',
+        }}
+        context = SimpleNamespace(status=status)
+
+        self.assertEqual('##PLEASE', runtime.modify_incoming_action(context, '想定外'))
+        self.assertEqual(choices, status[module.QUICK_REPLY_GUARD_VARIABLE]['choices'])
+        self.assertEqual('想定外', status[module.QUICK_REPLY_GUARD_VARIABLE]['action'])
+        self.assertTrue(Expression.from_str(
+            '$$line.quick_reply["labels"] == ["続きを読む"]').eval(status, []))
+        self.assertEqual('##Q_1', runtime.modify_incoming_action(context, '続きを読む'))
+
+    def test_直前のreplyだけを保存候補に使い単独guardでは旧引数を保つ(self):
+        module = self._load('quick_reply')
+        runtime = module.LineQuickReplyPlugin_Runtime({
+            'default_reply': '既定', 'please_select_quick_reply_label': '##PLEASE'})
+        legacy = '[ [ "旧候補", "##Q_1" ] ]'
+        shown = [['A "B"', r'C:\temp', '##Q_1']]
+        cases = [([], legacy), ([([None, '@button'], shown)], legacy),
+                 ([([None, '@reply'], [['別の候補', '##OTHER_1']])], legacy)]
+        cases += [([([None, command], shown)], json.dumps(shown))
+                  for command in ('@reply', '@リプライ')]
+        for reactions, expected in cases:
+            for options in (['##Q_', '##PLEASE', legacy], ['##Q_', '##PLEASE', legacy, 'True']):
+                with self.subTest(reactions=reactions, options=options):
+                    context = SimpleNamespace(status={}, reactions=reactions)
+                    runtime.run_command(context, None, '@@set_quick_reply_guard', options)
+                    guard = context.status[module.QUICK_REPLY_GUARD_VARIABLE]
+                    self.assertEqual(expected, guard['choices'])
+                    self.assertEqual([choice[0] for choice in json.loads(expected)], guard['labels'])
+                    self.assertTrue(guard['guard'])
 
     def test_v2_builder_and_runtime_keep_retry_branch(self):
         module = self._load('quick_reply_v2')

@@ -1,5 +1,6 @@
 """実BuilderとRuntimeで、複数入力にまたがる物語の進行を確認する。"""
 
+import json
 import sys
 import types
 import unittest
@@ -49,9 +50,9 @@ class ScenarioProgressionTest(unittest.TestCase):
             respond_reaction=lambda _context, reactions: reactions,
         )
 
-    def _build(self, rows):
+    def _build(self, rows, version=3):
         self.bot = self.runtime.BotRuntime('bot', {'webchat': self.interface}, None)
-        self.bot.scenario = self.scenario.ScenarioBuilder.build_from_table(rows, version=3)
+        self.bot.scenario = self.scenario.ScenarioBuilder.build_from_table(rows, version=version)
         self.player = None
 
     def _turn(self, action):
@@ -184,6 +185,45 @@ class ScenarioProgressionTest(unittest.TestCase):
         self.assertEqual(self._turn('右'), ['右を選んだ', '選択済み'])
         self.assertNotIn(guard_key, self.player['flags'])
         self.assertEqual(self.player['flags']['$choice'], 'right')
+
+    def test_動的QuickReplyの表示と保存候補は再提示と選択でも一致する(self):
+        quick_reply.load_plugin({
+            'command': ['＞'], 'default_reply': '続きを読む',
+            'please_select_quick_reply_label': '##please',
+        })
+        guard_key = quick_reply.QUICK_REPLY_GUARD_VARIABLE
+        for version in (1, 2, 3):
+            for value in ('A "B"', 'A\nB', r'C:\temp'):
+                for selection in ('postback', 'text'):
+                    with self.subTest(version=version, value=value, selection=selection):
+                        self._build([
+                            ['質問', 'どちらにしますか'], ['', '＞', '{$label}=>{$echo}'],
+                            ['', '選択済み'], ['##please', '候補から選んでください'],
+                            ['', '@show_quick_reply_choices'],
+                        ], version)
+                        self.player = {'scene': None, 'scenario_generations': {}, 'flags': {
+                            '$label': value, '$echo': value + 'を選ぶ',
+                        }}
+                        label = value if version >= 3 else '{$label}'
+                        echo = value + 'を選ぶ' if version >= 3 else '{$echo}'
+                        self.assertEqual(['どちらにしますか'], self._turn('質問'))
+                        shown = next(children for row, children in self.reactions if row[1] == '@reply')
+                        self.assertEqual([label, echo], shown[0][:-1])
+                        guard = self.player['flags'][guard_key]
+                        self.assertEqual(shown, json.loads(guard['choices']))
+                        self.assertEqual([label], guard['labels'])
+
+                        # labelsのない既存保存状態からも、同じ候補を再提示できる。
+                        del guard['labels']
+                        self.assertEqual(['候補から選んでください'], self._turn('わからない'))
+                        shown = next(children for row, children in self.reactions if row[1] == '@reply')
+                        guard = self.player['flags'][guard_key]
+                        self.assertEqual(shown, json.loads(guard['choices']))
+                        self.assertEqual([label], guard['labels'])
+                        self.assertEqual(1, guard['retry_count'])
+                        action = shown[0][-1] if selection == 'postback' else label
+                        self.assertEqual(['選択済み'], self._turn(action))
+                        self.assertNotIn(guard_key, self.player['flags'])
 
     def test_存在しない移動先をログへ残しfallbackの入力値は変えない(self):
         for target in ('#missing', '*missing'):

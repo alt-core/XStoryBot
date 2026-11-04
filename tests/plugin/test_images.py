@@ -1,8 +1,14 @@
 # coding: utf-8
 
 from io import BytesIO
+import builtins
+import importlib.util
 from pathlib import Path
+import shutil
+import tempfile
+from types import SimpleNamespace
 import unittest
+from unittest.mock import Mock, patch
 
 from PIL import Image
 
@@ -121,6 +127,100 @@ class RenderTextTest(unittest.TestCase):
         self.assertEqual(image.mode, 'RGBA')
         self.assertEqual(image.getpixel((0, 0))[3], 0)
         self.assertIsNone(rest)
+
+
+class ImageTextAssetCacheTest(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+        self.saved = {}
+        state = SimpleNamespace(
+            get_image_text_stat=self.saved.get,
+            put_image_text_stat=self.saved.__setitem__,
+        )
+        spec = importlib.util.spec_from_file_location(
+            '_image_text_asset_cache', ROOT / 'plugin/line/image_text.py')
+        self.image_text = importlib.util.module_from_spec(spec)
+        with patch('cloud_backend.create_state_store', return_value=state):
+            spec.loader.exec_module(self.image_text)
+
+    def _font(self, name, vertical=False):
+        path = self.root / name
+        source = 'ipaexg_tate.ttf' if vertical else 'ipaexg.ttf'
+        shutil.copyfile(ROOT / 'plugin/render_text/font' / source, path)
+        return path
+
+    def _plugin(self, frames):
+        return self.image_text.LineImageTextPlugin_Builder({'frames': {
+            name: {'more_mode': 'quick_between', 'size_x': 400, 'size_y': 200,
+                   'font_size': 20, **options}
+            for name, options in frames.items()
+        }})
+
+    def _build(self, plugin, frames, force=False, skip=False):
+        builder = SimpleNamespace(
+            option_force=force, option_skip_image=skip, add_command=Mock(),
+            build_image_for_imagemap_command_with_rawdata=lambda data, file_digest, **options: (
+                'https://cache.invalid/' + file_digest, (400, 200)),
+        )
+        for frame in frames:
+            plugin.build_from_command(builder, None, '@imagetext', ['本文', frame])
+        return [call.args[2][0] for call in builder.add_command.call_args_list]
+
+    def test_同名素材の変更で該当する枠だけ再描画しビルド内では素材を一度だけ読む(self):
+        first_font, second_font = self._font('first.ttf'), self._font('second.ttf')
+        first_bg, second_bg = self.root / 'first.PNG', self.root / 'second.png'
+        first_bg.write_bytes(image_bytes('RGB', (20, 20), 'PNG', 'white'))
+        second_bg.write_bytes(image_bytes('RGB', (20, 20), 'PNG', 'gray'))
+        plugin = self._plugin({
+            'first': {'font_path': str(first_font), 'background': str(first_bg)},
+            'second': {'font_path': str(second_font), 'background': str(second_bg)},
+        })
+        frames = ['first', 'first', 'second']
+        with patch.object(renderer, 'render_text_to_png', wraps=renderer.render_text_to_png) as render:
+            with patch.object(self.image_text, 'open', wraps=builtins.open, create=True) as read:
+                cold = self._build(plugin, frames)
+                self.assertEqual(4, read.call_count)
+            self.assertEqual(2, render.call_count)
+            render.reset_mock()
+            self.assertEqual(cold, self._build(plugin, frames))
+            render.assert_not_called()
+
+            first_bg.write_bytes(image_bytes('RGB', (20, 20), 'PNG', 'red'))
+            changed = self._build(plugin, frames, skip=True)
+            self.assertEqual(1, render.call_count)
+            self.assertNotEqual(cold[0], changed[0])
+            self.assertEqual(changed[0], changed[1])
+            self.assertEqual(cold[2], changed[2])
+
+            render.reset_mock()
+            second_font.write_bytes(second_font.read_bytes() + b'font-update')
+            self._build(plugin, frames)
+            self.assertEqual(1, render.call_count)
+            render.reset_mock()
+            self._build(plugin, frames, force=True)
+            self.assertEqual(3, render.call_count)
+
+    def test_縦横の既定フォントも変更を検出し描画結果が同じならURLを保つ(self):
+        fonts = {False: self._font('default.ttf'), True: self._font('vertical.ttf', True)}
+        plugin = self._plugin({'horizontal': {}, 'vertical': {'is_vertical': True}})
+        resolve = lambda font_path=None, is_vertical=False: str(fonts[is_vertical]) if font_path is None else font_path
+        with patch.object(renderer, 'get_font_path', side_effect=resolve), \
+                patch.object(renderer, 'render_text_to_png', wraps=renderer.render_text_to_png) as render:
+            cold = self._build(plugin, ['horizontal', 'vertical'])
+            self.assertEqual(2, render.call_count)
+            for vertical in (False, True):
+                render.reset_mock()
+                fonts[vertical].write_bytes(fonts[vertical].read_bytes() + b'font-update')
+                self.assertEqual(cold, self._build(plugin, ['horizontal', 'vertical']))
+                self.assertEqual(1, render.call_count)
+
+    def test_フォント名の探索結果を素材として使い背景色はファイルと見なさない(self):
+        path = str(self.root / 'resolved.ttf')
+        with patch.object(renderer.ImageFont, 'truetype', return_value=SimpleNamespace(path=path)):
+            self.assertEqual([path], renderer.get_text_rendering_asset_paths(
+                font_path='font-name.ttf', background='#ffffff'))
 
 
 if __name__ == '__main__':

@@ -10,6 +10,7 @@ from aws_request_context import lambda_context
 import utility
 from plugin.webchat.errors import (
     BotResponseTooLarge,
+    InvalidStartEntry,
     InvalidStateToken,
     TurnDeadlineExceeded,
     WebchatError,
@@ -166,6 +167,7 @@ def options_turn(bot_name):
             'Access-Control-Allow-Origin': origin,
             'Access-Control-Allow-Methods': 'POST, OPTIONS',
             'Access-Control-Allow-Headers': 'Content-Type',
+            'Access-Control-Max-Age': '3600',
             'Vary': 'Origin',
             'Cache-Control': 'no-store',
         }
@@ -207,9 +209,11 @@ def turn(bot_name):
 
         if input_type == 'start':
             _require_exact_keys(data, {'input'})
-            _require_exact_keys(input_data, {'type'})
+            _require_exact_keys(input_data, {'type', 'entry'} if 'entry' in input_data else {'type'})
+            if 'entry' in input_data and not isinstance(input_data['entry'], str):
+                raise InvalidStartEntry('開始入口は文字列で指定してください')
             context = interface.create_start_context(
-                request_id, deadline_seconds=deadline_seconds)
+                request_id, deadline_seconds=deadline_seconds, entry=input_data.get('entry'))
         else:
             if 'state_token' not in data:
                 raise _invalid_request('state tokenがありません')

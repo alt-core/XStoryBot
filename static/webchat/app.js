@@ -16,6 +16,10 @@ const bot = pageConfig.webchatBot || decodeURIComponent(pathParts[pathParts.leng
 const apiBaseUrl = pageConfig.webchatApiBaseUrl || location.origin;
 const storage = pageConfig.webchatStorage || 'indexeddb';
 const client = createWebchatClient({ apiBaseUrl, bot, storage });
+const startChat = () => {
+  const entry = new URL(location.href).searchParams.get('entry');
+  return client.start(entry === null ? undefined : { entry });
+};
 
 const scroller = document.querySelector('#scroller');
 const messagesElement = document.querySelector('#messages');
@@ -269,7 +273,8 @@ const openLinkViewer = (href, label, trigger, pointerOpened) => {
   frame.referrerPolicy = 'no-referrer';
   frame.setAttribute(
     'sandbox', 'allow-forms allow-scripts allow-same-origin'
-      + (app ? ' allow-popups allow-popups-to-escape-sandbox' : ''));
+      + (app ? ' allow-popups allow-popups-to-escape-sandbox' : '')
+      + (app?.allow_top_navigation === true ? ' allow-top-navigation-by-user-activation' : ''));
   showMediaViewer(frame, trigger, 'link', pointerOpened);
 };
 
@@ -822,14 +827,14 @@ const syncBanner = (snapshot) => {
   const error = snapshot.error;
   setPill(errorElement, error?.message);
   if (error) {
-    if (['incompatible-state', 'invalid-state', 'storage-corrupt']
+    if (['incompatible-state', 'invalid-state', 'storage-corrupt', 'invalid-entry']
         .includes(error.code)) {
       errorElement.append(pillAction('最初から', () => {
         client.reset().catch(() => {});
       }));
     } else if (!snapshot.turns.length) {
       errorElement.append(pillAction('再読み込み', () => {
-        client.start().catch(() => {});
+        startChat().catch(() => {});
       }));
     }
   }
@@ -961,7 +966,7 @@ autosize();
 
 try {
   await client.initialize();
-  await client.start();
+  await startChat();
 } catch (_error) {
   // 正規化済みのerrorはsnapshot経由でbannerへ表示される。
 }

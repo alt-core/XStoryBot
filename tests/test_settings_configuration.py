@@ -104,8 +104,10 @@ class SettingsTemplateTest(unittest.TestCase):
 
         quick_reply_ignore = re.compile(
             default['plugins']['line.quick_reply']['ignore_pattern'])
-        self.assertIsNotNone(quick_reply_ignore.search('##line.liff.action'))
-        self.assertIsNone(quick_reply_ignore.search('##lineXliffYaction'))
+        for action in ('リセット', '「リセット」', '*共通/リセット'):
+            with self.subTest(action=action):
+                self.assertIsNotNone(quick_reply_ignore.search(action))
+        self.assertIsNone(quick_reply_ignore.search('リセットしない'))
 
     def test_template_uses_explicit_service_settings(self):
         default = self.load_template()['*']

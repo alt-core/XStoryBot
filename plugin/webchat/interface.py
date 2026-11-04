@@ -19,6 +19,7 @@ from plugin.webchat.errors import (
     ExternalHttpError,
     ExternalHttpTimeout,
     IncompatibleState,
+    InvalidStartEntry,
     InvalidWebchatConfiguration,
 )
 from plugin.webchat.presenter import WebchatPresenter, register_runtime
@@ -90,6 +91,23 @@ def _normalize_origins(values, allow_empty=False, local_origin=None):
     return tuple(result)
 
 
+def normalize_start_entries(entries):
+    """API版と体験版で共用する、名前付き開始入口の設定を検査する。"""
+    if entries is None:
+        return {}
+    if not isinstance(entries, dict):
+        raise InvalidWebchatConfiguration('start_entriesには入口名ごとの設定を指定してください')
+    result = {}
+    for name, entry in entries.items():
+        if (not isinstance(name, str) or not name or not isinstance(entry, dict)
+                or 'action' not in entry or set(entry) - {'action', 'echo'}
+                or not isinstance(entry['action'], str) or not entry['action']
+                or ('echo' in entry and not isinstance(entry['echo'], str))):
+            raise InvalidWebchatConfiguration('開始入口にはactionと任意のecho文字列を指定してください')
+        result[name] = dict(entry)
+    return result
+
+
 def normalize_liff_apps(apps, allow_local_http=False):
     """公開・体験版で共用する、LIFFページ登録の検査とURL正規化。"""
     apps = apps or {}
@@ -100,10 +118,12 @@ def normalize_liff_apps(apps, allow_local_http=False):
     liff_ids = set()
     for name, app in apps.items():
         if (not isinstance(name, str) or not name or not isinstance(app, dict)
-                or not {'url', 'bot'} <= set(app) or set(app) - {'url', 'bot', 'match', 'liff_id'}
+                or not {'url', 'bot'} <= set(app) or set(app) - {'url', 'bot', 'match', 'liff_id', 'allow_top_navigation'}
                 or not isinstance(app['bot'], str) or not app['bot']
                 or not isinstance(app['url'], str)):
             raise InvalidWebchatConfiguration('LIFFページにはurlとbotを指定してください')
+        if 'allow_top_navigation' in app and not isinstance(app['allow_top_navigation'], bool):
+            raise InvalidWebchatConfiguration('allow_top_navigationはtrueまたはfalseで指定してください')
         try:
             parsed = urlsplit(app['url'])
             origin = _format_origin(parsed)
@@ -134,6 +154,7 @@ def normalize_liff_apps(apps, allow_local_http=False):
             'bot': app['bot'],
             **({'match': matching} if matching != 'exact' else {}),
             **({'liff_id': liff_id} if liff_id is not None else {}),
+            **({'allow_top_navigation': app['allow_top_navigation']} if 'allow_top_navigation' in app else {}),
         }
     return result
 
@@ -212,6 +233,7 @@ class WebchatInterface:
             self.scenario_revision = ''
             self.compatibility_epoch = ''
             self.start_action = ''
+            self.start_entries = {}
             self.external_http_origins = ()
             self.media_origins = ()
             return
@@ -243,6 +265,7 @@ class WebchatInterface:
         self.start_action = str(params.get('start_action') or '')
         if not self.start_action:
             raise InvalidWebchatConfiguration('Webchat start actionがありません')
+        self.start_entries = normalize_start_entries(params.get('start_entries'))
         allowed_origins = list(_normalize_origins(
             params.get('allowed_origins', []), allow_empty=True,
             local_origin=self.local_origin))
@@ -447,18 +470,23 @@ class WebchatInterface:
         except Exception as error:
             raise InvalidWebchatConfiguration('Scenarioを読み込めません') from error
 
-    def create_start_context(self, request_id, deadline_seconds=None):
+    def create_start_context(self, request_id, deadline_seconds=None, entry=None):
+        selected = {'action': self.start_action}
+        if entry is not None:
+            if not isinstance(entry, str) or entry not in self.start_entries:
+                raise InvalidStartEntry('開始入口が見つかりません')
+            selected = self.start_entries[entry]
         conversation_id = secrets.token_urlsafe(32)
         player = {'scenario_generations': {}}
         context = WebchatActionContext(
-            self.bot_name, self, conversation_id, self.start_action, player,
+            self.bot_name, self, conversation_id, selected['action'], player,
             deadline_seconds=deadline_seconds)
         context.state_payload = {
             'conversation_id': conversation_id,
             'revision': -1,
             'player': player,
         }
-        context.echo_message = None
+        context.echo_message = selected.get('echo')
         context.request_id = request_id
         return context
 

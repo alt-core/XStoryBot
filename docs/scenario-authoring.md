@@ -185,6 +185,25 @@ Bot管理者がQuick Replyプラグインを有効にしていると、記号1�
 - 候補を選んだあとは、続きの行から実行されます。候補ごとの分岐は`/else`で区切り、`/end`のあとが共通の続きです(分岐が不要なら候補の行の直後に`/end`)。
 - 候補を選ぶまでの間、候補以外の入力は`##please_select_quick_reply`(名前はBot設定によります)という条件に差し替えられます。この条件のブロックを開始sceneに書いておくと、「下の候補から選んでね」のような再提示ができます。
 
+この待ちは、利用者が打った文だけでなく、LINEへ届く`@forward`・`@delay`のaction、動画再生完了、リッチメニューのpostback、`##line.unfollow`にも適用されます。`##line.follow`と`##line.join`はそのまま通り、待ちを解除します。LIFFのactionはLIFFで処理されるため、この待ちを通りませんが、LIFFからLINEへ転送したactionは対象になります。
+
+待ちの間に別の処理を通したい場合は、次の方法があります。
+
+- Bot管理者が`plugins.line.quick_reply.ignore_pattern`へ、通したいactionの正規表現を設定する。actionはそのまま通りますが、待ちは解除しません。転送先で待ちを終える場合は`@clear_quick_reply_guard`を実行します。
+- 再提示のブロックで`$$line.quick_reply["action"]`を調べ、必要な処理へ移る。待ちを終える場合は移動前に`@clear_quick_reply_guard`を実行します。
+- Bot管理者が`command_without_guard`へ設定した記号を使う。この記号でも候補は表示されますが、候補外の入力は通常の処理へ通り、待ちを解除します。
+
+Scenario version 3の待ちの状態は`$$line.quick_reply`から参照できます。待ちがない場合、この値はありません。
+
+| 項目 | 内容 |
+|---|---|
+| `labels` | ボタンに表示する日本語を含む候補名の一覧。例: `["続きを読む"]` |
+| `choices` | 候補と移動先を含む内部形式のJSON文字列 |
+| `retry_count` | 候補外の入力を再提示へ差し替えた回数 |
+| `action` | 差し替える前の直近のaction。差し替え前は空文字列 |
+
+再提示の条件で`$$line.quick_reply["labels"] == ["続きを読む"]`と比較すれば、日本語のエスケープを意識せず「続きを読む」の待ちを判別できます。候補名は利用するBotの設定に合わせてください。
+
 ## 定数Sheet
 
 `$`で始まるSheetには、物語のあちこちから使い回す値を書けます。A列に名前、同じ行のB列に型を書き、**次の行から**B列に値を書きます。
@@ -239,6 +258,7 @@ Carousel、Imagemap、Flex、続きを読む(More)、グループ配信、外部
 - `options.reset_keyword`: リセット用の合言葉。**テンプレートの値のまま運用せず、必ず独自の値に変更してください**(送った本人の状態だけが初期化されます)。
 - `plugins.webchat.start_action`: Webchatの開始action。既定は`##line.follow`です。
 - `plugins.line.quick_reply.command`: Quick Reply短縮記法の記号(例: `＞`)。`please_select_quick_reply_label`が再提示用の条件名です。
+- `plugins.line.response_check_exempt_labels`: LINEへ返さないブロックのラベル接頭辞の一覧。例えば`["##liff."]`を指定すると、その手書きラベルと内部の分岐・続きで、通常テキストの300文字検査と同時5通の検査を免除します。既定は空です。呼出し先や移動先は、そのブロック自身のラベルで判定します。ラベル名だけでは実行interfaceは制限されないため、免除したブロックへLINEから入らない台本にしてください。LINE送信時の5通検査と、他の構文・部品の検査は維持します。
 - `plugins.google_sheets.evaluate_formula`: Sheets式を評価値として読むかどうか。
 - 大人数への一斉配信には管理画面のグループ配信を使います。action APIの`user=group:グループ名`はメンバーを順番に処理するため、大人数配信には向きません。
 - Sheet名の`.環境名`は`XSBOT_DEPLOY_ENV`と比較されます。

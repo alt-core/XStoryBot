@@ -13,6 +13,11 @@ class InvalidWebchatConfiguration(WebchatError):
     code = 'service-unavailable'
 
 
+class InvalidStartEntry(WebchatError):
+    status = 400
+    code = 'invalid-entry'
+
+
 class InvalidStateToken(WebchatError):
     status = 401
     code = 'invalid-state'

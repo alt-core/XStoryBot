@@ -263,6 +263,33 @@ class WebchatRuntimeE2ETest(unittest.TestCase):
     def _start(cls):
         return cls._turn({'type': 'start'})
 
+    def test_登録入口のactionとechoで開始し未指定時は既定入口を使う(self):
+        with patch.object(self.interface, 'start_entries', {
+                'return': {'action': '#next', 'echo': '戻ってきました'},
+                'quiet': {'action': '#next'}}):
+            for entry, echo in (('return', '戻ってきました'), ('quiet', None)):
+                with self.subTest(entry=entry):
+                    result = self._turn({'type': 'start', 'entry': entry})
+                    self.assertEqual(200, result.status_int)
+                    self.assertEqual(['到着しました'], [message['text'] for message in result.json['messages']])
+                    self.assertEqual(echo, result.json['echo_message'])
+                    self.assertEqual(0, result.json['state']['revision'])
+            default = self._start()
+            self.assertEqual('開始しました', default.json['messages'][0]['text'])
+            self.assertIsNone(default.json['echo_message'])
+
+    def test_未知または不正な入口は台本を読み込まず実行しない(self):
+        with (patch.object(self.bot, 'handle_action') as execute,
+              patch.object(self.interface, 'ensure_scenario') as load):
+            for entry in ('missing', '', None, {}, '__proto__'):
+                with self.subTest(entry=entry):
+                    result = self._turn({'type': 'start', 'entry': entry}, expect_errors=True)
+                    self.assertEqual(400, result.status_int)
+                    self.assertEqual('invalid-entry', result.json['code'])
+                    self.assertNotIn('state_token', result.json)
+            execute.assert_not_called()
+            load.assert_not_called()
+
     def test_start_postback_replayと手入力偽装を実Directorで処理する(self):
         started = self._start()
         self.assertEqual(200, started.status_int)

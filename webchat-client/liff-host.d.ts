@@ -1,4 +1,4 @@
-export type LiffApp = { id: string; url: string; match?: 'exact' | 'prefix'; liff_id?: string };
+export type LiffApp = { id: string; url: string; match?: 'exact' | 'prefix'; liff_id?: string; allow_top_navigation?: boolean };
 
 export function findLiffApp(href: string, apps: LiffApp[]): LiffApp | null;
 export function resolveLiffLink(href: string, apps: LiffApp[]): { app: LiffApp; url: string } | null;

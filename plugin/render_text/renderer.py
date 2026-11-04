@@ -271,19 +271,31 @@ def get_background_image(size, color, background):
             return Image.new('RGBA', size, background)
 
 
+def get_font_path(font_path=None, is_vertical=False):
+    if font_path is not None:
+        return font_path
+    return 'plugin/render_text/font/ipaexg_tate.ttf' if is_vertical else 'plugin/render_text/font/ipaexg.ttf'
+
+
+def get_text_rendering_asset_paths(font_path=None, is_vertical=False, background='white', **options):
+    # Pillowによるフォント名の探索も含め、描画が実際に使うファイルを返す。
+    font = ImageFont.truetype(get_font_path(font_path, is_vertical), 1)
+    paths = [font.path]
+    if re.search(r'\.(png|jpeg|jpg)$', background, re.IGNORECASE):
+        paths.append(background)
+    return paths
+
+
 def create_image_with_text(text, size_x, size_y, margin_left, margin_right, margin_top, margin_bottom, centering_x=False, centering_y=False, auto_scaling=None, is_vertical=False, font_path=None, font_size=100, color='black', background='white', line_height=1.5, base_line_offset=0, disable_word_wrap=False, burasagari_chars=BURASAGARI_CHARS, special_char_table=SPECIAL_CHAR_TABLE):
     color = _convert_color(color)
+    font_path = get_font_path(font_path, is_vertical)
     scales = [1.0] if auto_scaling is None else auto_scaling
     for scale in scales:
         image = get_background_image((size_x, size_y), color, background)
         if is_vertical:
-            if font_path is None:
-                font_path = 'plugin/render_text/font/ipaexg_tate.ttf'
             font = ImageFont.truetype(font_path, int(font_size * scale))
             flag, rest = draw_text_vertical(image, text, margin_left, margin_right, margin_top, margin_bottom, font, font_size, color, line_height, base_line_offset, burasagari_chars, special_char_table, centering_x, centering_y)
         else:
-            if font_path is None:
-                font_path = 'plugin/render_text/font/ipaexg.ttf'
             font = ImageFont.truetype(font_path, int(font_size * scale))
             flag, rest = draw_text_horizontal(image, text, margin_left, margin_right, margin_top, margin_bottom, font, font_size, color, line_height, base_line_offset, disable_word_wrap, burasagari_chars, centering_x, centering_y)
         if auto_scaling is None or not flag:

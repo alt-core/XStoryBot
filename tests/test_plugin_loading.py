@@ -51,6 +51,7 @@ class MorePluginLoadingTest(unittest.TestCase):
 
         self.renderer = ModuleType('plugin.render_text.renderer')
         self.renderer.render_text_to_png = Mock()
+        self.renderer.get_text_rendering_asset_paths = Mock(return_value=[])
         render_text = ModuleType('plugin.render_text')
         render_text.__path__ = []
         render_text.renderer = self.renderer

@@ -28,6 +28,18 @@ class LineDefaultCommandsPlugin_Builder(object):
     def __init__(self, params):
         self.params = params
         self.disable_response_length_check = params.get('disable_response_length_check', False)
+        exempt_labels = params.get('response_check_exempt_labels', [])
+        if (not isinstance(exempt_labels, list)
+                or any(not isinstance(label, str) or not label for label in exempt_labels)):
+            raise ValueError('response_check_exempt_labelsは空でない文字列のリストで指定してください')
+        self.response_check_exempt_labels = tuple(exempt_labels)
+
+    def _response_check_exempt(self, builder):
+        if not self.response_check_exempt_labels:
+            return False
+        condition = builder.written_block_condition
+        return (condition is not None and condition.is_label()
+                and condition.value.startswith(self.response_check_exempt_labels))
 
     def build_from_command(self, builder, sender, msg, options, children=[], grandchildren=[]):
         if msg in CONFIRM_CMDS or msg in BUTTON_CMDS or msg in IMAGEMAP_CMDS or msg in REPLY_CMDS:
@@ -115,13 +127,15 @@ class LineDefaultCommandsPlugin_Builder(object):
 
     def build_plain_text(self, builder, sender, msg, options):
         # シナリオの通常テキストは300文字まで検査する。
-        builder.assert_strlen(msg, 300)
+        if not self._response_check_exempt(builder):
+            builder.assert_strlen(msg, 300)
         builder.msg_count += 1
         builder.add_command(sender, msg, options, None)
         return True
 
     def callback_after_each_line(self, builder):
-        if (not self.disable_response_length_check) and builder.msg_count > 5:
+        if (not self.disable_response_length_check and builder.msg_count > 5
+                and not self._response_check_exempt(builder)):
             builder.raise_error('6つ以上のメッセージを同時に送ろうとしました')
 
     @staticmethod

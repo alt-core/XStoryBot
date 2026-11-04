@@ -83,6 +83,22 @@ class LineImageTextPlugin_Builder(object):
         if self.default_frame is None and len(self.frames) == 1:
             self.default_frame = list(self.frames.keys())[0]
 
+    def _cache_frame_options(self, builder, frame, frame_opt):
+        # プラグインは再利用されるため、素材の内容はビルド単位で確認する。
+        if not hasattr(builder, '_image_text_cache'):
+            builder._image_text_cache = {'frames': {}, 'files': {}}
+        cache = builder._image_text_cache
+        key = (id(self), frame)
+        if key not in cache['frames']:
+            assets = []
+            for path in renderer.get_text_rendering_asset_paths(**frame_opt['text_rendering_options']):
+                if path not in cache['files']:
+                    with open(path, 'rb') as source:
+                        cache['files'][path] = hashlib.file_digest(source, 'sha256').hexdigest()
+                assets.append((path, cache['files'][path]))
+            cache['frames'][key] = json.dumps({'frame': frame_opt, 'assets': assets})
+        return cache['frames'][key]
+
     def build_from_command(self, builder, sender, msg, options):
         text = options[0]
         frame = utility.safe_list_get(options, 1, self.default_frame)
@@ -105,10 +121,11 @@ class LineImageTextPlugin_Builder(object):
                 builder.raise_error(
                     'このフレームの more_mode には line.image_text の more_image_url が必要です')
         counter = 0
+        cache_frame_opt = self._cache_frame_options(builder, frame, frame_opt) if text else None
         while text:
             stat = None
             if not builder.option_force:
-                stat = ImageTextStatDB.get_cached_image_text_stat(text, json.dumps(frame_opt))
+                stat = ImageTextStatDB.get_cached_image_text_stat(text, cache_frame_opt)
             if stat is None:
                 png_data, rest = renderer.render_text_to_png(text, frame_opt['size_x'], frame_opt['size_y'], frame_opt['margin_left'], frame_opt['margin_right'], frame_opt['margin_top'], frame_opt['margin_bottom'], **frame_opt['text_rendering_options'])
                 if frame_opt['prevent_overflow'] or (frame_opt.get('auto_scaling', None) is not None):
@@ -118,7 +135,7 @@ class LineImageTextPlugin_Builder(object):
                 image_url, size = builder.build_image_for_imagemap_command_with_rawdata(png_data, file_digest=file_digest, logging_context='imagetext: {}'.format(text))
 
                 #encoded_text = urllib.quote_plus(options[0].encode('utf-8'), safe='')
-                ImageTextStatDB.put_cached_image_text_stat(text, json.dumps(frame_opt), file_digest, image_url, size, rest)
+                ImageTextStatDB.put_cached_image_text_stat(text, cache_frame_opt, file_digest, image_url, size, rest)
             else:
                 #logging.debug('ImageTextStatDB has {}...'.format(text[:4]))
                 image_url, size, rest = stat
