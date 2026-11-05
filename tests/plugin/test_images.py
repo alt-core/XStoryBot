@@ -88,6 +88,25 @@ class ConvertImageTest(unittest.TestCase):
         )
         self.assertIsNone(convert_image.calc_size(b'broken'))
 
+    def test_整数画像は縮尺計算後にPNGの16bit範囲へ収める(self):
+        cases = (
+            ([-2147483648, -65536, -1, 0, 1, 255, 256, 65535, 65536, 2147483647],
+             (10, 1), 10, True, (10, 1), [0, 0, 0, 0, 1, 255, 256, 65535, 65535, 65535]),
+            ([-65536, 131071], (2, 1), 4, False, (4, 2), [0, 0, 65535, 65535] * 2),
+        )
+        for values, source_size, resize_to, never_stretch, expected_size, expected in cases:
+            with self.subTest(values=values, resize_to=resize_to):
+                source = Image.new('I', source_size)
+                source.putdata(values)
+                output = BytesIO()
+                source.save(output, 'TIFF')
+
+                content, image_format, size = convert_image.resize_image(
+                    output.getvalue(), resize_to, never_stretch=never_stretch)
+                image = open_image(content)
+                self.assertEqual(('PNG', expected_size), (image_format, size))
+                self.assertEqual(expected, list(image.get_flattened_data()))
+
 
 class RenderTextTest(unittest.TestCase):
     def test_horizontal_and_vertical_rendering(self):

@@ -85,6 +85,8 @@ def resize_image(content, resize_to, force_fit_width=False, never_stretch=False)
         #image.save(output, image_format, quality=80, optimize=True, progressive=True)
         image.save(output, image_format, quality=90, optimize=True)
     else:
+        if image.mode == 'I':
+            image = image.convert('I;16')
         image.save(output, image_format, compress_level=9, optimize=True)
     output_buffer = output.getvalue()
     output.close()

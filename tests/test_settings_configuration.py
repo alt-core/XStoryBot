@@ -420,7 +420,7 @@ class DependencyConfigurationTest(unittest.TestCase):
         core = self._requirements('requirements.txt')
         # LINE は plugin/line/api.py が requests で直接呼ぶ。SDK は runtime 依存に含めない
         self.assertIn('requests~=2.34.2', core)
-        self.assertIn('Pillow~=12.3.0', core)
+        self.assertIn('Pillow~=13.0.0', core)
         self.assertIn('gunicorn~=23.0.0', core)
         self.assertIn('argon2-cffi~=25.1.0', core)
         self.assertIn('itsdangerous~=2.2.0', core)

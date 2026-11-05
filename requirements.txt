@@ -6,7 +6,7 @@ PyJWT[crypto]~=2.15.1
 requests~=2.34.2
 argon2-cffi~=25.1.0
 itsdangerous~=2.2.0
-Pillow~=12.3.0
+Pillow~=13.0.0
 Arpeggio~=2.0.2
 PyYAML~=6.0.2
 # zoneinfo の fallback データ（base image に tzdata が無いときだけ使われる）。データだけなので常に最新でよい
